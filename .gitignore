@@ -1,0 +1,42 @@
+# Per-install data — NEVER commit (each clone has its own)
+/data/
+
+# Secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dashboard/node_modules/
+dashboard/.next/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+worker/.venv/
+worker/venv/
+*.egg-info/
+.pytest_cache/
+
+# SQLite (belt-and-suspenders; also covered by /data)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
