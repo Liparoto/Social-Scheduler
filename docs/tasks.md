@@ -7,27 +7,28 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ---
 
-## Phase 1 — Foundation & schema  `[~] in progress`
+## Phase 1 — Foundation & schema  `[x] done`
 Everything downstream shares this. Get the schema and repo skeleton right.
 
 ### Implementation
-- [ ] Repo skeleton: `/dashboard`, `/worker`, `/migrations`, `/data` (gitignored), `/docs`.
-- [ ] `.env.example` documenting every per-install var (Meta app id/secret, per-channel token
+- [x] Repo skeleton: `/dashboard`, `/worker`, `/migrations`, `/data` (gitignored), `/docs`.
+      (dashboard/ and worker/ arrive with their phases; migrations/, data/, docs/ exist now.)
+- [x] `.env.example` documenting every per-install var (Meta app id/secret, per-channel token
       placeholders, `DRY_RUN`, `KILL_SWITCH`, DB path, install-wide default timezone).
-- [ ] Migration `0001_init.sql` creating all core tables:
+- [x] Migration `0001_init.sql` creating all core tables:
       `assets`, `posts`, `post_assets`, `channels`, `publications`, `post_metrics`,
       `tags`, `post_tags`, `publish_limits`. Foreign keys ON; sensible indexes
-      (e.g. `assets.content_hash` unique, `publications(channel_id, scheduled_at, status)`).
-- [ ] Language-agnostic migrate script (applies pending `.sql`, tracks applied versions in a
-      `schema_migrations` table). Runnable from a fresh clone against its own `/data` DB.
-- [ ] A small inspect/seed helper to create a test channel row and dump table contents.
+      (`assets.content_hash` unique, `publications(channel_id, scheduled_at, status)`, etc).
+- [x] Language-agnostic migrate script (`migrate.py`, stdlib only) applying pending `.sql`,
+      tracking applied versions in `schema_migrations`. Runs from a fresh clone.
+- [x] Inspect/seed helper (`inspect_db.py`) to dump tables/counts and seed a test channel.
 
-### Verification
-- [ ] Run migrate against a fresh empty `/data` DB → all tables + indexes exist (inspect).
-- [ ] Re-run migrate → idempotent, no errors, nothing re-applied.
-- [ ] Insert a sample asset twice with the same content hash → dedup constraint rejects the
-      duplicate.
-- [ ] WAL mode confirmed on the DB; foreign keys enforced (a bad FK insert is rejected).
+### Verification (all passed — see commit)
+- [x] Fresh migrate on empty DB → all tables + indexes exist.
+- [x] Re-run migrate → idempotent, nothing re-applied.
+- [x] Duplicate `content_hash` insert → rejected by UNIQUE constraint.
+- [x] WAL mode + foreign keys confirmed; bad FK insert rejected; CHECK + ON DELETE CASCADE
+      verified.
 
 ---
 
