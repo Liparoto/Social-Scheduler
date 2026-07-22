@@ -1,0 +1,7 @@
+# Worker runtime dependencies. Install inside a venv:
+#   python3 -m venv worker/.venv && source worker/.venv/bin/activate
+#   pip install -r worker/requirements.txt
+
+# HTTP client for the Meta Graph API. Chosen over stdlib urllib for cleaner error
+# handling, session reuse, and multipart support.
+requests==2.32.3

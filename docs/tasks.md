@@ -32,28 +32,34 @@ Everything downstream shares this. Get the schema and repo skeleton right.
 
 ---
 
-## Phase 2 — Instagram publish worker (image + carousel)  `[ ]`
+## Phase 2 — Instagram publish worker (image + carousel)  `[~] code complete; awaits live-account check`
 Highest-risk API surface, proven first against a **test** account.
 
 ### Implementation
-- [ ] Python `venv` + `requirements.txt` (justify each dep).
-- [ ] Graph API client: create container, poll `?fields=status_code` until `FINISHED`, publish
-      via `media_publish`. Carousel = child containers → parent → publish.
-- [ ] Runtime **rate-limit gate**: read `content_publishing_limit`, refuse when
-      `quota_usage >= quota_total`; cache into `publish_limits`.
-- [ ] **Dry-run mode** (`DRY_RUN`): log exactly what *would* be sent, publish nothing.
-- [ ] Independent per-`publication` status writes; **retry with exponential backoff**; terminal
-      `failed` state with error message; **kill switch** halts the loop immediately.
-- [ ] Poller: pick due `publications`, publish, write `remote_post_id` / error back.
+- [x] Python `venv` (`worker/.venv`) + `requirements.txt` (requests) / `requirements-dev.txt`
+      (pytest), each dep justified inline.
+- [x] Graph API client (`graph_api.py`): create container, poll `?fields=status_code` until
+      `FINISHED`, publish via `media_publish`. Carousel = child containers → parent → publish.
+- [x] Runtime **rate-limit gate** (`publisher.py`): read `content_publishing_limit`, refuse
+      when `quota_usage >= quota_total`; cache into `publish_limits`.
+- [x] **Dry-run mode** (`DRY_RUN`, read live): logs the full plan, publishes nothing.
+- [x] Independent per-`publication` status writes; **retry with exponential backoff**; terminal
+      `failed` after `max_attempts`; **kill switch** (`KILL_SWITCH`, read live) halts the loop.
+- [x] Poller (`run.py`): `--once` and run-forever, graceful SIGINT/SIGTERM, crash-safe logging.
 
 ### Verification
-- [ ] Dry-run a single image publication → correct payload logged, nothing posted.
-- [ ] Dry-run a 3-image carousel → correct child/parent/publish sequence logged.
-- [ ] Real single image to a **test** account → appears on IG, `remote_post_id` stored.
-- [ ] Force a failure (bad URL) → publication lands in visible `failed`, others unaffected,
-      retry attempts recorded then stop.
-- [ ] Flip kill switch mid-run → worker stops promptly.
-- [ ] Rate-limit gate blocks when quota is exhausted (simulate).
+- [x] Dry-run single image → correct plan logged, nothing posted (unit + real entrypoint).
+- [x] Dry-run 3-image carousel → correct child/parent/publish sequence (unit test asserts
+      exact call order); real entrypoint logged the ordered plan.
+- [ ] **Real single image to a test account → appears on IG, `remote_post_id` stored.**
+      ⏳ BLOCKED on real Meta app + test IG account credentials (owner to provide).
+- [x] Forced failure → publication retries with backoff then lands terminal `failed`; a second
+      publication is provably untouched (independence test).
+- [x] Kill switch active → `run_once` publishes nothing, rows untouched.
+- [x] Rate-limit gate blocks when quota exhausted (simulate) → no publish, deferred with backoff.
+
+All 10 automated tests pass (`worker/tests`). Only the single live-account post remains,
+which needs credentials.
 
 ---
 
