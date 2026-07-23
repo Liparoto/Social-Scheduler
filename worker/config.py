@@ -87,6 +87,11 @@ class Config:
     # We wait (best-effort) for it to go live before handing URLs to Meta, so the first
     # publish doesn't fail against a cold tunnel.
     tunnel_ready_timeout: int = 60
+    # Time-of-day band clock times (channel-local, "HH:MM"). See docs/design-tag-taxonomy.md.
+    # anytime/untagged posts use the channel's own cadence time instead of these.
+    tod_morning: str = "09:00"
+    tod_afternoon: str = "13:00"
+    tod_evening: str = "18:00"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -116,4 +121,7 @@ class Config:
             tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),
             tunnel_startup_timeout=int(os.environ.get("TUNNEL_STARTUP_TIMEOUT", "30")),
             tunnel_ready_timeout=int(os.environ.get("TUNNEL_READY_TIMEOUT", "60")),
+            tod_morning=os.environ.get("TOD_MORNING", "09:00"),
+            tod_afternoon=os.environ.get("TOD_AFTERNOON", "13:00"),
+            tod_evening=os.environ.get("TOD_EVENING", "18:00"),
         )
