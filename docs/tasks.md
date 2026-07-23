@@ -226,6 +226,24 @@ topic rename/merge/delete UI.
 
 ---
 
+## Content management — sub-project ④ (partial): Post management (edit) screen  `[x] done`
+Design: `docs/design-post-management.md` · Plan: `docs/superpowers/plans/2026-07-23-post-management.md`
+The "open a post and manage it" piece of ④ — unblocks editing existing posts (e.g. the Teton post).
+- [x] `getPostAssets` query; `/library/[id]` server page (404s on bad id) loads current state via
+      existing getters and passes to a client `<PostEditor>`.
+- [x] `<PostEditor>`: pre-populated form reusing `CaptionVariantsEditor`/`TagEditor`/`PeriodAttach`
+      + channel picker; edits kind/status/cooldown/targets/tags/periods/captions; saves via the
+      existing `PATCH /api/posts/[id]/content`. Read-only image + "Schedule status" strip
+      (posts.status kept separate from content_status).
+- [x] Library card title + thumbnail link to `/library/[id]` (card → `div role=button` so the link
+      nests validly; `closest('a')` guard keeps bulk-select intact). Verified in-browser
+      (pre-populate, save round-trip persists, 404, bulk-select preserved).
+- Scope note (deferred): editing images and rescheduling existing sends are NOT in this screen.
+
+Remaining for ④'s full overview + ③ bulk import: still separate future work.
+
+---
+
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 - [ ] Facebook Pages publish + metrics adapter.
