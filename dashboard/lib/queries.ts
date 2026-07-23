@@ -308,6 +308,52 @@ export function createDraftPost(input: CreateDraftInput): number {
   return tx(input);
 }
 
+export interface BulkDraftItem {
+  asset_id: number;
+  caption: string;
+}
+
+export interface BulkDraftShared {
+  target_channel_ids?: number[];
+  content_kind?: ContentKind;
+  content_status?: ContentStatus;
+  tag_ids?: number[];
+  period_links?: { periodId: number; mode: PeriodMode }[];
+}
+
+/**
+ * Create one single-image draft post per item, ALL in one transaction (better-sqlite3
+ * nests createDraftPost's own transaction via savepoints, so the batch commits or rolls
+ * back together). A non-empty caption becomes the post's single generic caption variant.
+ * Returns the new post ids.
+ */
+export function createDraftPostsBulk(items: BulkDraftItem[], shared: BulkDraftShared): number[] {
+  const db = getDb();
+  const tx = db.transaction((rows: BulkDraftItem[]) => {
+    const ids: number[] = [];
+    for (const item of rows) {
+      const caption = item.caption.trim();
+      ids.push(
+        createDraftPost({
+          caption,
+          first_comment: "",
+          asset_ids: [item.asset_id],
+          target_channel_ids: shared.target_channel_ids,
+          content_kind: shared.content_kind,
+          content_status: shared.content_status,
+          tag_ids: shared.tag_ids,
+          period_links: shared.period_links,
+          caption_variants: caption
+            ? [{ platform: null, body: caption, sort_order: 0 }]
+            : undefined,
+        })
+      );
+    }
+    return ids;
+  });
+  return tx(items);
+}
+
 /** Fetch a single post by id (for existence checks in API routes). */
 export function getPost(id: number): Post | undefined {
   return getDb().prepare("SELECT * FROM posts WHERE id = ?").get(id) as Post | undefined;
