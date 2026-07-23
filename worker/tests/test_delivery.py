@@ -122,7 +122,7 @@ def test_build_plan_uses_tunnel_urls():
     channel = {"platform": "instagram", "account_name": "IG", "remote_account_id": "1"}
     post = {"post_type": "single", "caption": "hi", "first_comment": None}
     assets = [_asset(public_url=None, storage_path="assets/h.jpg")]
-    plan = _build_plan(channel, post, assets, "https://t.trycloudflare.com")
+    plan = _build_plan(channel, post, assets, "https://t.trycloudflare.com", post["caption"])
     assert plan["asset_urls"] == ["https://t.trycloudflare.com/assets/h.jpg"]
 
 

@@ -108,7 +108,24 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None) -> None:
             )
 
 
-def _build_plan(channel, post, assets, asset_base_url: str | None) -> dict:
+def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str | None:
+    """Platform-specific caption if present (rotated); else generic rotated; else posts.caption."""
+    variants = conn.execute(
+        "SELECT platform, body FROM caption_variants WHERE post_id = ? ORDER BY sort_order, id",
+        (post_id,),
+    ).fetchall()
+    if variants:
+        specific = [v["body"] for v in variants if v["platform"] == platform]
+        if specific:
+            return specific[used_count % len(specific)]
+        generic = [v["body"] for v in variants if v["platform"] is None]
+        if generic:
+            return generic[used_count % len(generic)]
+    post = db.get_post(conn, post_id)
+    return post["caption"] if post else None
+
+
+def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None) -> dict:
     # For real publishes every asset resolves (validated above). In dry-run there is no
     # tunnel, so show a readable local marker instead of a live URL.
     asset_urls = [
@@ -119,7 +136,7 @@ def _build_plan(channel, post, assets, asset_base_url: str | None) -> dict:
         "account": channel["account_name"],
         "ig_user_id": channel["remote_account_id"],
         "post_type": post["post_type"],
-        "caption": post["caption"],
+        "caption": caption,
         "first_comment": post["first_comment"],
         "asset_urls": asset_urls,
     }
@@ -203,7 +220,12 @@ def publish_one(
     try:
         channel, post, assets = _load_targets(conn, pub)
         _validate(post, assets, dry_run, asset_base_url)
-        plan = _build_plan(channel, post, assets, asset_base_url)
+        used_count = conn.execute(
+            "SELECT COUNT(*) FROM publications WHERE post_id=? AND channel_id=? AND status='posted'",
+            (pub["post_id"], pub["channel_id"]),
+        ).fetchone()[0]
+        caption = _select_caption(conn, post["id"], channel["platform"], used_count)
+        plan = _build_plan(channel, post, assets, asset_base_url, caption)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
         return _mark_failure(conn, pub, config, now, str(exc), terminal=True)

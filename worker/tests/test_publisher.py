@@ -156,3 +156,29 @@ def test_one_time_retires_only_after_all_targets_posted(conn, config, make_publi
     conn.commit()
     assert _maybe_retire_one_time(conn, post_id, now) is True
     assert conn.execute("SELECT content_status FROM posts WHERE id=?", (post_id,)).fetchone()[0] == "retired"
+
+
+# ---- Caption variant selection --------------------------------------------------
+def test_caption_selection_prefers_platform_then_rotates_generic(conn, config, make_publication):
+    from worker.publisher import _select_caption
+    pub = make_publication(post_type="single", n_assets=1)
+    post_id = pub["post_id"]
+
+    # No variants yet -> falls back to posts.caption ('hello world' from the fixture).
+    assert _select_caption(conn, post_id, "instagram", 0) == "hello world"
+
+    # Two generic variants -> rotate by used_count.
+    conn.executemany(
+        "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?,?,?,?)",
+        [(post_id, None, "gen-A", 0), (post_id, None, "gen-B", 1)],
+    )
+    conn.commit()
+    assert _select_caption(conn, post_id, "instagram", 0) == "gen-A"
+    assert _select_caption(conn, post_id, "instagram", 1) == "gen-B"
+    assert _select_caption(conn, post_id, "instagram", 2) == "gen-A"  # wraps
+
+    # An instagram-specific variant wins over generic.
+    conn.execute("INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?,?,?,?)",
+                 (post_id, "instagram", "ig-special", 5))
+    conn.commit()
+    assert _select_caption(conn, post_id, "instagram", 0) == "ig-special"
