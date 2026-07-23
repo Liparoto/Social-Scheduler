@@ -159,8 +159,11 @@ short-lived, worker-managed Cloudflare quick tunnel. Design: `docs/design-publis
       tunnel URL parsing; missing-binary error; URL-resolution precedence; publish builds the
       tunnel URL; tunnel-unavailable is visible-not-fatal; external URL publishes without a tunnel.
 - [x] Real worker `--once` against the live DB is a clean no-op in dry-run.
-- [ ] **Live (owner-gated):** `brew install cloudflared`, upload a real JPEG, `DRY_RUN=0`,
-      run one cycle → confirm it appears on Instagram with a real `remote_post_id`, then delete.
+- [x] **Live (2026-07-22):** cloudflared installed; posted a real JPEG to Liparoto. Tunnel
+      live in ~8s, media id `18015397358720320`, permalink `instagram.com/p/DbHvdnEEUEr`,
+      `is_dry_run=0`, no errors; DRY_RUN restored to 1 after. FULL PIPELINE VALIDATED.
+      Gap found: dashboard uploads are stored as-is, so images must be conformed to Meta
+      specs (≤8 MB, aspect 4:5–1.91:1, ≤1440px wide, sRGB) — address in image management.
 
 ---
 
