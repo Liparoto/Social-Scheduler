@@ -1,0 +1,31 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createChannel, getChannels } from "@/lib/queries";
+
+export const runtime = "nodejs";
+
+export function GET() {
+  return NextResponse.json({ channels: getChannels() });
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const account_name = (body.account_name || "").trim();
+  const platform = body.platform;
+  if (!account_name) {
+    return NextResponse.json({ error: "Account name is required." }, { status: 400 });
+  }
+  if (platform !== "instagram" && platform !== "facebook") {
+    return NextResponse.json({ error: "Platform must be instagram or facebook." }, { status: 400 });
+  }
+  const id = createChannel({
+    platform,
+    account_name,
+    business_label: body.business_label,
+    timezone: body.timezone || "UTC",
+    remote_account_id: body.remote_account_id,
+    linked_page_id: body.linked_page_id,
+    access_token: body.access_token,
+    requires_approval: !!body.requires_approval,
+  });
+  return NextResponse.json({ id }, { status: 201 });
+}

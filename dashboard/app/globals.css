@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/*
+  SocialScheduler — "publishing control room" tokens.
+  Deliberately not the cream/serif or black/acid-green AI defaults:
+  cool paper canvas, pine-green brand, signal-orange for primary actions only,
+  monospace for all times/IDs/counts (the scheduling-cockpit signature).
+*/
+@theme {
+  --color-canvas: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #eef0f3;
+  --color-border: #e4e7ec;
+  --color-border-strong: #d3d8e0;
+  --color-ink: #161b22;
+  --color-ink-soft: #37414f;
+  --color-muted: #656c76;
+  --color-faint: #9aa2ad;
+
+  --color-brand: #0e5c4a;
+  --color-brand-ink: #0a4437;
+  --color-brand-weak: #e2efe9;
+  --color-accent: #f0653a;
+  --color-accent-ink: #c94a22;
+  --color-accent-weak: #fdeae2;
+
+  /* Status semantics (draft / scheduled / posted / failed / publishing) */
+  --color-status-draft: #64748b;
+  --color-status-scheduled: #2563eb;
+  --color-status-posted: #0e5c4a;
+  --color-status-failed: #dc2626;
+  --color-status-publishing: #b45309;
+
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  --radius-card: 12px;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Utility: tabular monospace for data (times, counts, ids) */
+.data {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Consistent visible focus for keyboard users (quality floor). */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

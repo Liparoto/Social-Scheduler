@@ -1,0 +1,114 @@
+import type { PublicationStatus } from "@/lib/types";
+import { channelColor } from "@/lib/format";
+
+const STATUS_META: Record<
+  PublicationStatus,
+  { label: string; varName: string }
+> = {
+  scheduled: { label: "Scheduled", varName: "--color-status-scheduled" },
+  pending_approval: { label: "Needs approval", varName: "--color-status-draft" },
+  publishing: { label: "Publishing", varName: "--color-status-publishing" },
+  posted: { label: "Posted", varName: "--color-status-posted" },
+  failed: { label: "Failed", varName: "--color-status-failed" },
+  canceled: { label: "Canceled", varName: "--color-status-draft" },
+};
+
+export function StatusBadge({
+  status,
+  dryRun,
+}: {
+  status: PublicationStatus;
+  dryRun?: boolean;
+}) {
+  const meta = STATUS_META[status];
+  const color = `var(${meta.varName})`;
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium"
+        style={{ color, backgroundColor: `color-mix(in srgb, ${color} 12%, white)` }}
+      >
+        <span
+          className="h-1.5 w-1.5 rounded-full"
+          style={{ backgroundColor: color }}
+          aria-hidden
+        />
+        {meta.label}
+      </span>
+      {dryRun ? (
+        <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-[10px] font-medium text-muted">
+          dry-run
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+export function ChannelChip({
+  id,
+  platform,
+  name,
+}: {
+  id: number;
+  platform: string;
+  name: string;
+}) {
+  const c = channelColor(id);
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium"
+      style={{ color: c.fg, backgroundColor: c.bg }}
+    >
+      <span
+        className="h-2 w-2 rounded-full"
+        style={{ backgroundColor: c.dot }}
+        aria-hidden
+      />
+      {name}
+      <span className="text-[10px] uppercase tracking-wide opacity-60">
+        {platform === "instagram" ? "IG" : "FB"}
+      </span>
+    </span>
+  );
+}
+
+export function PageHeader({
+  title,
+  subtitle,
+  action,
+}: {
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <header className="flex items-start justify-between gap-4 border-b border-border px-8 py-6">
+      <div>
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">
+          {title}
+        </h1>
+        {subtitle ? (
+          <p className="mt-1 text-sm text-muted">{subtitle}</p>
+        ) : null}
+      </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
+    </header>
+  );
+}
+
+export function EmptyState({
+  title,
+  children,
+}: {
+  title: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-card border border-dashed border-border-strong bg-surface/60 px-6 py-12 text-center">
+      <p className="font-display text-base font-medium text-ink-soft">{title}</p>
+      {children ? (
+        <div className="mx-auto mt-1 max-w-md text-sm text-muted">{children}</div>
+      ) : null}
+    </div>
+  );
+}

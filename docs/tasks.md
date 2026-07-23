@@ -63,26 +63,32 @@ which needs credentials.
 
 ---
 
-## Phase 3 — Dashboard composer + overview  `[ ]`
+## Phase 3 — Dashboard composer + overview  `[x] done`
 Make the process legible; compose → schedule → watch it publish.
 
 ### Implementation
-- [ ] Next.js app reading/writing SQLite via `better-sqlite3` (WAL).
-- [ ] Asset upload → content-hash dedup → local store + `public_url` + thumbnail.
-- [ ] Composer: caption, `first_comment`, drag-to-order carousel, **per-channel checkboxes that
-      make the target account(s) obvious**, schedule picker (interpreted in channel timezone),
-      tags.
-- [ ] Overview table: status (draft/scheduled/posted/failed) + performance once live; manual
-      retry on failed publications.
-- [ ] Channel config: credentials, timezone, cadence, `requires_approval` toggle, kill switch.
+- [x] Next.js 16 app (App Router, TS, Tailwind v4) reading/writing SQLite via
+      `better-sqlite3` (WAL). Shared repo-root `.env` (single install config).
+- [x] Asset upload → content-hash (sha256) dedup → local store + `public_url` + `sharp`
+      thumbnail; media route serves previews.
+- [x] Composer: caption, `first_comment`, drag-to-order carousel (+ arrow fallback),
+      **per-channel select buttons with obvious color-coded targeting + live preview + "Headed
+      to"**, schedule picker converted from channel timezone → UTC.
+- [x] Overview: per-channel **queue rail** (signature) + publications table with status,
+      per-channel times, dry-run flag, errors, and manual retry / approve actions.
+- [x] Channel config: add form (credentials, timezone, IG/Page ids, approval), inline
+      approval + active toggles.
+      (Cadence config is Phase 4; a dashboard kill-switch toggle deferred — env switch works.)
 
-### Verification
-- [ ] Compose a post targeting two channels → two `publications` created with correct
-      per-channel scheduled times.
-- [ ] Upload the same file twice → deduped to one asset.
-- [ ] A scheduled post composed in the dashboard is picked up and published by the Phase 2
-      worker (end-to-end).
-- [ ] Failed publication shows as failed and can be retried from the table.
+### Verification (all passed — via the real API endpoints the UI calls)
+- [x] Compose a post → two channels → two `publications` at the same instant; TZ converted
+      (12:00 EDT → 16:00 UTC); approval-required channel correctly landed `pending_approval`.
+- [x] Upload same bytes twice AND a renamed copy → all deduped to one asset (content, not name).
+- [x] Dashboard-created publication picked up + dry-run published by the Phase 2 worker
+      (cross-component). Approve → worker then publishes it.
+- [x] Force a publication to failed → retry from the API resets it to scheduled (attempts
+      cleared); retry on a non-failed publication returns 409.
+- [x] `tsc --noEmit` clean; `npm run build` succeeds (all 11 routes); UI verified in browser.
 
 ---
 
