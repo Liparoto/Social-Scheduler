@@ -13,16 +13,17 @@ import pytest
 from worker.config import Config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-INIT_SQL = REPO_ROOT / "migrations" / "0001_init.sql"
+MIGRATIONS_DIR = REPO_ROOT / "migrations"
 
 
 @pytest.fixture
 def db_path(tmp_path) -> Path:
-    """A fresh DB created from the SAME migration the app uses (no drift)."""
+    """A fresh DB built from ALL migrations in order (mirrors migrate.py — no drift)."""
     p = tmp_path / "test.db"
     conn = sqlite3.connect(str(p))
     conn.execute("PRAGMA foreign_keys = ON;")
-    conn.executescript(INIT_SQL.read_text())
+    for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql"), key=lambda f: f.name):
+        conn.executescript(sql_file.read_text())
     conn.commit()
     conn.close()
     return p
