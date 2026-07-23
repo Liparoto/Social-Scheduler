@@ -17,6 +17,7 @@ const MONTHS = [
 type FormState = {
   name: string;
   recurs_yearly: boolean;
+  single_day: boolean;
   start_month: number;
   start_day: number;
   end_month: number;
@@ -27,9 +28,13 @@ type FormState = {
 
 function initialForm(period?: Period): FormState {
   if (period) {
+    const singleDay = period.recurs_yearly
+      ? period.start_month === period.end_month && period.start_day === period.end_day
+      : !!period.start_date && period.start_date === period.end_date;
     return {
       name: period.name,
       recurs_yearly: !!period.recurs_yearly,
+      single_day: singleDay,
       start_month: period.start_month ?? 1,
       start_day: period.start_day ?? 1,
       end_month: period.end_month ?? 1,
@@ -40,7 +45,7 @@ function initialForm(period?: Period): FormState {
   }
   // A sensible default: a winter-ish yearly window the user will rename.
   return {
-    name: "", recurs_yearly: true,
+    name: "", recurs_yearly: true, single_day: false,
     start_month: 12, start_day: 1, end_month: 2, end_day: 28,
     start_date: "", end_date: "",
   };
@@ -76,11 +81,16 @@ function PeriodForm({ period, onDone }: { period?: Period; onDone: () => void })
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setF((s) => ({ ...s, [k]: v }));
 
+  // When "single day" is on, the end mirrors the start.
+  const endMonth = f.single_day ? f.start_month : f.end_month;
+  const endDay = f.single_day ? f.start_day : f.end_day;
+  const endDate = f.single_day ? f.start_date : f.end_date;
+
   const preview = describePeriod({
     recurs_yearly: f.recurs_yearly ? 1 : 0,
     start_month: f.start_month, start_day: f.start_day,
-    end_month: f.end_month, end_day: f.end_day,
-    start_date: f.start_date || null, end_date: f.end_date || null,
+    end_month: endMonth, end_day: endDay,
+    start_date: f.start_date || null, end_date: endDate || null,
   });
 
   async function save() {
@@ -93,11 +103,11 @@ function PeriodForm({ period, onDone }: { period?: Period; onDone: () => void })
       ? {
           name: f.name.trim(), recurs_yearly: true,
           start_month: f.start_month, start_day: f.start_day,
-          end_month: f.end_month, end_day: f.end_day,
+          end_month: endMonth, end_day: endDay,
         }
       : {
           name: f.name.trim(), recurs_yearly: false,
-          start_date: f.start_date, end_date: f.end_date,
+          start_date: f.start_date, end_date: endDate,
         };
     const res = await fetch(period ? `/api/periods/${period.id}` : "/api/periods", {
       method: period ? "PATCH" : "POST",
@@ -139,35 +149,48 @@ function PeriodForm({ period, onDone }: { period?: Period; onDone: () => void })
         </button>
       </div>
 
+      <label className="flex w-fit items-center gap-2 text-sm text-ink-soft">
+        <input
+          type="checkbox"
+          checked={f.single_day}
+          onChange={(e) => set("single_day", e.target.checked)}
+        />
+        Single day <span className="text-faint">(e.g. July 4th — no range)</span>
+      </label>
+
       {f.recurs_yearly ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className={label}>From</label>
+            <label className={label}>{f.single_day ? "Day" : "From"}</label>
             <MonthDay
               monthValue={f.start_month} dayValue={f.start_day}
               onMonth={(v) => set("start_month", v)} onDay={(v) => set("start_day", v)}
             />
           </div>
-          <div>
-            <label className={label}>To</label>
-            <MonthDay
-              monthValue={f.end_month} dayValue={f.end_day}
-              onMonth={(v) => set("end_month", v)} onDay={(v) => set("end_day", v)}
-            />
-          </div>
+          {f.single_day ? null : (
+            <div>
+              <label className={label}>To</label>
+              <MonthDay
+                monthValue={f.end_month} dayValue={f.end_day}
+                onMonth={(v) => set("end_month", v)} onDay={(v) => set("end_day", v)}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className={label}>From</label>
+            <label className={label}>{f.single_day ? "Day" : "From"}</label>
             <input type="date" className={field} value={f.start_date}
               onChange={(e) => set("start_date", e.target.value)} />
           </div>
-          <div>
-            <label className={label}>To</label>
-            <input type="date" className={field} value={f.end_date}
-              onChange={(e) => set("end_date", e.target.value)} />
-          </div>
+          {f.single_day ? null : (
+            <div>
+              <label className={label}>To</label>
+              <input type="date" className={field} value={f.end_date}
+                onChange={(e) => set("end_date", e.target.value)} />
+            </div>
+          )}
         </div>
       )}
 
