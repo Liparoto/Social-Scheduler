@@ -4,6 +4,26 @@
 **Part of:** dashboard visual layer. Net-new subsystem — SocialScheduler currently has **no**
 theming/dark-mode mechanism at all.
 
+> ## Revision — contrast pass (2026-07-23, implemented)
+>
+> Building against the real components surfaced that the dashboard **hardcodes `text-white`** on
+> `bg-brand`/`bg-accent` buttons (darkening to `-ink` on hover) and reuses `-ink` as **both** the
+> button-hover background and the pill/chip text on `-weak`. Across 14 palettes that produced
+> unreadable buttons (dark-mode hovers ≈1.5–2.2, Default-dark brand 1.2). The original "colors-only"
+> scope was therefore extended (with the owner's go-ahead to "do whatever turns out best") to split
+> the overloaded roles into dedicated tokens, keeping brands vivid while every button/pill clears
+> WCAG AA:
+> - **Added tokens** (now part of the contract, §3): `--color-on-brand`, `--color-on-accent`
+>   (solid-button foreground — white *or* dark per theme), `--color-brand-strong`,
+>   `--color-accent-strong` (pill/chip/brand-text foreground on the `-weak` tints and on canvas).
+> - **`-ink`** is now purely the button **hover / solid-secondary background**.
+> - **Component change:** ~30 class references swapped across ~15 files — button `text-white` →
+>   `text-on-brand`/`text-on-accent`; all `text-brand-ink`/`text-accent-ink` → `-strong`.
+> - **Palettes retuned** and verified: solid buttons + pills ≥4.5 (AA); bold button labels ≥3.0
+>   (AA-large, incl. the signature orange). **`dashboard/app/globals.css` is the authoritative
+>   source for the exact hex values** — the §5 tables below are the pre-contrast draft and are kept
+>   only for the neutral (surface/ink) tokens, which were unchanged.
+
 ---
 
 ## 1. Purpose
@@ -118,9 +138,15 @@ Every palette defines exactly these (the variables the dashboard already consume
 |---|---|
 | Surfaces | `--color-canvas` `--color-surface` `--color-surface-sunken` `--color-border` `--color-border-strong` |
 | Text | `--color-ink` `--color-ink-soft` `--color-muted` `--color-faint` |
-| Brand (identity) | `--color-brand` `--color-brand-ink` `--color-brand-weak` |
-| Accent (primary CTA) | `--color-accent` `--color-accent-ink` `--color-accent-weak` |
+| Brand (identity) | `--color-brand` `--color-on-brand` `--color-brand-ink` `--color-brand-weak` `--color-brand-strong` |
+| Accent (primary CTA) | `--color-accent` `--color-on-accent` `--color-accent-ink` `--color-accent-weak` `--color-accent-strong` |
 | Status (semantic) | `--color-status-draft` `--color-status-scheduled` `--color-status-posted` `--color-status-failed` `--color-status-publishing` |
+
+**Brand/accent token roles** (post-contrast-pass): `brand`/`accent` = solid button bg + identity
+color; `on-brand`/`on-accent` = that button's text (white or dark per theme, whichever reads);
+`brand-ink`/`accent-ink` = button **hover** + solid-secondary bg; `brand-weak`/`accent-weak` = tinted
+pill/chip bg; `brand-strong`/`accent-strong` = pill/chip text + brand-colored text on canvas
+(readable in both light and dark).
 
 **Token meanings** (so translations stay faithful):
 - `canvas` page bg · `surface` panel/card bg · `surface-sunken` inset/hover/input bg.
