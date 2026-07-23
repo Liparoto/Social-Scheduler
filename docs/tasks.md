@@ -92,18 +92,27 @@ Make the process legible; compose → schedule → watch it publish.
 
 ---
 
-## Phase 4 — Scheduling + auto-fill  `[ ]`
+## Phase 4 — Scheduling + auto-fill  `[x] done`
 
 ### Implementation
-- [ ] Bulk schedule: N posts at a fixed cadence from the next open slot.
-- [ ] Per-channel cadence config + min-queue-depth target.
-- [ ] Auto-fill top-up honoring the selection order: never-posted → not-posted-in-180d
-      (configurable) → per-channel top performers not reused in 180d.
+- [x] Bulk schedule: N posts at a fixed interval (every N days @ time) to N channels, slots
+      in each channel's TZ. Draft posts (compose "Save as draft") + Library page to pick them.
+      (`lib/scheduling.ts`, `/api/posts/bulk`, `/api/posts/draft`, Library view.)
+- [x] Per-channel cadence config (weekly days + time), min/target queue depth, reuse-age —
+      editable in the Channels page (`AutofillConfig`), stored in `channels.cadence_config`.
+- [x] Auto-fill top-up (`worker/autofill.py`) honoring the selection order as one ranking:
+      never-posted (tier 0) → recyclable by age (tier 1, recently-posted excluded) → per-channel
+      top performers (reach+saves) first. Weekly slot generation in `worker/scheduling.py`.
+      Wired into the worker poll loop.
 
-### Verification
-- [ ] Bulk-schedule 5 posts every 2 days @ 6pm → correct times in channel TZ.
-- [ ] Drain a queue below the threshold → auto-fill tops it to target using the right
-      selection order (verify each tier with crafted data).
+### Verification (all passed)
+- [x] Bulk-schedule 5 posts every 2 days @ 18:00 EDT → Aug 1/3/5/7/9 @ 22:00 UTC. Correct.
+- [x] Auto-fill selection tiers (unit tests, crafted data): never-posted first; recently-posted
+      (<N days) excluded; top performer preferred among recyclable; performance is per-channel;
+      already-queued not reselected.
+- [x] Live: queue 5/8 → worker added 3 never-posted at next Mon/Wed/Fri 18:00 slots; second run
+      added 0 (no over-fill).
+- [x] 23 worker tests pass; dashboard `tsc` clean; Library + auto-fill config UIs verified.
 
 ---
 

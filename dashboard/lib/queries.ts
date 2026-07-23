@@ -65,6 +65,11 @@ export function updateChannel(
     access_token: string | null;
     requires_approval: number;
     is_active: number;
+    autofill_enabled: number;
+    cadence_config: string | null;
+    min_queue_depth: number;
+    target_queue_depth: number;
+    reuse_min_age_days: number;
   }>
 ): void {
   const keys = Object.keys(fields);
@@ -185,6 +190,96 @@ export function createPostWithPublications(
     return { postId, publicationIds };
   });
   return tx(input);
+}
+
+// ---- Draft posts + library ------------------------------------------------------
+export interface CreateDraftInput {
+  caption: string;
+  first_comment: string;
+  asset_ids: number[];
+  created_by?: string;
+}
+
+/** Create a post + ordered assets with NO publications (a reusable draft). */
+export function createDraftPost(input: CreateDraftInput): number {
+  const db = getDb();
+  const postType = input.asset_ids.length > 1 ? "carousel" : "single";
+  const tx = db.transaction((data: CreateDraftInput) => {
+    const info = db
+      .prepare(
+        `INSERT INTO posts (caption, first_comment, post_type, status, created_by)
+         VALUES (@caption, @first_comment, @post_type, 'draft', @created_by)`
+      )
+      .run({
+        caption: data.caption || null,
+        first_comment: data.first_comment || null,
+        post_type: postType,
+        created_by: data.created_by || null,
+      });
+    const postId = Number(info.lastInsertRowid);
+    const link = db.prepare(
+      "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, ?)"
+    );
+    data.asset_ids.forEach((a, i) => link.run(postId, a, i));
+    return postId;
+  });
+  return tx(input);
+}
+
+export interface PostLibraryRow extends Post {
+  first_asset_id: number | null;
+  asset_count: number;
+  scheduled_count: number;
+  posted_count: number;
+  last_posted_at: string | null;
+}
+
+export function listPosts(limit = 200): PostLibraryRow[] {
+  return getDb()
+    .prepare(
+      `SELECT p.*,
+         (SELECT pa.asset_id FROM post_assets pa WHERE pa.post_id = p.id
+            ORDER BY pa.sort_order LIMIT 1) AS first_asset_id,
+         (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
+         (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status IN ('scheduled','pending_approval','publishing')) AS scheduled_count,
+         (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status = 'posted') AS posted_count,
+         (SELECT MAX(pub.published_at) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status = 'posted') AS last_posted_at
+       FROM posts p
+       ORDER BY p.created_at DESC, p.id DESC
+       LIMIT ?`
+    )
+    .all(limit) as PostLibraryRow[];
+}
+
+export interface BulkEntry {
+  post_id: number;
+  channel_id: number;
+  scheduled_at: string; // UTC ISO
+  status: "scheduled" | "pending_approval";
+}
+
+/** Create many publications atomically and flip their posts out of 'draft'. */
+export function bulkCreatePublications(entries: BulkEntry[]): number {
+  if (entries.length === 0) return 0;
+  const db = getDb();
+  const tx = db.transaction((rows: BulkEntry[]) => {
+    const insert = db.prepare(
+      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by)
+       VALUES (?, ?, ?, ?, 'bulk')`
+    );
+    const undraft = db.prepare(
+      "UPDATE posts SET status = 'scheduled' WHERE id = ? AND status = 'draft'"
+    );
+    for (const r of rows) {
+      insert.run(r.post_id, r.channel_id, r.scheduled_at, r.status);
+      undraft.run(r.post_id);
+    }
+    return rows.length;
+  });
+  return tx(entries);
 }
 
 // ---- Overview -------------------------------------------------------------------

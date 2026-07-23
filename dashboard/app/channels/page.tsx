@@ -3,6 +3,7 @@ import { config } from "@/lib/config";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
+import { AutofillConfig } from "@/components/autofill-config";
 import { tzAbbrev } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -82,6 +83,15 @@ export default function ChannelsPage() {
                     labelOff="Inactive"
                   />
                 </div>
+
+                <AutofillConfig
+                  channelId={c.id}
+                  enabled={c.autofill_enabled === 1}
+                  cadenceConfig={c.cadence_config}
+                  minQueueDepth={c.min_queue_depth}
+                  targetQueueDepth={c.target_queue_depth}
+                  reuseMinAgeDays={c.reuse_min_age_days}
+                />
               </div>
             ))}
           </div>

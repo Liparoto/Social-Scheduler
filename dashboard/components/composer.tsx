@@ -122,6 +122,26 @@ export function Composer({
     startSubmit(() => router.push("/"));
   }
 
+  async function saveDraft() {
+    setError(null);
+    if (assets.length === 0) return setError("Add at least one image to save a draft.");
+    const res = await fetch("/api/posts/draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        caption,
+        first_comment: firstComment,
+        asset_ids: assets.map((a) => a.id),
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(body.error ?? "Could not save the draft.");
+      return;
+    }
+    startSubmit(() => router.push("/library"));
+  }
+
   const label = "block text-xs font-medium text-ink-soft mb-1.5";
   const fieldCls =
     "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
@@ -406,6 +426,16 @@ export function Composer({
         >
           {submitting ? "Scheduling…" : "Schedule post"}
         </button>
+        <button
+          onClick={saveDraft}
+          disabled={submitting}
+          className="w-full rounded-lg border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
+        >
+          Save as draft
+        </button>
+        <p className="text-center text-[11px] text-faint">
+          Drafts live in the Library — bulk-schedule or reuse them anytime.
+        </p>
       </div>
     </div>
   );

@@ -43,6 +43,12 @@ def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=ti
 
     now = now or datetime.now(timezone.utc)
     dry_run = dry_run_active()
+
+    # Keep channel queues topped up before publishing this cycle's due work.
+    from .autofill import run_autofill
+
+    run_autofill(conn, config, now, logger=logger)
+
     due = db.fetch_due_publications(conn, now.isoformat())
     if logger and due:
         logger.info("%d due publication(s)%s", len(due), " [DRY-RUN]" if dry_run else "")

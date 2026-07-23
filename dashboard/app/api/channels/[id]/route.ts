@@ -22,6 +22,12 @@ export async function PATCH(
   if ("access_token" in body) fields.access_token = body.access_token || null;
   if ("requires_approval" in body) fields.requires_approval = body.requires_approval ? 1 : 0;
   if ("is_active" in body) fields.is_active = body.is_active ? 1 : 0;
+  // Auto-fill config
+  if ("autofill_enabled" in body) fields.autofill_enabled = body.autofill_enabled ? 1 : 0;
+  if ("cadence_config" in body) fields.cadence_config = body.cadence_config || null;
+  if ("min_queue_depth" in body) fields.min_queue_depth = Number(body.min_queue_depth) || 0;
+  if ("target_queue_depth" in body) fields.target_queue_depth = Number(body.target_queue_depth) || 0;
+  if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
 
   updateChannel(channelId, fields);
   return NextResponse.json({ ok: true });
