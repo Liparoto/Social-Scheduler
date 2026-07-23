@@ -194,7 +194,35 @@ Plan: `docs/superpowers/plans/2026-07-23-content-model-phase-b.md`. All verified
       persist + validate (invalid period → 400).
 - [x] B4 — Library: bulk re-target (add/remove an account across selected posts, idempotent) +
       overview badges (kind / content_status / targets / season). Verified round-trip.
-- [ ] Optional: whole-Phase-B code review (per-slice done; final capstone review pending).
+- [x] Whole-Phase-B capstone review (fixed dup-channel-id 500 + cooldown validation → `e0ba600`).
+
+---
+
+## Content management — sub-project ② Tagging taxonomy  `[x] done`
+Design: `docs/design-tag-taxonomy.md` · Plan: `docs/superpowers/plans/2026-07-23-tag-taxonomy.md`
+Two tag kinds: `time_of_day` (fixed morning/afternoon/evening/anytime — steers scheduling) and
+`topic` (free-form — organizes + fuels bulk import ③). Platform is derived from targets, not a tag.
+
+### ②-A — engine  `[x] done`
+- [x] Migration `0003_tag_taxonomy.sql`: `tags.kind` (default topic) + seed 4 time_of_day bands
+      + `idx_post_tags_tag`. Additive.
+- [x] `worker/time_of_day.py` + band-time config: resolve a post's band → clock time (earliest
+      specific band wins; anytime/untagged → the channel's own cadence time).
+- [x] `scheduling.weekly_date_slots`: one auto-post per active cadence day, each slot's time from
+      its own band. Auto-fill wired to use it — cadence sets the days, the tag sets the time.
+- [x] Verified: 72 worker tests pass; each task TDD + reviewed; whole-branch review clean.
+
+### ②-B — dashboard UI  `[x] done`
+- [x] Tag types + query layer (`listTags`/`createTopicTag`/`getPostTags`/`setPostTags`); `tag_ids`
+      threaded through create + edit; `listPosts` gains tag + derived-platform columns.
+- [x] `parseTagIds` validator + `/api/tags` route (create-or-get topics; reserved band names → 400).
+- [x] Composer `<TagEditor>`: time-of-day band chips + free-form topic adder.
+- [x] Library: per-card tag chips + tag filter + computed platform (instagram/facebook) filter;
+      existing bulk-schedule / re-target untouched. Verified in-browser (chips, both filters).
+- [x] Owner action done: `0003` applied to the live DB (4 bands seeded).
+
+Deferred (per spec §6): ③ bulk import, ④ full Library overview, per-channel band-time overrides,
+topic rename/merge/delete UI.
 
 ---
 
