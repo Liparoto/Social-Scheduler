@@ -33,11 +33,27 @@ kill switch · visible (never silent) publish failures.
 Early build. See `docs/plan.md` for the plan and `docs/tasks.md` for phased progress.
 `CLAUDE.md`, `context.md`, and `reference.md` are the source-of-truth context docs.
 
-## Setup (will expand as the build lands)
+## Quick start — the dashboard
+
+**Easiest (double-click):**
+- **macOS:** double-click **`Start-Dashboard-Mac.command`**. (First time, if macOS blocks it:
+  right-click → Open.)
+- **Windows:** double-click **`Start-Dashboard-Windows.bat`**.
+
+Either one creates your `.env` from the template, prepares the database, installs
+dependencies on first run, starts the dashboard, and opens `http://localhost:3939`.
+Requires **Node.js** (nodejs.org) and **Python 3** installed. Close the window to stop.
+
+**Manual:**
 1. Copy `.env.example` → `.env` and fill in your own Meta app + per-channel credentials.
-2. Run the migrations against a fresh `/data` database.
-3. Start the dashboard (`/dashboard`) and the worker (`/worker`).
-4. Do a **dry-run** publish to verify everything before going live.
+2. `python3 migrate.py` to build/update the local database.
+3. `cd dashboard && npm install && npm run dev` for the dashboard.
+4. For publishing, run the worker: `python3 -m worker.run` (see below).
+
+## Going live (first real post)
+Do a **dry-run** first (`DRY_RUN=1` in `.env`), then follow **`docs/meta-setup.md`** to connect
+a real Instagram account and publish. Verify credentials anytime with
+`python3 -m worker.preflight` (reads your quota, posts nothing).
 
 > Requires an Instagram **professional** (Business/Creator) account. For your own accounts,
 > Meta **Standard Access + Development mode** is sufficient — no App Review needed.
