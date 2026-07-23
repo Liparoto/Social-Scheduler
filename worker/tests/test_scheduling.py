@@ -72,7 +72,7 @@ def test_weekly_date_slots_uses_per_candidate_times():
 
 
 def test_weekly_date_slots_skips_past_time_on_first_day():
-    # after is Monday 20:00 local; a morning (09:00) first candidate can't fit today.
+    # after is Monday 12:00 local; a morning (09:00) first candidate can't fit today.
     tz = "America/New_York"
     after = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo(tz)).astimezone(timezone.utc)
     slots = weekly_date_slots({0, 2, 4}, tz, after, [(9, 0)])
