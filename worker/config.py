@@ -83,6 +83,10 @@ class Config:
     cloudflared_path: str = "cloudflared"
     tunnel_provider: str = "cloudflared"
     tunnel_startup_timeout: int = 30
+    # A fresh quick tunnel takes ~15-25s before its public URL is actually reachable.
+    # We wait (best-effort) for it to go live before handing URLs to Meta, so the first
+    # publish doesn't fail against a cold tunnel.
+    tunnel_ready_timeout: int = 60
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -111,4 +115,5 @@ class Config:
             cloudflared_path=os.environ.get("CLOUDFLARED_PATH", "cloudflared"),
             tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),
             tunnel_startup_timeout=int(os.environ.get("TUNNEL_STARTUP_TIMEOUT", "30")),
+            tunnel_ready_timeout=int(os.environ.get("TUNNEL_READY_TIMEOUT", "60")),
         )

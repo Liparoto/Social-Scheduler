@@ -52,7 +52,10 @@ class _Handler(BaseHTTPRequestHandler):
     asset_dir: Path = Path(".")
 
     def do_GET(self) -> None:  # noqa: N802 (http.server naming)
-        target = resolve_within(self.asset_dir, self.path)
+        try:
+            target = resolve_within(self.asset_dir, self.path)
+        except ValueError:  # e.g. an embedded NUL byte in the path
+            target = None
         if target is None:
             self.send_error(404, "Not found")
             return

@@ -15,7 +15,12 @@ import pytest
 
 from worker.asset_server import AssetServer, resolve_within
 from worker.publisher import _build_plan, _resolve_url, publish_one
-from worker.tunnel import CloudflaredTunnel, TunnelError, parse_tunnel_url
+from worker.tunnel import (
+    CloudflaredTunnel,
+    TunnelError,
+    parse_tunnel_url,
+    wait_until_resolvable,
+)
 
 
 # ---- asset server: path safety ------------------------------------------------------
@@ -65,6 +70,28 @@ def test_parse_tunnel_url_from_sample_output():
 
 def test_parse_tunnel_url_none_when_absent():
     assert parse_tunnel_url("no url here yet\nstarting...\n") is None
+
+
+def test_wait_until_resolvable_true_when_public_resolver_has_record():
+    # Inject a resolver that reports an A record on the 2nd poll -> becomes live.
+    calls = {"n": 0}
+
+    def resolver(host):
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    slept = []
+    assert wait_until_resolvable("https://x.trycloudflare.com", timeout=10,
+                                 sleep_fn=slept.append, resolver=resolver) is True
+
+
+def test_wait_until_resolvable_false_and_backs_off():
+    slept = []
+    # Resolver never finds a record -> False after attempts, having backed off each time.
+    ok = wait_until_resolvable("https://x.trycloudflare.com", timeout=6,
+                               sleep_fn=slept.append, resolver=lambda host: False)
+    assert ok is False
+    assert slept  # backed off between attempts rather than hammering
 
 
 def test_tunnel_missing_binary_raises_with_guidance(config):

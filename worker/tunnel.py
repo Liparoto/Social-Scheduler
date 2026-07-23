@@ -14,17 +14,32 @@ Stdlib only (subprocess + threading + re). See docs/design-publish-delivery.md.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import ssl
 import subprocess
 import threading
+import time
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .asset_server import AssetServer
 from .config import Config
 
 _URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+# Readiness is checked with a public resolver (not this host's system resolver), because
+# that's what Meta uses to fetch the image — and some networks' system DNS filters fresh
+# *.trycloudflare.com subdomains even though public resolvers serve them. We query 1.1.1.1
+# by its literal IP (no DNS needed) over DNS-over-HTTPS. Cert unverified: we're only asking
+# "does a public resolver have an A record yet", not moving data.
+_PROBE_CTX = ssl.create_default_context()
+_PROBE_CTX.check_hostname = False
+_PROBE_CTX.verify_mode = ssl.CERT_NONE
 
 
 class TunnelError(RuntimeError):
@@ -38,6 +53,40 @@ def parse_tunnel_url(text: str) -> str | None:
     """
     m = _URL_RE.search(text)
     return m.group(0) if m else None
+
+
+def _doh_has_answer(host: str) -> bool:
+    """True if a public resolver (Cloudflare DoH, 1.1.1.1) has an A record for host.
+
+    Real network call. Connecting to the literal IP 1.1.1.1 needs no DNS, so this works
+    even where the system resolver filters the name.
+    """
+    req = urllib.request.Request(
+        f"https://1.1.1.1/dns-query?name={host}&type=A",
+        headers={"accept": "application/dns-json"},
+    )
+    with urllib.request.urlopen(req, timeout=5, context=_PROBE_CTX) as r:
+        return bool(json.load(r).get("Answer"))
+
+
+def wait_until_resolvable(base_url: str, timeout: int, sleep_fn=time.sleep,
+                          interval: int = 2, resolver=_doh_has_answer) -> bool:
+    """Poll a public resolver until it has an A record for the tunnel host. Best-effort.
+
+    This mirrors how Meta will resolve the URL. Returns False if it never appears within
+    ~timeout (or the resolver itself is unreachable) — the caller proceeds anyway. `resolver`
+    is injectable so tests need no network. Attempt-based so stubbing sleep is deterministic.
+    """
+    host = urlparse(base_url).hostname or ""
+    attempts = max(1, timeout // interval)
+    for _ in range(attempts):
+        try:
+            if resolver(host):
+                return True
+        except Exception:  # noqa: BLE001 — resolver/network hiccup -> just retry
+            pass
+        sleep_fn(interval)
+    return False
 
 
 class CloudflaredTunnel:
@@ -96,20 +145,31 @@ class CloudflaredTunnel:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+                self._proc.wait(timeout=5)  # reap it so no zombie is left behind
         self._proc = None
 
 
 @contextmanager
-def publish_endpoint(config: Config):
+def publish_endpoint(config: Config, logger=None):
     """Bring up the asset server + tunnel, yield the public base URL, tear both down.
 
-    Used by the worker around a batch of real (non-dry-run) publications. Always cleans
-    up, even on error — nothing stays exposed after the cycle.
+    Waits (best-effort) for the tunnel to actually be reachable before yielding, so the
+    first publish doesn't race a cold tunnel. Used by the worker around a batch of real
+    (non-dry-run) publications. Always cleans up, even on error — nothing stays exposed.
     """
     server = AssetServer(config.asset_storage_dir, config.asset_port).start()
     tunnel = CloudflaredTunnel(server.port, config)
     try:
         base_url = tunnel.start()
+        if wait_until_resolvable(base_url, config.tunnel_ready_timeout):
+            logger and logger.info("tunnel is live: %s", base_url)
+        else:
+            # Couldn't confirm from here (e.g. local DNS filtering); Meta may still reach
+            # it. Proceed rather than block publishing on an unverifiable local probe.
+            logger and logger.warning(
+                "could not confirm tunnel reachability locally after %ss; proceeding",
+                config.tunnel_ready_timeout,
+            )
         yield base_url
     finally:
         tunnel.stop()
