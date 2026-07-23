@@ -56,6 +56,10 @@ export function LibraryView({
   const [pending, startT] = useTransition();
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
+  const [kindFilter, setKindFilter] = useState<"all" | "evergreen" | "one_time">("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
 
   function toggle(id: number) {
     setSelected((prev) =>
@@ -136,6 +140,7 @@ export function LibraryView({
     new Set(posts.flatMap((p) => [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)]))
   ).sort();
 
+  const q = search.trim().toLowerCase();
   const shown = posts.filter((p) => {
     if (tagFilter) {
       const names = [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)];
@@ -144,11 +149,62 @@ export function LibraryView({
     if (platformFilter) {
       if (!splitTags(p.target_platforms).includes(platformFilter)) return false;
     }
+    if (statusFilter !== "all" && p.content_status !== statusFilter) return false;
+    if (kindFilter !== "all" && p.content_kind !== kindFilter) return false;
+    if (q && !(p.caption ?? "").toLowerCase().includes(q)) return false;
     return true;
+  });
+
+  const sorted = [...shown].sort((a, b) => {
+    if (sort === "newest") return b.id - a.id;
+    const av = a.last_posted_at;
+    const bv = b.last_posted_at;
+    if (av === null && bv === null) return b.id - a.id;
+    if (av === null) return 1; // never-posted always last
+    if (bv === null) return -1;
+    return sort === "recent" ? bv.localeCompare(av) : av.localeCompare(bv);
   });
 
   return (
     <div className="space-y-5">
+      {/* Summary: whole-library makeup */}
+      <div className="data flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
+        <span><span className="text-status-posted">{posts.filter((p) => p.content_status === "ready").length}</span> Ready</span>
+        <span><span className="text-ink-soft">{posts.filter((p) => p.content_status === "draft").length}</span> Draft</span>
+        <span><span className="text-faint">{posts.filter((p) => p.content_status === "retired").length}</span> Retired</span>
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <span>{posts.filter((p) => p.content_kind === "evergreen").length} Evergreen</span>
+        <span>{posts.filter((p) => p.content_kind === "one_time").length} One-time</span>
+        <span className="ml-auto">{posts.length} total</span>
+      </div>
+
+      {/* Controls: status / kind / search / sort */}
+      <div className="flex flex-wrap items-center gap-2">
+        <select className={field} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+          <option value="all">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="ready">Ready</option>
+          <option value="retired">Retired</option>
+        </select>
+        <select className={field} value={kindFilter} onChange={(e) => setKindFilter(e.target.value as typeof kindFilter)}>
+          <option value="all">All kinds</option>
+          <option value="evergreen">Evergreen</option>
+          <option value="one_time">One-time</option>
+        </select>
+        <input
+          className={`${field} min-w-48 flex-1`}
+          placeholder="Search captions…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select className={field} value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
+          <option value="newest">Newest</option>
+          <option value="recent">Recently posted</option>
+          <option value="stale">Least recently posted</option>
+        </select>
+        <span className="data text-[11px] text-muted">showing {shown.length} of {posts.length}</span>
+      </div>
+
       {/* Filter bar */}
       {allTagNames.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -202,7 +258,7 @@ export function LibraryView({
 
       {/* Post grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {shown.map((p) => {
+        {sorted.map((p) => {
           const on = selected.includes(p.id);
           const order = selected.indexOf(p.id) + 1;
           return (
