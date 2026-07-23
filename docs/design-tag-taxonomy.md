@@ -24,8 +24,13 @@ Two tag **kinds**, both stored in the existing `tags` / `post_tags` tables (pres
 
 | Kind | Values | Role | Read by worker? |
 |---|---|---|---|
-| `time_of_day` | **fixed**: `morning`, `afternoon`, `evening` | Sets the clock time of an auto-scheduled post | **Yes** |
+| `time_of_day` | **fixed**: `morning`, `afternoon`, `evening`, `anytime` | Sets the clock time of an auto-scheduled post | **Yes** |
 | `topic` | **free-form** (e.g. travel, tips, promo, events) | Library filtering + bulk-import fuel | No |
+
+`anytime` is an **explicit** "no time preference" marker — deliberately saying a post may run at
+any time of day, as distinct from simply *not having been tagged yet*. The two behave
+identically for scheduling (§3); the difference is authoring intent, which is worth preserving
+for a human reading the Library.
 
 ### Why platform is *not* a tag
 "Which platforms can this go to" is already answered by **targeting** (`post_targets`): a post
@@ -58,26 +63,31 @@ candidates and assigns each to the next future cadence day. **One auto-post per 
   - `morning` → **09:00**
   - `afternoon` → **13:00**
   - `evening` → **18:00**
-  - These are **worker config defaults** (env-overridable); a per-channel override is a
-    deliberately-deferred later enhancement.
+  - `anytime` → the **channel's own `cadence_config.time`** (its existing default posting
+    time). No band override.
+  - The three band times are **worker config defaults** (env-overridable); a per-channel band
+    override is a deliberately-deferred later enhancement. `anytime` deliberately reuses the
+    channel's configured default rather than a fixed constant.
 - Because the tag **defines** the slot time rather than being matched against a pre-fixed
   slot, there is **no "no morning slot is free" failure mode** — the day's single slot simply
   takes the assigned post's band time.
 - **Multiple `time_of_day` tags** on one post → the scheduler picks **deterministically: the
-  earliest band** present (morning < afternoon < evening).
-- **Untagged (no `time_of_day`)** → the post is eligible for any day and lands at the
-  **channel default band time = afternoon (13:00)**. *(Open decision — see §7.)*
+  earliest specific band** present (morning < afternoon < evening); `anytime` alongside a
+  specific band is ignored (the specific band wins).
+- **Untagged (no `time_of_day`)** → treated exactly like `anytime`: eligible for any day and
+  lands at the **channel's `cadence_config.time`**. This preserves today's behavior for all
+  existing content (it keeps posting at the channel's current cadence time).
 
 ### Worked example
-Channel "Advantage PT", tz `America/New_York`, cadence `{"days":["mon","wed"],"time":...}`
-(the old single `time` is now ignored for band-tagged posts — see §4 migration note).
-Eligible queue, in priority order: `[A: evening]`, `[B: morning]`, `[C: untagged]`.
+Channel "Advantage PT", tz `America/New_York`, cadence `{"days":["mon","wed"],"time":"17:00"}`.
+Eligible queue, in priority order: `[A: evening]`, `[B: morning]`, `[C: untagged/anytime]`.
 Autofill needs 3, next cadence days are Mon, Wed, next Mon:
-- A → Mon **18:00** ET
-- B → Wed **09:00** ET
-- C → next Mon **13:00** ET (default band)
+- A → Mon **18:00** ET (evening band)
+- B → Wed **09:00** ET (morning band)
+- C → next Mon **17:00** ET (channel cadence time — the anytime/untagged default)
 
-Each post's time is legibly explained by its own tag.
+Each post's time is legibly explained by its own tag (or, for anytime/untagged, by the
+channel's configured default).
 
 ---
 
@@ -87,21 +97,22 @@ Each post's time is legibly explained by its own tag.
 -- Add the taxonomy dimension to the existing flat tags table.
 ALTER TABLE tags ADD COLUMN kind TEXT NOT NULL DEFAULT 'topic';
 
--- Seed the three fixed time-of-day tags (idempotent via INSERT OR IGNORE on unique name).
+-- Seed the four fixed time-of-day tags (idempotent via INSERT OR IGNORE on unique name).
 INSERT OR IGNORE INTO tags (name, kind) VALUES
   ('morning',   'time_of_day'),
   ('afternoon', 'time_of_day'),
-  ('evening',   'time_of_day');
+  ('evening',   'time_of_day'),
+  ('anytime',   'time_of_day');
 ```
 
 Notes / decisions:
 - `tags.name` keeps its existing global `UNIQUE COLLATE NOCASE` constraint. Rebuilding the
   table to make uniqueness per-`(kind, name)` is not worth it for a single-install tool where
   the three reserved time-of-day names won't collide with user topics. Documented tradeoff.
-- The fixed `time_of_day` value set (`morning`/`afternoon`/`evening`) and the `kind` value set
-  (`topic`/`time_of_day`) are enforced at the **application layer** (both TS routes and the
-  Python worker), consistent with how the rest of the app validates enums that can't be a
-  cheap `ALTER … CHECK`.
+- The fixed `time_of_day` value set (`morning`/`afternoon`/`evening`/`anytime`) and the `kind`
+  value set (`topic`/`time_of_day`) are enforced at the **application layer** (both TS routes
+  and the Python worker), consistent with how the rest of the app validates enums that can't be
+  a cheap `ALTER … CHECK`.
 - Band default times are **worker config constants** with env overrides
   (e.g. `TOD_MORNING=09:00`, `TOD_AFTERNOON=13:00`, `TOD_EVENING=18:00`). Per-channel override
   columns are **out of scope** here (deferred).
@@ -128,7 +139,9 @@ Mirrors ①: engine first (schema + worker + tests), then dashboard UI.
 
 ### ②-B — dashboard
 - **Composer:** a Tags section —
-  - `time_of_day`: a 3-chip multi-select (Morning / Afternoon / Evening).
+  - `time_of_day`: a 4-chip multi-select (Morning / Afternoon / Evening / Anytime). Selecting
+    Anytime alongside a specific band is allowed but the specific band wins at schedule time
+    (§3); the UI may hint this.
   - `topic`: a free-form multi-add (create-or-reuse existing topic tags; same visual language
     as the caption-variants adder).
 - **Library:** filter by tag (topic + time_of_day) and a **computed platform filter**
@@ -151,16 +164,16 @@ Mirrors ①: engine first (schema + worker + tests), then dashboard UI.
 
 ---
 
-## 7. Open decisions to confirm at spec review
+## 7. Decisions (resolved 2026-07-23)
 
-1. **Untagged default band.** Proposed: untagged posts land at the channel default
-   **afternoon (13:00)**. Alternative: skip untagged posts from time-steering entirely and
-   keep the channel's legacy single cadence `time`. Recommendation stands (afternoon default)
-   for a single, predictable rule.
-2. **Legacy `cadence_config.time`.** With band times now driving the clock, the channel's old
-   single `time` becomes the *fallback* only for untagged posts if we ever prefer it over a
-   fixed afternoon default. Proposed: ignore it and use the afternoon default, to keep one
-   rule. Flag if you'd rather the legacy `time` remain the untagged fallback.
+1. **Untagged / anytime posts are usable at any time** and land at the **channel's own
+   `cadence_config.time`** (its configured default posting time) — not a fixed constant. This
+   preserves today's behavior for all existing content.
+2. **An explicit `anytime` tag** exists as a fourth `time_of_day` value, so a post can *say*
+   "any time of day" deliberately rather than being inferred from missing tags. Functionally
+   identical to untagged; kept distinct for authoring clarity.
+3. **Legacy `cadence_config.time` keeps a permanent role** as the anytime/untagged slot time —
+   it is not dead code. The morning/afternoon/evening constants are overrides layered on top.
 
 ---
 
