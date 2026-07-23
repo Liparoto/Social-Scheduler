@@ -38,6 +38,11 @@ export default function LibraryPage() {
       <PageHeader
         title="Library"
         subtitle="Every post you've made — select several to bulk-schedule at a cadence, or reuse for recycling."
+        action={
+          <Link href="/import" className="text-sm text-brand underline underline-offset-2">
+            Bulk import →
+          </Link>
+        }
       />
       <div className="px-8 py-6">
         {posts.length === 0 ? (

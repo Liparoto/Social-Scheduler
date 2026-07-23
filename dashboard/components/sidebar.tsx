@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const NAV = [
   { href: "/", label: "Overview", hint: "Queue & status" },
   { href: "/compose", label: "Compose", hint: "New post" },
+  { href: "/import", label: "Import", hint: "Bulk add images" },
   { href: "/library", label: "Library", hint: "Posts & bulk schedule" },
   { href: "/periods", label: "Periods", hint: "In-season windows" },
   { href: "/channels", label: "Channels", hint: "Accounts & config" },
