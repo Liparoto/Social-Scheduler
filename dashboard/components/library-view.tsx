@@ -19,6 +19,9 @@ interface PostLite {
   target_count: number;
   green_period_count: number;
   blackout_period_count: number;
+  time_of_day_tags: string | null;
+  topic_tags: string | null;
+  target_platforms: string | null;
 }
 interface ChannelLite {
   id: number;
@@ -50,6 +53,8 @@ export function LibraryView({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startT] = useTransition();
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [platformFilter, setPlatformFilter] = useState<string | null>(null);
 
   function toggle(id: number) {
     setSelected((prev) =>
@@ -125,11 +130,78 @@ export function LibraryView({
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
 
+  const splitTags = (s: string | null) => (s ? s.split(",") : []);
+  const allTagNames = Array.from(
+    new Set(posts.flatMap((p) => [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)]))
+  ).sort();
+
+  const shown = posts.filter((p) => {
+    if (tagFilter) {
+      const names = [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)];
+      if (!names.includes(tagFilter)) return false;
+    }
+    if (platformFilter) {
+      if (!splitTags(p.target_platforms).includes(platformFilter)) return false;
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-5">
+      {/* Filter bar */}
+      {allTagNames.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-ink-soft">Filter:</span>
+          {allTagNames.map((name) => {
+            const on = tagFilter === name;
+            return (
+              <button
+                key={name}
+                onClick={() => setTagFilter(on ? null : name)}
+                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  on
+                    ? "border-brand bg-brand/10 text-brand-ink"
+                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
+                }`}
+              >
+                {name}
+              </button>
+            );
+          })}
+          <span className="mx-1 h-4 w-px bg-border" />
+          {(["instagram", "facebook"] as const).map((plat) => {
+            const on = platformFilter === plat;
+            return (
+              <button
+                key={plat}
+                onClick={() => setPlatformFilter(on ? null : plat)}
+                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                  on
+                    ? "border-brand bg-brand/10 text-brand-ink"
+                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
+                }`}
+              >
+                {plat}
+              </button>
+            );
+          })}
+          {tagFilter || platformFilter ? (
+            <button
+              onClick={() => {
+                setTagFilter(null);
+                setPlatformFilter(null);
+              }}
+              className="text-[11px] text-faint underline underline-offset-2"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Post grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {posts.map((p) => {
+        {shown.map((p) => {
           const on = selected.includes(p.id);
           const order = selected.indexOf(p.id) + 1;
           return (
@@ -196,6 +268,18 @@ export function LibraryView({
                     <span>blackout ×{p.blackout_period_count}</span>
                   ) : null}
                 </div>
+                {[...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)].length > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {[...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)].map((name) => (
+                      <span
+                        key={name}
+                        className="data rounded-full bg-surface-sunken px-2 py-0.5 text-[11px] text-muted"
+                      >
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </button>
           );

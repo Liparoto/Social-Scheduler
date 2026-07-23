@@ -21,6 +21,9 @@ export default function LibraryPage() {
     target_count: p.target_count,
     green_period_count: p.green_period_count,
     blackout_period_count: p.blackout_period_count,
+    time_of_day_tags: p.time_of_day_tags,
+    topic_tags: p.topic_tags,
+    target_platforms: p.target_platforms,
   }));
   const channels = getActiveChannels().map((c) => ({
     id: c.id,
