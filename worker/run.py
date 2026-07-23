@@ -93,7 +93,7 @@ def run_forever(config: Config, client, logger) -> None:
 def main() -> int:
     config = Config.from_env()
     logger = configure_logging(config.database_path.parent / "logs")
-    client = GraphClient(config.graph_version)
+    client = GraphClient(config.graph_version, base_url=config.graph_base)
 
     if "--once" in sys.argv:
         conn = db.connect(config.database_path)

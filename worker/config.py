@@ -61,6 +61,7 @@ class Config:
     meta_app_id: str
     meta_app_secret: str
     graph_version: str
+    graph_base: str
     default_timezone: str
     poll_interval: int
     # Retry policy for failed publications.
@@ -92,6 +93,9 @@ class Config:
             meta_app_id=os.environ.get("META_APP_ID", ""),
             meta_app_secret=os.environ.get("META_APP_SECRET", ""),
             graph_version=os.environ.get("META_GRAPH_VERSION", "v25.0"),
+            # Instagram-Login path (recommended, no FB Page): https://graph.instagram.com
+            # Facebook-Login / FB Pages path:                  https://graph.facebook.com
+            graph_base=os.environ.get("META_GRAPH_BASE", "https://graph.facebook.com"),
             default_timezone=os.environ.get("DEFAULT_TIMEZONE", "UTC"),
             poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "30")),
             metrics_max_age_days=int(os.environ.get("METRICS_MAX_AGE_DAYS", "30")),

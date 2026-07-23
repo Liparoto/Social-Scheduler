@@ -37,6 +37,7 @@ def config(db_path, tmp_path) -> Config:
         meta_app_id="",
         meta_app_secret="",
         graph_version="v25.0",
+        graph_base="https://graph.facebook.com",
         default_timezone="UTC",
         poll_interval=1,
         max_attempts=3,

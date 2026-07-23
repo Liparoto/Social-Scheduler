@@ -102,10 +102,16 @@ necessary if an install lets *other people* connect *their* accounts (we don't).
 **Account requirement (all paths):** an Instagram **professional** account (Business or
 Creator). Personal accounts are unsupported.
 
-**Decision for v1 (IG + Facebook Pages):** plan to use the **Facebook-Login path**
-(`graph.facebook.com`, IG linked to a Page) so Instagram and Facebook Page publishing share
-one token/permission model. Revisit if we ever want IG-only installs to skip the Page link
-(then the Instagram-Login path is cleaner).
+**Decision (updated after live-setup research, 2026-07-22):** for publishing to your OWN
+Instagram professional account, use the **Instagram-Login path** (`graph.instagram.com`,
+**no Facebook Page required**) — it's markedly simpler (add account + generate token in one
+dashboard panel, no Page-token juggling). The worker's API host is configurable via
+`META_GRAPH_BASE` (default `https://graph.facebook.com`; set to `https://graph.instagram.com`
+for the IG-Login path). The content-publishing endpoints are identical on both hosts; only
+the host + token type differ. The **Facebook-Login path** (`graph.facebook.com`, Page-linked)
+is retained for the Phase 6 **Facebook Pages** adapter. A mixed install (IG-Login IG channels
++ FB Page channels) will need a per-channel host — a Phase 6 refinement; today the host is
+install-wide. Full step-by-step in **docs/meta-setup.md**.
 
 ### 6. Media-type differences & recent changes
 - **Reels/video:** `media_type=REELS` (or legacy `VIDEO`), pass `video_url` (not `image_url`),
