@@ -71,6 +71,10 @@ class Config:
     # Container status polling (used for carousel/video readiness).
     status_poll_interval: int = 5
     status_poll_max_tries: int = 60
+    # Metrics fetching: only refresh posts published within this window, and no more
+    # often than this interval per publication (keeps API usage sane).
+    metrics_max_age_days: int = 30
+    metrics_min_interval_hours: int = 6
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -90,4 +94,6 @@ class Config:
             graph_version=os.environ.get("META_GRAPH_VERSION", "v25.0"),
             default_timezone=os.environ.get("DEFAULT_TIMEZONE", "UTC"),
             poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "30")),
+            metrics_max_age_days=int(os.environ.get("METRICS_MAX_AGE_DAYS", "30")),
+            metrics_min_interval_hours=int(os.environ.get("METRICS_MIN_INTERVAL_HOURS", "6")),
         )

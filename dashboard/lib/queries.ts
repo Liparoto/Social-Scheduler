@@ -291,6 +291,10 @@ export interface PublicationRow extends Publication {
   channel_timezone: string;
   asset_count: number;
   first_asset_id: number | null;
+  m_reach: number | null;
+  m_saves: number | null;
+  m_likes: number | null;
+  m_fetched_at: string | null;
 }
 
 export function getPublicationsOverview(limit = 200): PublicationRow[] {
@@ -305,10 +309,19 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          c.timezone     AS channel_timezone,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT pa.asset_id FROM post_assets pa
-            WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,
+         lm.reach      AS m_reach,
+         lm.saves      AS m_saves,
+         lm.likes      AS m_likes,
+         lm.fetched_at AS m_fetched_at
        FROM publications pub
        JOIN posts p    ON p.id = pub.post_id
        JOIN channels c ON c.id = pub.channel_id
+       LEFT JOIN post_metrics lm ON lm.id = (
+         SELECT pm.id FROM post_metrics pm
+         WHERE pm.publication_id = pub.id
+         ORDER BY pm.fetched_at DESC, pm.id DESC LIMIT 1
+       )
        ORDER BY
          CASE pub.status WHEN 'failed' THEN 0 WHEN 'publishing' THEN 1
                          WHEN 'scheduled' THEN 2 ELSE 3 END,

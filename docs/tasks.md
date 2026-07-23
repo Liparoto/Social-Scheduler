@@ -116,15 +116,23 @@ Make the process legible; compose → schedule → watch it publish.
 
 ---
 
-## Phase 5 — Metrics fetch job  `[ ]`
+## Phase 5 — Metrics fetch job  `[x] done`
 
 ### Implementation
-- [ ] Per-`publication` metrics fetch (reach/saves/etc.) → time-series `post_metrics` rows.
-- [ ] Feed per-channel performance ranking used by auto-fill tier 3.
+- [x] Per-`publication` metrics fetch (`worker/metrics.py`): pulls reach/likes/comments/
+      saved/shares from the Graph media-insights endpoint → time-series `post_metrics` rows.
+      Throttled (only posts < metrics_max_age_days; refreshed at most every
+      metrics_min_interval_hours). Skips dry-run / unpublished. Wired into the poll loop.
+- [x] Feeds the per-channel performance ranking already used by auto-fill.
+- [x] Latest reach/saves/likes surfaced per posted publication in the Overview table.
 
-### Verification
-- [ ] Fetch metrics for a real published post → snapshot row written.
-- [ ] Ranking query returns per-channel top performers correctly on seeded data.
+### Verification (all passed)
+- [x] Fetch writes a mapped snapshot ("saved"→saves etc.); live seed → reach/saves/likes
+      shown in the Overview.
+- [x] Throttle honored (no double-fetch within interval; refetches after it); old posts and
+      dry-run/unpublished excluded; fetch failure is non-fatal.
+- [x] Metrics feed ranking → higher performer selected (per-channel) on seeded data.
+- [x] 29 worker tests pass; dashboard `tsc` clean; Overview metrics verified in browser.
 
 ---
 

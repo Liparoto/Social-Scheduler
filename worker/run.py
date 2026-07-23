@@ -65,6 +65,11 @@ def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=ti
         publish_one(conn, pub, config, client, dry_run=dry_run, now=now,
                     logger=logger, sleep_fn=sleep_fn)
         processed += 1
+
+    # Refresh metrics for already-published posts (throttled per publication).
+    from .metrics import run_metrics
+
+    run_metrics(conn, config, client, now, logger=logger)
     return processed
 
 

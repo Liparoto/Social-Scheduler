@@ -88,6 +88,25 @@ class GraphClient:
             {"creation_id": creation_id, "access_token": token},
         )["id"]
 
+    def get_media_insights(
+        self, media_id: str, token: str, metrics: list[str]
+    ) -> dict:
+        """Fetch insight metrics for a published media. Returns {metric_name: value}.
+
+        IG insights response shape:
+          {"data": [{"name": "reach", "values": [{"value": N}]}, ...]}
+        """
+        data = self._get(
+            f"{media_id}/insights",
+            {"metric": ",".join(metrics), "access_token": token},
+        )
+        out: dict = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            values = item.get("values") or [{}]
+            out[name] = values[0].get("value")
+        return out
+
     def get_content_publishing_limit(
         self, ig_user_id: str, token: str
     ) -> tuple[int | None, int | None, int | None]:

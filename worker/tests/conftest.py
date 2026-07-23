@@ -59,11 +59,20 @@ def conn(config):
 class FakeGraphClient:
     """Same method surface as GraphClient; records calls, no network."""
 
-    def __init__(self, limit=(0, 50, 86400), fail_on=None):
+    def __init__(self, limit=(0, 50, 86400), fail_on=None, insights=None):
         self.calls = []
         self.limit = limit
         self.fail_on = set(fail_on or [])
+        self.insights = insights or {
+            "reach": 100, "likes": 10, "comments": 2, "saved": 5, "shares": 1,
+        }
         self._n = 0
+
+    def get_media_insights(self, media_id, token, metrics):
+        self.calls.append(("insights", media_id))
+        if "insights" in self.fail_on:
+            raise RuntimeError("insights boom")
+        return dict(self.insights)
 
     def get_content_publishing_limit(self, ig_user_id, token):
         self.calls.append(("limit", ig_user_id))
