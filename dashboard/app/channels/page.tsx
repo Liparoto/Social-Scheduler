@@ -3,6 +3,7 @@ import { config } from "@/lib/config";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
+import { ChannelCredentials } from "@/components/channel-credentials";
 import { AutofillConfig } from "@/components/autofill-config";
 import { tzAbbrev } from "@/lib/format";
 
@@ -83,6 +84,12 @@ export default function ChannelsPage() {
                     labelOff="Inactive"
                   />
                 </div>
+
+                <ChannelCredentials
+                  channelId={c.id}
+                  platform={c.platform}
+                  remoteAccountId={c.remote_account_id}
+                />
 
                 <AutofillConfig
                   channelId={c.id}
