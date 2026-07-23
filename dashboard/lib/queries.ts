@@ -157,7 +157,8 @@ interface ContentModelInput {
 /** Writes the content-model side-table rows for a freshly-created post, INSIDE the caller's transaction. */
 function insertContentModelRows(db: ReturnType<typeof getDb>, postId: number, data: ContentModelInput): void {
   if (data.target_channel_ids?.length) {
-    const insert = db.prepare("INSERT INTO post_targets (post_id, channel_id) VALUES (?, ?)");
+    // OR IGNORE: a duplicate channel id in the input is harmless, not a 500.
+    const insert = db.prepare("INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?, ?)");
     for (const channelId of data.target_channel_ids) insert.run(postId, channelId);
   }
   if (data.period_links?.length) {
@@ -515,7 +516,7 @@ export function setPostTargets(postId: number, channelIds: number[]): void {
   const db = getDb();
   const tx = db.transaction((ids: number[]) => {
     db.prepare("DELETE FROM post_targets WHERE post_id = ?").run(postId);
-    const insert = db.prepare("INSERT INTO post_targets (post_id, channel_id) VALUES (?, ?)");
+    const insert = db.prepare("INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?, ?)");
     for (const id of ids) insert.run(postId, id);
   });
   tx(channelIds);

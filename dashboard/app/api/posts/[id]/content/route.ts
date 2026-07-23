@@ -52,10 +52,18 @@ export async function PATCH(
     contentFields.content_status = body.content_status;
   }
   if ("cooldown_days" in body) {
-    contentFields.cooldown_days =
-      body.cooldown_days === null || body.cooldown_days === undefined
-        ? null
-        : Number(body.cooldown_days);
+    if (body.cooldown_days === null || body.cooldown_days === undefined) {
+      contentFields.cooldown_days = null;
+    } else {
+      const n = Number(body.cooldown_days);
+      if (!Number.isInteger(n) || n < 0) {
+        return NextResponse.json(
+          { error: "cooldown_days must be a non-negative integer or null." },
+          { status: 400 }
+        );
+      }
+      contentFields.cooldown_days = n;
+    }
   }
   if (Object.keys(contentFields).length > 0) {
     updatePostContentModel(postId, contentFields);
