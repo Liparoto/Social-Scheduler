@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getActiveChannels, getPublicationsOverview } from "@/lib/queries";
 import { PageHeader, StatusBadge, ChannelChip, EmptyState } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
+import { RefreshAllMetrics } from "@/components/refresh-all-metrics";
 import { formatInTz, tzAbbrev, channelColor } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -88,9 +89,12 @@ export default function OverviewPage() {
 
         {/* The queue itself */}
         <section>
-          <h2 className="mb-3 font-display text-sm font-semibold uppercase tracking-wide text-muted">
-            Publications
-          </h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-muted">
+              Publications
+            </h2>
+            <RefreshAllMetrics />
+          </div>
           {pubs.length === 0 ? (
             <EmptyState title="Nothing here yet">
               Composed posts and their scheduled sends show up here — failures float to the
@@ -177,7 +181,11 @@ export default function OverviewPage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <PublicationActions id={p.id} status={p.status} />
+                        <PublicationActions
+                          id={p.id}
+                          status={p.status}
+                          isDryRun={p.is_dry_run === 1}
+                        />
                       </td>
                     </tr>
                   ))}
