@@ -43,6 +43,25 @@ class _NonRetryable(Exception):
     """A problem that retrying won't fix (bad config/data) -> terminal failure."""
 
 
+def _maybe_retire_one_time(conn, post_id: int, now: datetime) -> bool:
+    """Retire a one-time post once EVERY targeted channel has posted it. Returns True if retired."""
+    targets = conn.execute(
+        "SELECT channel_id FROM post_targets WHERE post_id = ?", (post_id,)
+    ).fetchall()
+    if not targets:
+        return False
+    for t in targets:
+        done = conn.execute(
+            "SELECT 1 FROM publications WHERE post_id = ? AND channel_id = ? "
+            "AND status = 'posted' LIMIT 1",
+            (post_id, t["channel_id"]),
+        ).fetchone()
+        if not done:
+            return False
+    db.update_post(conn, post_id, content_status="retired", updated_at=_iso(now))
+    return True
+
+
 def _load_targets(conn, pub):
     channel = db.get_channel(conn, pub["channel_id"])
     post = db.get_post(conn, pub["post_id"])
@@ -236,5 +255,7 @@ def publish_one(
         status="posted", remote_post_id=media_id, published_at=_iso(now),
         last_error=None, next_retry_at=None, updated_at=_iso(now),
     )
+    if post["content_kind"] == "one_time":
+        _maybe_retire_one_time(conn, post["id"], now)
     log(f"published -> {media_id}")
     return PublishOutcome("posted", media_id, plan)

@@ -67,6 +67,15 @@ def update_publication(conn: sqlite3.Connection, publication_id: int, **fields) 
     conn.commit()
 
 
+def update_post(conn: sqlite3.Connection, post_id: int, **fields) -> None:
+    if not fields:
+        return
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [post_id]
+    conn.execute(f"UPDATE posts SET {cols} WHERE id = ?", values)
+    conn.commit()
+
+
 def record_publish_limit(
     conn: sqlite3.Connection,
     channel_id: int,

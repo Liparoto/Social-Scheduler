@@ -122,3 +122,37 @@ def test_rate_limit_blocks_publish(conn, config, make_publication):
     assert row["status"] == "scheduled"
     assert row["next_retry_at"] is not None
     assert "rate limit" in row["last_error"]
+
+
+# ---- One-time auto-retirement -----------------------------------------------------
+def test_one_time_retires_only_after_all_targets_posted(conn, config, make_publication):
+    from worker.publisher import _maybe_retire_one_time
+    from datetime import datetime, timezone
+    now = datetime(2026, 7, 22, tzinfo=timezone.utc)
+
+    # A one-time post targeting two channels.
+    pub = make_publication(post_type="single", n_assets=1, now=now)
+    post_id, chan_a = pub["post_id"], pub["channel_id"]
+    conn.execute("UPDATE posts SET content_kind='one_time' WHERE id=?", (post_id,))
+    chan_b = conn.execute(
+        "INSERT INTO channels (platform, account_name, remote_account_id, access_token) "
+        "VALUES ('instagram','B','2','t')").lastrowid
+    conn.executemany("INSERT INTO post_targets (post_id, channel_id) VALUES (?,?)",
+                     [(post_id, chan_a), (post_id, chan_b)])
+    conn.commit()
+
+    # Posted to A only -> NOT retired yet.
+    conn.execute("INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+                 "VALUES (?,?, '2026-07-01T00:00:00+00:00', 'posted', '2026-07-01T00:00:00+00:00')",
+                 (post_id, chan_a))
+    conn.commit()
+    assert _maybe_retire_one_time(conn, post_id, now) is False
+    assert conn.execute("SELECT content_status FROM posts WHERE id=?", (post_id,)).fetchone()[0] != "retired"
+
+    # Now posted to B too -> retire.
+    conn.execute("INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+                 "VALUES (?,?, '2026-07-02T00:00:00+00:00', 'posted', '2026-07-02T00:00:00+00:00')",
+                 (post_id, chan_b))
+    conn.commit()
+    assert _maybe_retire_one_time(conn, post_id, now) is True
+    assert conn.execute("SELECT content_status FROM posts WHERE id=?", (post_id,)).fetchone()[0] == "retired"
