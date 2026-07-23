@@ -20,6 +20,7 @@ from datetime import timedelta
 
 from . import db
 from .config import Config
+from .periods import in_season, local_date, period_from_row
 from .scheduling import parse_iso, parse_weekly_cadence, weekly_slots
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
@@ -52,13 +53,19 @@ def latest_future_scheduled(conn, channel_id: int, now_iso: str) -> str | None:
     return row[0]
 
 
-def select_candidates(conn, channel_id: int, reuse_min_age_days: int, now, limit: int):
-    """Return up to `limit` post ids to enqueue, in selection-rule order."""
-    cutoff = (now - timedelta(days=reuse_min_age_days)).isoformat()
+def select_candidates(conn, channel_id: int, now):
+    """SQL-gated, ordered candidate posts for a channel. Cooldown/one-time/period gates
+    are applied afterward in `eligible_candidates` (Python — clearer for date math).
+
+    Gates here: status ready, targets this channel, has assets, supported type, not already
+    queued. Ordered: never-posted first, then performance desc, then stalest, then oldest.
+    """
     rows = conn.execute(
         f"""
         SELECT
           p.id AS post_id,
+          p.content_kind AS content_kind,
+          p.cooldown_days AS cooldown_days,
           (SELECT MAX(pub.published_at) FROM publications pub
              WHERE pub.post_id = p.id AND pub.channel_id = :cid AND pub.status = 'posted'
           ) AS last_posted,
@@ -68,32 +75,60 @@ def select_candidates(conn, channel_id: int, reuse_min_age_days: int, now, limit
              WHERE p3.post_id = p.id AND p3.channel_id = :cid
           ) AS perf
         FROM posts p
-        WHERE p.post_type IN ('single','carousel')
-          AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id)
+        WHERE p.content_status = 'ready'
+          AND p.post_type IN ('single','carousel')
+          AND EXISTS (SELECT 1 FROM post_assets  pa WHERE pa.post_id = p.id)
+          AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid)
           AND NOT EXISTS (
              SELECT 1 FROM publications q
              WHERE q.post_id = p.id AND q.channel_id = :cid
                AND q.status IN ({",".join("'" + s + "'" for s in ACTIVE_QUEUE_STATUSES)})
           )
-          AND (
-             (SELECT MAX(pub.published_at) FROM publications pub
-                WHERE pub.post_id = p.id AND pub.channel_id = :cid AND pub.status = 'posted'
-             ) IS NULL
-             OR
-             (SELECT MAX(pub.published_at) FROM publications pub
-                WHERE pub.post_id = p.id AND pub.channel_id = :cid AND pub.status = 'posted'
-             ) <= :cutoff
-          )
         ORDER BY
-          CASE WHEN last_posted IS NULL THEN 0 ELSE 1 END ASC,  -- never-posted first
-          perf DESC,                                            -- then top performers
-          last_posted ASC,                                      -- then stalest
+          CASE WHEN last_posted IS NULL THEN 0 ELSE 1 END ASC,
+          perf DESC,
+          last_posted ASC,
           p.created_at ASC
-        LIMIT :limit
         """,
-        {"cid": channel_id, "cutoff": cutoff, "limit": limit},
+        {"cid": channel_id},
     ).fetchall()
     return rows
+
+
+def _post_periods(conn, post_id: int):
+    """Return (green_periods, blackout_periods) for a post."""
+    green, blackout = [], []
+    for row in conn.execute(
+        """SELECT pp.mode AS mode, pe.*
+             FROM post_periods pp JOIN periods pe ON pe.id = pp.period_id
+            WHERE pp.post_id = ?""",
+        (post_id,),
+    ).fetchall():
+        (green if row["mode"] == "green" else blackout).append(period_from_row(row))
+    return green, blackout
+
+
+def eligible_candidates(conn, channel, now, limit: int):
+    """Apply cooldown, one-time, and period gates to the SQL candidates; return <= limit."""
+    reuse_default = channel["reuse_min_age_days"]
+    today_local = local_date(now, channel["timezone"])
+    out = []
+    for r in select_candidates(conn, channel["id"], now):
+        last = r["last_posted"]
+        if r["content_kind"] == "one_time":
+            if last is not None:
+                continue  # one-time: only if this channel hasn't posted it
+        elif last is not None:
+            cooldown = r["cooldown_days"] if r["cooldown_days"] is not None else reuse_default
+            if parse_iso(last) > now - timedelta(days=cooldown):
+                continue  # still within cooldown
+        green, blackout = _post_periods(conn, r["post_id"])
+        if not in_season(green, blackout, today_local):
+            continue
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def run_autofill(conn, config: Config, now, logger=None) -> int:
@@ -118,7 +153,7 @@ def run_autofill(conn, config: Config, now, logger=None) -> int:
         if need <= 0:
             continue
 
-        candidates = select_candidates(conn, ch["id"], ch["reuse_min_age_days"], now, need)
+        candidates = eligible_candidates(conn, ch, now, need)
         if not candidates:
             if logger:
                 logger.info(

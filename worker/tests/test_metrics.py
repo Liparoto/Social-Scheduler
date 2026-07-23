@@ -20,7 +20,12 @@ def _channel(conn, token="tok"):
 
 
 def _posted_pub(conn, channel_id, *, published_at, remote_id="media-1", dry_run=0):
-    pid = conn.execute("INSERT INTO posts (post_type) VALUES ('single')").lastrowid
+    pid = conn.execute(
+        "INSERT INTO posts (post_type, content_status) VALUES ('single', 'ready')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO post_targets (post_id, channel_id) VALUES (?, ?)", (pid, channel_id)
+    )
     pub = conn.execute(
         """INSERT INTO publications
              (post_id, channel_id, scheduled_at, status, published_at, remote_post_id, is_dry_run)
@@ -118,5 +123,5 @@ def test_metrics_then_ranking_prefers_higher_performer(conn, config):
     _record(conn, low_pub, NOW.isoformat(), {"reach": 10, "saved": 0})
     _record(conn, high_pub, NOW.isoformat(), {"reach": 900, "saved": 80})
 
-    got = [r["post_id"] for r in select_candidates(conn, ch, 180, NOW, 1)]
+    got = [r["post_id"] for r in select_candidates(conn, ch, NOW)][:1]
     assert got == [high_post]
