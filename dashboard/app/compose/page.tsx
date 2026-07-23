@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getActiveChannels, listPeriods } from "@/lib/queries";
+import { getActiveChannels, listPeriods, listTags } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { Composer } from "@/components/composer";
@@ -14,6 +14,8 @@ export default function ComposePage() {
     timezone: c.timezone,
     requires_approval: c.requires_approval === 1,
   }));
+  const timeOfDayTags = listTags("time_of_day");
+  const topicTags = listTags("topic");
 
   return (
     <div>
@@ -35,6 +37,8 @@ export default function ComposePage() {
             channels={channels}
             defaultTimezone={config.defaultTimezone}
             periods={listPeriods()}
+            timeOfDayTags={timeOfDayTags}
+            topicTags={topicTags}
           />
         )}
       </div>

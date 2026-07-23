@@ -3,9 +3,10 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
-import type { Period, PeriodMode } from "@/lib/types";
+import type { Period, PeriodMode, Tag } from "@/lib/types";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
 import { PeriodAttach } from "@/components/period-attach";
+import { TagEditor } from "@/components/tag-editor";
 
 interface ChannelLite {
   id: number;
@@ -24,10 +25,14 @@ export function Composer({
   channels,
   defaultTimezone,
   periods,
+  timeOfDayTags,
+  topicTags,
 }: {
   channels: ChannelLite[];
   defaultTimezone: string;
   periods: Period[];
+  timeOfDayTags: Tag[];
+  topicTags: Tag[];
 }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -39,6 +44,7 @@ export function Composer({
   const [scheduledLocal, setScheduledLocal] = useState("");
   const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
   const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>({});
+  const [tagIds, setTagIds] = useState<number[]>([]);
   const [libraryStatus, setLibraryStatus] = useState<"draft" | "ready">("draft");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +143,7 @@ export function Composer({
         content_kind: contentKind,
         caption_variants: captionVariantsPayload,
         period_links: periodLinksPayload,
+        tag_ids: tagIds,
       }),
     });
     const body = await res.json().catch(() => ({}));
@@ -162,6 +169,7 @@ export function Composer({
         target_channel_ids: Array.from(selected),
         caption_variants: captionVariantsPayload,
         period_links: periodLinksPayload,
+        tag_ids: tagIds,
       }),
     });
     const body = await res.json().catch(() => ({}));
@@ -396,6 +404,16 @@ export function Composer({
         </section>
 
         <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
+
+        <section className="rounded-card border border-border bg-surface p-5">
+          <h3 className="mb-2 font-display text-sm font-semibold text-ink">Tags</h3>
+          <TagEditor
+            timeOfDayTags={timeOfDayTags}
+            topicTags={topicTags}
+            value={tagIds}
+            onChange={setTagIds}
+          />
+        </section>
 
         {error ? (
           <p className="rounded-lg bg-accent-weak px-3 py-2 text-sm text-accent-ink">{error}</p>
