@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getActiveChannels } from "@/lib/queries";
+import { getActiveChannels, listPeriods } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { Composer } from "@/components/composer";
@@ -31,7 +31,11 @@ export default function ComposePage() {
             .
           </EmptyState>
         ) : (
-          <Composer channels={channels} defaultTimezone={config.defaultTimezone} />
+          <Composer
+            channels={channels}
+            defaultTimezone={config.defaultTimezone}
+            periods={listPeriods()}
+          />
         )}
       </div>
     </div>

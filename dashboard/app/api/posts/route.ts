@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPostWithPublications, getChannel } from "@/lib/queries";
+import { createPostWithPublications, getChannel, getPeriod } from "@/lib/queries";
 import { zonedTimeToUtc } from "@/lib/time";
-import type { PostType } from "@/lib/types";
+import type { ContentKind, PostType } from "@/lib/types";
+import { parseCaptionVariants, parsePeriodLinks } from "@/lib/content-model-validation";
 
 export const runtime = "nodejs";
 
@@ -42,6 +43,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid date/time." }, { status: 400 });
   }
 
+  let contentKind: ContentKind | undefined;
+  if (body.content_kind !== undefined) {
+    if (body.content_kind !== "evergreen" && body.content_kind !== "one_time") {
+      return NextResponse.json({ error: "Invalid content_kind." }, { status: 400 });
+    }
+    contentKind = body.content_kind;
+  }
+
+  const captionVariants = parseCaptionVariants(body.caption_variants);
+  if (captionVariants === "invalid") {
+    return NextResponse.json({ error: "Invalid caption_variants." }, { status: 400 });
+  }
+
+  const periodLinks = parsePeriodLinks(body.period_links, getPeriod);
+  if (periodLinks === "invalid") {
+    return NextResponse.json({ error: "Invalid period_links." }, { status: 400 });
+  }
+
   const { postId, publicationIds } = createPostWithPublications({
     caption: (body.caption || "").trim(),
     first_comment: (body.first_comment || "").trim(),
@@ -50,6 +69,11 @@ export async function POST(req: NextRequest) {
     channel_ids: channelIds,
     scheduled_at: scheduledUtc,
     created_by: body.created_by,
+    content_kind: contentKind,
+    content_status: "ready",
+    target_channel_ids: channelIds,
+    caption_variants: captionVariants ?? undefined,
+    period_links: periodLinks ?? undefined,
   });
 
   return NextResponse.json({ postId, publicationIds, scheduledUtc }, { status: 201 });

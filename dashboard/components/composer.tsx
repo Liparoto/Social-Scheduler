@@ -3,6 +3,9 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
+import type { Period, PeriodMode } from "@/lib/types";
+import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
+import { PeriodAttach } from "@/components/period-attach";
 
 interface ChannelLite {
   id: number;
@@ -20,23 +23,42 @@ interface UploadedAsset {
 export function Composer({
   channels,
   defaultTimezone,
+  periods,
 }: {
   channels: ChannelLite[];
   defaultTimezone: string;
+  periods: Period[];
 }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const [assets, setAssets] = useState<UploadedAsset[]>([]);
-  const [caption, setCaption] = useState("");
+  const [variants, setVariants] = useState<CaptionVariantDraft[]>([{ platform: "", body: "" }]);
   const [firstComment, setFirstComment] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [timezone, setTimezone] = useState(defaultTimezone);
   const [scheduledLocal, setScheduledLocal] = useState("");
+  const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
+  const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>({});
+  const [libraryStatus, setLibraryStatus] = useState<"draft" | "ready">("draft");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, startSubmit] = useTransition();
   const dragIndex = useRef<number | null>(null);
+
+  const caption =
+    variants.find((v) => v.platform === "" && v.body.trim())?.body ??
+    variants.find((v) => v.body.trim())?.body ??
+    "";
+
+  const captionVariantsPayload = variants
+    .filter((v) => v.body.trim())
+    .map((v, i) => ({ platform: v.platform || null, body: v.body.trim(), sort_order: i }));
+
+  const periodLinksPayload = Object.entries(periodModes).map(([periodId, mode]) => ({
+    periodId: Number(periodId),
+    mode,
+  }));
 
   const postType = assets.length > 1 ? "carousel" : assets.length === 1 ? "single" : "—";
 
@@ -112,6 +134,9 @@ export function Composer({
         channel_ids: Array.from(selected),
         scheduled_local: scheduledLocal,
         timezone,
+        content_kind: contentKind,
+        caption_variants: captionVariantsPayload,
+        period_links: periodLinksPayload,
       }),
     });
     const body = await res.json().catch(() => ({}));
@@ -132,6 +157,11 @@ export function Composer({
         caption,
         first_comment: firstComment,
         asset_ids: assets.map((a) => a.id),
+        content_kind: contentKind,
+        content_status: libraryStatus,
+        target_channel_ids: Array.from(selected),
+        caption_variants: captionVariantsPayload,
+        period_links: periodLinksPayload,
       }),
     });
     const body = await res.json().catch(() => ({}));
@@ -145,6 +175,10 @@ export function Composer({
   const label = "block text-xs font-medium text-ink-soft mb-1.5";
   const fieldCls =
     "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
+  const segBtn = (active: boolean) =>
+    `rounded-md px-3 py-1.5 text-sm transition-colors ${
+      active ? "bg-brand-weak font-medium text-brand-ink" : "text-muted hover:text-ink"
+    }`;
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
@@ -248,17 +282,33 @@ export function Composer({
           {notice ? <p className="mt-3 text-xs text-brand-ink">{notice}</p> : null}
         </section>
 
+        {/* Content kind */}
+        <section className="rounded-card border border-border bg-surface p-5">
+          <h3 className="mb-1 font-display text-sm font-semibold text-ink">Kind</h3>
+          <p className="mb-3 text-xs text-muted">
+            Evergreen recycles over time. One-time posts once per account, then retires.
+          </p>
+          <div className="inline-flex rounded-lg border border-border p-0.5">
+            <button
+              type="button"
+              className={segBtn(contentKind === "evergreen")}
+              onClick={() => setContentKind("evergreen")}
+            >
+              Evergreen
+            </button>
+            <button
+              type="button"
+              className={segBtn(contentKind === "one_time")}
+              onClick={() => setContentKind("one_time")}
+            >
+              One-time
+            </button>
+          </div>
+        </section>
+
         {/* Caption + first comment */}
         <section className="rounded-card border border-border bg-surface p-5 space-y-4">
-          <div>
-            <label className={label}>Caption</label>
-            <textarea
-              className={`${fieldCls} min-h-24 resize-y`}
-              placeholder="Write the caption…"
-              value={caption}
-              onChange={(e) => setCaption(e.target.value)}
-            />
-          </div>
+          <CaptionVariantsEditor value={variants} onChange={setVariants} />
           <div>
             <label className={label}>
               First comment{" "}
@@ -345,6 +395,8 @@ export function Composer({
           </div>
         </section>
 
+        <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
+
         {error ? (
           <p className="rounded-lg bg-accent-weak px-3 py-2 text-sm text-accent-ink">{error}</p>
         ) : null}
@@ -426,12 +478,36 @@ export function Composer({
         >
           {submitting ? "Scheduling…" : "Schedule post"}
         </button>
+        <div className="rounded-card border border-border bg-surface p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-medium text-ink-soft">Library status</p>
+            <div className="inline-flex rounded-lg border border-border p-0.5">
+              <button
+                type="button"
+                className={segBtn(libraryStatus === "draft")}
+                onClick={() => setLibraryStatus("draft")}
+              >
+                Draft
+              </button>
+              <button
+                type="button"
+                className={segBtn(libraryStatus === "ready")}
+                onClick={() => setLibraryStatus("ready")}
+              >
+                Ready
+              </button>
+            </div>
+          </div>
+          <p className="text-[11px] text-faint">
+            Ready content is eligible for auto-fill; drafts are not.
+          </p>
+        </div>
         <button
           onClick={saveDraft}
           disabled={submitting}
           className="w-full rounded-lg border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
         >
-          Save as draft
+          Save to library
         </button>
         <p className="text-center text-[11px] text-faint">
           Drafts live in the Library — bulk-schedule or reuse them anytime.
