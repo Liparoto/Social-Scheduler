@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { channelColor, formatInTz } from "@/lib/format";
 
 interface PostLite {
@@ -205,22 +206,36 @@ export function LibraryView({
           const on = selected.includes(p.id);
           const order = selected.indexOf(p.id) + 1;
           return (
-            <button
+            <div
               key={p.id}
+              role="button"
+              tabIndex={0}
               onClick={() => toggle(p.id)}
-              className={`flex gap-3 rounded-card border bg-surface p-3 text-left transition-colors ${
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggle(p.id);
+                }
+              }}
+              className={`flex cursor-pointer gap-3 rounded-card border bg-surface p-3 text-left transition-colors ${
                 on ? "border-brand" : "border-border hover:bg-surface-sunken"
               }`}
             >
               <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
-                {p.first_asset_id ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`/api/media/${p.first_asset_id}?variant=thumb`}
-                    alt=""
-                    className="h-full w-full object-cover"
-                  />
-                ) : null}
+                <Link
+                  href={`/library/${p.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="hover:underline"
+                >
+                  {p.first_asset_id ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/media/${p.first_asset_id}?variant=thumb`}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : null}
+                </Link>
                 {on ? (
                   <span className="data absolute inset-0 flex items-center justify-center bg-brand/70 text-sm font-semibold text-white">
                     {order}
@@ -229,7 +244,13 @@ export function LibraryView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-sm text-ink">
-                  {p.caption || <span className="text-faint italic">No caption</span>}
+                  <Link
+                    href={`/library/${p.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:underline"
+                  >
+                    {p.caption || <span className="text-faint italic">No caption</span>}
+                  </Link>
                 </p>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.post_type}</span>
@@ -281,7 +302,7 @@ export function LibraryView({
                   </div>
                 ) : null}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
