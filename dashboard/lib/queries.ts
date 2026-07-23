@@ -551,13 +551,34 @@ export function listTags(kind?: "topic" | "time_of_day"): Tag[] {
 }
 
 /** Create-or-get a free-form topic tag by name (case-insensitive). */
+/** Thrown when a topic name collides with a reserved time-of-day band name. */
+export class ReservedTagNameError extends Error {
+  constructor(name: string) {
+    super(`"${name}" is reserved for a time-of-day band.`);
+    this.name = "ReservedTagNameError";
+  }
+}
+
+/**
+ * Create-or-get a free-form topic tag by name (case-insensitive). Names are globally
+ * unique, so a name that already exists as a time-of-day band (morning/afternoon/…)
+ * is rejected rather than silently returning the band — otherwise a user "adding a
+ * topic" would quietly attach a scheduling tag.
+ */
 export function createTopicTag(name: string): Tag {
   const db = getDb();
   const clean = name.trim();
-  db.prepare("INSERT OR IGNORE INTO tags (name, kind) VALUES (?, 'topic')").run(clean);
-  return db
+  const existing = db
     .prepare("SELECT id, name, kind FROM tags WHERE name = ? COLLATE NOCASE")
-    .get(clean) as Tag;
+    .get(clean) as Tag | undefined;
+  if (existing) {
+    if (existing.kind !== "topic") throw new ReservedTagNameError(clean);
+    return existing;
+  }
+  const info = db.prepare("INSERT INTO tags (name, kind) VALUES (?, 'topic')").run(clean);
+  return db
+    .prepare("SELECT id, name, kind FROM tags WHERE id = ?")
+    .get(Number(info.lastInsertRowid)) as Tag;
 }
 
 export function getPostTags(postId: number): Tag[] {

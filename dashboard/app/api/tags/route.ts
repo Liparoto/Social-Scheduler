@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listTags, createTopicTag } from "@/lib/queries";
+import { listTags, createTopicTag, ReservedTagNameError } from "@/lib/queries";
 
 export const runtime = "nodejs";
 
@@ -17,5 +17,12 @@ export async function POST(req: Request) {
   if (!name) {
     return NextResponse.json({ error: "name is required." }, { status: 400 });
   }
-  return NextResponse.json(createTopicTag(name), { status: 201 });
+  try {
+    return NextResponse.json(createTopicTag(name), { status: 201 });
+  } catch (e) {
+    if (e instanceof ReservedTagNameError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
+    throw e;
+  }
 }
