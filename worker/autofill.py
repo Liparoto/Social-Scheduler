@@ -21,7 +21,8 @@ from datetime import timedelta
 from . import db
 from .config import Config
 from .periods import in_season, local_date, period_from_row
-from .scheduling import parse_iso, parse_weekly_cadence, weekly_slots
+from .scheduling import parse_iso, parse_weekly_cadence, weekly_date_slots
+from .time_of_day import band_times, post_bands, resolve_slot_time
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
 
@@ -164,9 +165,17 @@ def run_autofill(conn, config: Config, now, logger=None) -> int:
             continue
 
         weekdays, hour, minute = cadence
+        cadence_hm = (hour, minute)
+        bt_map = band_times(config)
         last_future = latest_future_scheduled(conn, ch["id"], now_iso)
         after = parse_iso(last_future) if last_future else now
-        slots = weekly_slots(weekdays, hour, minute, ch["timezone"], after, len(candidates))
+        # Each candidate's slot TIME comes from its time_of_day tag; the cadence
+        # still supplies which DAYS (one auto-post per active day).
+        per_candidate_times = [
+            resolve_slot_time(post_bands(conn, cand["post_id"]), bt_map, cadence_hm)
+            for cand in candidates
+        ]
+        slots = weekly_date_slots(weekdays, ch["timezone"], after, per_candidate_times)
 
         status = "pending_approval" if ch["requires_approval"] else "scheduled"
         made = 0

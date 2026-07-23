@@ -250,3 +250,44 @@ def test_blackout_overrides_eligibility(conn):
                  (p, per))
     conn.commit()
     assert p not in picks(conn, ch, 10)
+
+
+# ---- time_of_day tag integration -----------------------------------------------
+from zoneinfo import ZoneInfo
+
+
+def _tag(conn, post_id, band):
+    conn.execute(
+        "INSERT INTO post_tags (post_id, tag_id) "
+        "SELECT ?, id FROM tags WHERE name = ? AND kind='time_of_day'",
+        (post_id, band),
+    )
+    conn.commit()
+
+
+def test_autofill_uses_time_of_day_for_slot_time(conn, config):
+    # Channel posts Mon/Wed/Fri; cadence time 17:00 is the anytime fallback.
+    tz = "America/New_York"
+    ch = make_channel(conn, min_depth=3, target=3,
+                      cadence='{"days":["mon","wed","fri"],"time":"17:00"}', tz=tz)
+    # created_at ordering makes selection deterministic (oldest first among never-posted).
+    p_even = make_post(conn, ch, created_at="2026-01-01T00:00:00+00:00")
+    p_morn = make_post(conn, ch, created_at="2026-01-02T00:00:00+00:00")
+    p_any = make_post(conn, ch, created_at="2026-01-03T00:00:00+00:00")
+    _tag(conn, p_even, "evening")
+    _tag(conn, p_morn, "morning")
+    # p_any: no time_of_day tag -> cadence time.
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)  # a Sunday
+    made = run_autofill(conn, config, now)
+    assert made == 3
+
+    rows = conn.execute(
+        "SELECT post_id, scheduled_at FROM publications WHERE channel_id=? "
+        "ORDER BY scheduled_at ASC", (ch,)
+    ).fetchall()
+    times = {r["post_id"]: datetime.fromisoformat(r["scheduled_at"]).astimezone(ZoneInfo(tz))
+             for r in rows}
+    assert (times[p_even].hour, times[p_even].minute) == (18, 0)
+    assert (times[p_morn].hour, times[p_morn].minute) == (9, 0)
+    assert (times[p_any].hour, times[p_any].minute) == (17, 0)  # cadence fallback
