@@ -574,6 +574,35 @@ export function setCaptionVariants(
   tx(variants);
 }
 
+// ---- Bulk re-target (add/remove one or more channels across many posts) ----------
+/** Idempotent: INSERT OR IGNORE so re-running "add" over already-targeted pairs is a no-op. */
+export function bulkAddTargets(postIds: number[], channelIds: number[]): void {
+  const db = getDb();
+  const tx = db.transaction((posts: number[], channels: number[]) => {
+    const insert = db.prepare(
+      "INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?, ?)"
+    );
+    for (const postId of posts) {
+      for (const channelId of channels) insert.run(postId, channelId);
+    }
+  });
+  tx(postIds, channelIds);
+}
+
+/** Exact-pair delete: only removes (post_id, channel_id) combinations that were passed in. */
+export function bulkRemoveTargets(postIds: number[], channelIds: number[]): void {
+  const db = getDb();
+  const tx = db.transaction((posts: number[], channels: number[]) => {
+    const del = db.prepare(
+      "DELETE FROM post_targets WHERE post_id = ? AND channel_id = ?"
+    );
+    for (const postId of posts) {
+      for (const channelId of channels) del.run(postId, channelId);
+    }
+  });
+  tx(postIds, channelIds);
+}
+
 // ---- Post content-model fields (kind/status/cooldown) -----------------------------
 /** Dynamic SET, same pattern as updateChannel. */
 export function updatePostContentModel(

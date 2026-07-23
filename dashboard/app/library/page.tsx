@@ -16,6 +16,11 @@ export default function LibraryPage() {
     scheduled_count: p.scheduled_count,
     posted_count: p.posted_count,
     last_posted_at: p.last_posted_at,
+    content_kind: p.content_kind,
+    content_status: p.content_status,
+    target_count: p.target_count,
+    green_period_count: p.green_period_count,
+    blackout_period_count: p.blackout_period_count,
   }));
   const channels = getActiveChannels().map((c) => ({
     id: c.id,

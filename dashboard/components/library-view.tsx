@@ -14,6 +14,11 @@ interface PostLite {
   scheduled_count: number;
   posted_count: number;
   last_posted_at: string | null;
+  content_kind: "one_time" | "evergreen";
+  content_status: "draft" | "ready" | "retired";
+  target_count: number;
+  green_period_count: number;
+  blackout_period_count: number;
 }
 interface ChannelLite {
   id: number;
@@ -87,6 +92,36 @@ export function LibraryView({
     startT(() => router.refresh());
   }
 
+  async function retarget(action: "add" | "remove") {
+    setError(null);
+    setNotice(null);
+    if (selected.length === 0) return setError("Select at least one post.");
+    if (chans.size === 0) return setError("Select at least one channel.");
+    const res = await fetch("/api/posts/targets/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        post_ids: selected,
+        channel_ids: Array.from(chans),
+        action,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(body.error ?? "Could not update targets.");
+      return;
+    }
+    const verb = action === "add" ? "Added" : "Removed";
+    const prep = action === "add" ? "to" : "from";
+    setNotice(
+      `${verb} ${chans.size} account${chans.size === 1 ? "" : "s"} ${prep} ${
+        selected.length
+      } post${selected.length === 1 ? "" : "s"}.`
+    );
+    setSelected([]);
+    startT(() => router.refresh());
+  }
+
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
 
@@ -134,6 +169,31 @@ export function LibraryView({
                   )}
                   {p.scheduled_count > 0 ? (
                     <span className="text-status-scheduled">queued×{p.scheduled_count}</span>
+                  ) : null}
+                </div>
+                <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
+                  <span>{p.content_kind === "evergreen" ? "Evergreen" : "One-time"}</span>
+                  <span
+                    className={
+                      p.content_status === "ready"
+                        ? "text-status-posted"
+                        : p.content_status === "draft"
+                          ? "text-muted"
+                          : "text-faint"
+                    }
+                  >
+                    {p.content_status === "ready"
+                      ? "Ready"
+                      : p.content_status === "draft"
+                        ? "Draft"
+                        : "Retired"}
+                  </span>
+                  <span>
+                    {p.target_count > 0 ? `→ ${p.target_count} account(s)` : "no targets"}
+                  </span>
+                  {p.green_period_count > 0 ? <span>green ×{p.green_period_count}</span> : null}
+                  {p.blackout_period_count > 0 ? (
+                    <span>blackout ×{p.blackout_period_count}</span>
                   ) : null}
                 </div>
               </div>
@@ -231,6 +291,28 @@ export function LibraryView({
           >
             {pending ? "Scheduling…" : "Bulk schedule"}
           </button>
+        </div>
+
+        <div className="mt-3 border-t border-border pt-3">
+          <p className="mb-1.5 text-[11px] text-faint">
+            Targeting controls which accounts auto-fill can post a piece of content to.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => retarget("add")}
+              disabled={pending || selected.length === 0 || chans.size === 0}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+            >
+              Add as target
+            </button>
+            <button
+              onClick={() => retarget("remove")}
+              disabled={pending || selected.length === 0 || chans.size === 0}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+            >
+              Remove target
+            </button>
+          </div>
         </div>
       </div>
     </div>
