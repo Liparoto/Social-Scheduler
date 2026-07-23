@@ -11,6 +11,7 @@ import type {
   Post,
   Publication,
   PostType,
+  Tag,
 } from "./types";
 
 // ---- Channels -------------------------------------------------------------------
@@ -152,6 +153,7 @@ interface ContentModelInput {
   cooldown_days?: number | null;
   caption_variants?: { platform: string | null; body: string; sort_order: number }[];
   period_links?: { periodId: number; mode: PeriodMode }[];
+  tag_ids?: number[];
 }
 
 /** Writes the content-model side-table rows for a freshly-created post, INSIDE the caller's transaction. */
@@ -172,6 +174,10 @@ function insertContentModelRows(db: ReturnType<typeof getDb>, postId: number, da
       "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?, ?, ?, ?)"
     );
     for (const v of data.caption_variants) insert.run(postId, v.platform, v.body, v.sort_order);
+  }
+  if (data.tag_ids?.length) {
+    const insert = db.prepare("INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)");
+    for (const tagId of data.tag_ids) insert.run(postId, tagId);
   }
 }
 
@@ -306,6 +312,9 @@ export interface PostLibraryRow extends Post {
   target_count: number;
   green_period_count: number;
   blackout_period_count: number;
+  time_of_day_tags: string | null;
+  topic_tags: string | null;
+  target_platforms: string | null;
 }
 
 export function listPosts(limit = 200): PostLibraryRow[] {
@@ -325,7 +334,13 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT COUNT(*) FROM post_periods pp WHERE pp.post_id = p.id
             AND pp.mode = 'green') AS green_period_count,
          (SELECT COUNT(*) FROM post_periods pp WHERE pp.post_id = p.id
-            AND pp.mode = 'blackout') AS blackout_period_count
+            AND pp.mode = 'blackout') AS blackout_period_count,
+         (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+            WHERE pt.post_id = p.id AND t.kind = 'time_of_day') AS time_of_day_tags,
+         (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+            WHERE pt.post_id = p.id AND t.kind = 'topic') AS topic_tags,
+         (SELECT GROUP_CONCAT(DISTINCT c.platform) FROM post_targets pt2
+            JOIN channels c ON c.id = pt2.channel_id WHERE pt2.post_id = p.id) AS target_platforms
        FROM posts p
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`
@@ -520,6 +535,52 @@ export function setPostTargets(postId: number, channelIds: number[]): void {
     for (const id of ids) insert.run(postId, id);
   });
   tx(channelIds);
+}
+
+// ---- Tags (taxonomy: topic + time_of_day) -------------------------------------
+export function listTags(kind?: "topic" | "time_of_day"): Tag[] {
+  const db = getDb();
+  if (kind) {
+    return db
+      .prepare("SELECT id, name, kind FROM tags WHERE kind = ? ORDER BY name COLLATE NOCASE")
+      .all(kind) as Tag[];
+  }
+  return db
+    .prepare("SELECT id, name, kind FROM tags ORDER BY kind, name COLLATE NOCASE")
+    .all() as Tag[];
+}
+
+/** Create-or-get a free-form topic tag by name (case-insensitive). */
+export function createTopicTag(name: string): Tag {
+  const db = getDb();
+  const clean = name.trim();
+  db.prepare("INSERT OR IGNORE INTO tags (name, kind) VALUES (?, 'topic')").run(clean);
+  return db
+    .prepare("SELECT id, name, kind FROM tags WHERE name = ? COLLATE NOCASE")
+    .get(clean) as Tag;
+}
+
+export function getPostTags(postId: number): Tag[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT t.id, t.name, t.kind
+         FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+        WHERE pt.post_id = ?
+        ORDER BY t.kind, t.name COLLATE NOCASE`
+    )
+    .all(postId) as Tag[];
+}
+
+/** Replace a post's tag set atomically. */
+export function setPostTags(postId: number, tagIds: number[]): void {
+  const db = getDb();
+  const tx = db.transaction((ids: number[]) => {
+    db.prepare("DELETE FROM post_tags WHERE post_id = ?").run(postId);
+    const insert = db.prepare("INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)");
+    for (const id of ids) insert.run(postId, id);
+  });
+  tx(tagIds);
 }
 
 // ---- Post periods (green/blackout links; blackout wins — enforced in the worker) -

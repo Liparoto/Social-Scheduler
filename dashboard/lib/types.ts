@@ -2,6 +2,12 @@
 // remains the source of truth (see CLAUDE.md).
 
 export type Platform = "instagram" | "facebook";
+export type TagKind = "topic" | "time_of_day";
+export interface Tag {
+  id: number;
+  name: string;
+  kind: TagKind;
+}
 export type PostType = "single" | "carousel" | "reel" | "story";
 export type PostStatus = "draft" | "scheduled" | "posted" | "failed";
 export type PublicationStatus =
