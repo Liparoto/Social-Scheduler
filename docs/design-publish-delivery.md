@@ -1,6 +1,12 @@
 # Design — Publish Delivery (getting images to Meta)
 
-_Date: 2026-07-22 · Status: proposed, awaiting review_
+_Date: 2026-07-22 · Status: **implemented** (Phase 5.5). Live one-post test still owner-gated._
+
+> Refinements made during build (beyond the original proposal): the worker opens the tunnel
+> **only when a due asset actually needs local serving** (assets with an external `public_url`
+> publish with no tunnel), and a tunnel failure is **visible-but-non-fatal** — it records a
+> reason on each due publication and leaves them scheduled to retry, rather than crashing the
+> daemon.
 
 ## The problem
 

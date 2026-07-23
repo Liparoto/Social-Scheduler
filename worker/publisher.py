@@ -54,7 +54,22 @@ def _load_targets(conn, pub):
     return channel, post, assets
 
 
-def _validate(post, assets, dry_run: bool) -> None:
+def _resolve_url(asset, asset_base_url: str | None) -> str | None:
+    """The public URL Meta will download from.
+
+    Precedence: an explicit external public_url (the manual/paste escape hatch) wins;
+    otherwise build one from the live tunnel base + the asset's storage_path (content
+    hash). None means the asset can't currently be served publicly.
+    """
+    external = asset["public_url"]
+    if external:
+        return external
+    if asset_base_url and asset["storage_path"]:
+        return f"{asset_base_url.rstrip('/')}/{asset['storage_path']}"
+    return None
+
+
+def _validate(post, assets, dry_run: bool, asset_base_url: str | None) -> None:
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
@@ -67,12 +82,19 @@ def _validate(post, assets, dry_run: bool) -> None:
             f"carousel needs {MIN_CAROUSEL}-{MAX_CAROUSEL} assets, has {len(assets)}"
         )
     if not dry_run:
-        missing = [a["id"] for a in assets if not a["public_url"]]
+        missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]
         if missing:
-            raise _NonRetryable(f"assets missing public_url: {missing}")
+            raise _NonRetryable(
+                f"assets have no public URL (no tunnel and no stored public_url): {missing}"
+            )
 
 
-def _build_plan(channel, post, assets) -> dict:
+def _build_plan(channel, post, assets, asset_base_url: str | None) -> dict:
+    # For real publishes every asset resolves (validated above). In dry-run there is no
+    # tunnel, so show a readable local marker instead of a live URL.
+    asset_urls = [
+        _resolve_url(a, asset_base_url) or f"(local:{a['storage_path']})" for a in assets
+    ]
     return {
         "platform": channel["platform"],
         "account": channel["account_name"],
@@ -80,7 +102,7 @@ def _build_plan(channel, post, assets) -> dict:
         "post_type": post["post_type"],
         "caption": post["caption"],
         "first_comment": post["first_comment"],
-        "asset_urls": [a["public_url"] for a in assets],
+        "asset_urls": asset_urls,
     }
 
 
@@ -147,6 +169,7 @@ def publish_one(
     client,
     *,
     dry_run: bool,
+    asset_base_url: str | None = None,
     now: datetime | None = None,
     logger=None,
     sleep_fn=time.sleep,
@@ -160,8 +183,8 @@ def publish_one(
     # 1. Load + validate. Bad data/config is a terminal (non-retryable) failure.
     try:
         channel, post, assets = _load_targets(conn, pub)
-        _validate(post, assets, dry_run)
-        plan = _build_plan(channel, post, assets)
+        _validate(post, assets, dry_run, asset_base_url)
+        plan = _build_plan(channel, post, assets, asset_base_url)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
         return _mark_failure(conn, pub, config, now, str(exc), terminal=True)

@@ -76,6 +76,13 @@ class Config:
     # often than this interval per publication (keeps API usage sane).
     metrics_max_age_days: int = 30
     metrics_min_interval_hours: int = 6
+    # Publish delivery: Meta downloads images from a public URL, so at publish time the
+    # worker serves the local asset store on 127.0.0.1:<asset_port> and exposes it via a
+    # short-lived tunnel. See docs/design-publish-delivery.md.
+    asset_port: int = 8787
+    cloudflared_path: str = "cloudflared"
+    tunnel_provider: str = "cloudflared"
+    tunnel_startup_timeout: int = 30
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -100,4 +107,8 @@ class Config:
             poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "30")),
             metrics_max_age_days=int(os.environ.get("METRICS_MAX_AGE_DAYS", "30")),
             metrics_min_interval_hours=int(os.environ.get("METRICS_MIN_INTERVAL_HOURS", "6")),
+            asset_port=int(os.environ.get("ASSET_PORT", "8787")),
+            cloudflared_path=os.environ.get("CLOUDFLARED_PATH", "cloudflared"),
+            tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),
+            tunnel_startup_timeout=int(os.environ.get("TUNNEL_STARTUP_TIMEOUT", "30")),
         )

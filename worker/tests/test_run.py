@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 
 from worker import db
@@ -49,3 +50,41 @@ def test_run_once_skips_future_and_backed_off(conn, config, fake_client, make_pu
     make_publication(post_type="single", n_assets=1, scheduled_offset_min=10, now=NOW)
     n = run_once(conn, config, fake_client, now=NOW)
     assert n == 0
+
+
+def test_run_once_tunnel_unavailable_is_visible_not_fatal(conn, config, fake_client, make_publication, monkeypatch):
+    """A local asset needs the tunnel; if cloudflared is missing the daemon must NOT
+    crash — it records a visible reason and leaves the publication scheduled to retry."""
+    monkeypatch.setenv("KILL_SWITCH", "0")
+    monkeypatch.setenv("DRY_RUN", "0")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+
+    # public_url=None -> asset must be served via the tunnel; force a missing binary.
+    cfg = dataclasses.replace(config, cloudflared_path="cloudflared-not-installed-xyz")
+    pub = make_publication(post_type="single", n_assets=1, public_url=None, now=NOW)
+
+    n = run_once(conn, cfg, fake_client, now=NOW)  # must not raise
+
+    assert n == 0
+    assert fake_client.calls == []  # nothing published
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "scheduled"  # still queued -> will retry
+    assert "endpoint unavailable" in (row["last_error"] or "")
+
+
+def test_run_once_external_url_publishes_without_tunnel(conn, config, fake_client, make_publication, monkeypatch):
+    """An asset with an external public_url must publish even when cloudflared is absent —
+    no tunnel is opened for the paste escape hatch."""
+    monkeypatch.setenv("KILL_SWITCH", "0")
+    monkeypatch.setenv("DRY_RUN", "0")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+
+    cfg = dataclasses.replace(config, cloudflared_path="cloudflared-not-installed-xyz")
+    pub = make_publication(post_type="single", n_assets=1,
+                           public_url="https://cdn.example/a.jpg", now=NOW)
+
+    n = run_once(conn, cfg, fake_client, now=NOW)
+
+    assert n == 1
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "posted"

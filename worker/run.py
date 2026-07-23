@@ -55,16 +55,50 @@ def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=ti
 
     from .publisher import publish_one  # local import to keep module load light
 
+    # Real publishes need a public URL Meta can download from, so open a short-lived
+    # tunnel around the batch — but ONLY when there is real work. Dry-runs and idle
+    # cycles never open one.
+    from contextlib import nullcontext
+
+    from .tunnel import TunnelError, publish_endpoint
+
+    # Only open a tunnel if a due asset actually needs local serving. Assets that already
+    # carry an external public_url (the paste escape hatch) publish without cloudflared.
+    def _needs_tunnel() -> bool:
+        return any(
+            not a["public_url"]
+            for pub in due
+            for a in db.get_ordered_assets(conn, pub["post_id"])
+        )
+
+    need_endpoint = bool(due) and not dry_run and _needs_tunnel()
+    endpoint = publish_endpoint(config) if need_endpoint else nullcontext(None)
+
     processed = 0
-    for pub in due:
-        load_env(override=True)
-        if kill_switch_active():
-            if logger:
-                logger.warning("KILL_SWITCH flipped mid-batch — stopping.")
-            break
-        publish_one(conn, pub, config, client, dry_run=dry_run, now=now,
-                    logger=logger, sleep_fn=sleep_fn)
-        processed += 1
+    try:
+        with endpoint as asset_base_url:
+            if asset_base_url:
+                logger and logger.info("publish endpoint up: %s", asset_base_url)
+            for pub in due:
+                load_env(override=True)
+                if kill_switch_active():
+                    if logger:
+                        logger.warning("KILL_SWITCH flipped mid-batch — stopping.")
+                    break
+                publish_one(conn, pub, config, client, dry_run=dry_run,
+                            asset_base_url=asset_base_url, now=now,
+                            logger=logger, sleep_fn=sleep_fn)
+                processed += 1
+    except TunnelError as exc:
+        # The tunnel couldn't be established (e.g. cloudflared not installed). Don't crash
+        # the daemon — record a visible reason on each due publication and leave them
+        # scheduled so they retry automatically once the endpoint is available.
+        if logger:
+            logger.error("publish endpoint unavailable: %s", exc)
+        for pub in due:
+            db.update_publication(conn, pub["id"],
+                                  last_error=f"publish endpoint unavailable: {exc}",
+                                  updated_at=now.isoformat())
 
     # Refresh metrics for already-published posts (throttled per publication).
     from .metrics import run_metrics

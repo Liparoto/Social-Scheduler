@@ -136,6 +136,34 @@ Make the process legible; compose → schedule → watch it publish.
 
 ---
 
+## Phase 5.5 — Publish delivery (public URL for Meta)  `[x] done`
+Meta downloads images from a public URL; our assets live on a local Mac. Solved with a
+short-lived, worker-managed Cloudflare quick tunnel. Design: `docs/design-publish-delivery.md`.
+
+### Implementation
+- [x] `worker/asset_server.py` — read-only localhost server for `data/assets`, addressed by
+      content hash; path-traversal guarded; no listing; stdlib only.
+- [x] `worker/tunnel.py` — `cloudflared` quick-tunnel manager (spawn, parse public URL,
+      teardown) + `publish_endpoint()` context manager composing server + tunnel. Missing
+      binary raises a clear `TunnelError` with install guidance.
+- [x] `worker/publisher.py` — build each image URL at publish time from the live tunnel base
+      + `storage_path`; external `public_url` (paste escape hatch) still wins. No stored URL.
+- [x] `worker/run.py` — open the tunnel ONLY when a due asset needs local serving; tunnel
+      failure is visible (per-publication `last_error`) and non-fatal (daemon keeps running,
+      publication stays scheduled to retry).
+- [x] Config knobs (`ASSET_PORT`, `CLOUDFLARED_PATH`, `TUNNEL_STARTUP_TIMEOUT`) + `.env.example`.
+- [x] `requirements.txt` / `requirements-dev.txt` added; `.venv` set up.
+
+### Verification
+- [x] 41 worker tests pass (10 new): asset server serves bytes + blocks traversal (real HTTP);
+      tunnel URL parsing; missing-binary error; URL-resolution precedence; publish builds the
+      tunnel URL; tunnel-unavailable is visible-not-fatal; external URL publishes without a tunnel.
+- [x] Real worker `--once` against the live DB is a clean no-op in dry-run.
+- [ ] **Live (owner-gated):** `brew install cloudflared`, upload a real JPEG, `DRY_RUN=0`,
+      run one cycle → confirm it appears on Instagram with a real `remote_post_id`, then delete.
+
+---
+
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 - [ ] Facebook Pages publish + metrics adapter.
