@@ -54,6 +54,7 @@ CREATE INDEX idx_caption_variants_post ON caption_variants (post_id);
 --  * the single existing caption becomes one generic variant.
 UPDATE posts SET content_status = 'ready';
 INSERT INTO post_targets (post_id, channel_id)
-    SELECT DISTINCT post_id, channel_id FROM publications;
+    SELECT DISTINCT post_id, channel_id FROM publications
+    WHERE status NOT IN ('failed', 'canceled');  -- a dead attempt is not a target
 INSERT INTO caption_variants (post_id, platform, body, sort_order)
     SELECT id, NULL, caption, 0 FROM posts WHERE caption IS NOT NULL AND TRIM(caption) <> '';

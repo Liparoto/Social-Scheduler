@@ -55,3 +55,29 @@ def test_0002_new_post_defaults_to_draft(tmp_path):
     row = conn.execute("SELECT content_status, content_kind FROM posts WHERE id=1").fetchone()
     assert row["content_status"] == "draft"
     assert row["content_kind"] == "evergreen"
+
+
+def test_0002_backfill_targets_exclude_failed_only_channels(tmp_path):
+    """Backfill should target channels the post actually posted to (or is queued for),
+    NOT channels where its only publication failed/was canceled."""
+    p = tmp_path / "m3.db"
+    conn = sqlite3.connect(str(p))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    _apply(conn, "0001_init.sql")
+
+    conn.execute("INSERT INTO channels (platform, account_name) VALUES ('instagram','A')")  # id 1
+    conn.execute("INSERT INTO channels (platform, account_name) VALUES ('instagram','B')")  # id 2
+    conn.execute("INSERT INTO posts (caption, post_type) VALUES ('x', 'single')")           # id 1
+    # Posted to channel 1; only ever FAILED to channel 2.
+    conn.execute("INSERT INTO publications (post_id, channel_id, scheduled_at, status) "
+                 "VALUES (1, 1, '2026-01-01T00:00:00+00:00', 'posted')")
+    conn.execute("INSERT INTO publications (post_id, channel_id, scheduled_at, status) "
+                 "VALUES (1, 2, '2026-01-01T00:00:00+00:00', 'failed')")
+    conn.commit()
+
+    _apply(conn, "0002_content_model.sql")
+
+    tgt = sorted(r["channel_id"] for r in
+                 conn.execute("SELECT channel_id FROM post_targets WHERE post_id=1").fetchall())
+    assert tgt == [1]   # channel 2 (failed-only) is NOT a target
