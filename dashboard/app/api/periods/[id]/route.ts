@@ -13,7 +13,8 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const periodId = Number(id);
-  if (!getPeriod(periodId)) {
+  const current = getPeriod(periodId);
+  if (!current) {
     return NextResponse.json({ error: "Period not found." }, { status: 404 });
   }
   const body = await req.json();
@@ -64,6 +65,39 @@ export async function PATCH(
       );
     }
     fields.end_date = body.end_date;
+  }
+
+  // Validate the merged (current row + patch) shape, since recurs_yearly and its
+  // dependent fields may be edited independently across requests.
+  const merged = { ...current, ...fields } as typeof current;
+  if (merged.recurs_yearly) {
+    const monthsOk = [merged.start_month, merged.end_month].every(
+      (m) => Number.isInteger(m) && (m as number) >= 1 && (m as number) <= 12
+    );
+    const daysOk = [merged.start_day, merged.end_day].every(
+      (d) => Number.isInteger(d) && (d as number) >= 1 && (d as number) <= 31
+    );
+    if (!monthsOk || !daysOk) {
+      return NextResponse.json(
+        {
+          error:
+            "Yearly periods require start_month/end_month (1-12) and start_day/end_day (1-31).",
+        },
+        { status: 400 }
+      );
+    }
+  } else {
+    const datesOk =
+      typeof merged.start_date === "string" &&
+      ISO_DATE.test(merged.start_date) &&
+      typeof merged.end_date === "string" &&
+      ISO_DATE.test(merged.end_date);
+    if (!datesOk) {
+      return NextResponse.json(
+        { error: "One-off periods require start_date/end_date as ISO YYYY-MM-DD." },
+        { status: 400 }
+      );
+    }
   }
 
   updatePeriod(periodId, fields);

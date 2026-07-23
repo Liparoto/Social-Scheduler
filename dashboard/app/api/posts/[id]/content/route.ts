@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  getChannel,
+  getPeriod,
   getPost,
   setCaptionVariants,
   setPostPeriods,
@@ -66,7 +68,15 @@ export async function PATCH(
         { status: 400 }
       );
     }
-    setPostTargets(postId, body.target_channel_ids.map(Number));
+    const targetChannelIds = body.target_channel_ids.map(Number);
+    const badChannelIds = targetChannelIds.filter((cid: number) => !getChannel(cid));
+    if (badChannelIds.length > 0) {
+      return NextResponse.json(
+        { error: `Unknown channel(s): ${badChannelIds.join(", ")}.` },
+        { status: 400 }
+      );
+    }
+    setPostTargets(postId, targetChannelIds);
   }
 
   if ("period_links" in body) {
@@ -74,6 +84,7 @@ export async function PATCH(
       return NextResponse.json({ error: "period_links must be an array." }, { status: 400 });
     }
     const links: { periodId: number; mode: PeriodMode }[] = [];
+    const seen = new Set<string>();
     for (const link of body.period_links) {
       const mode = link?.mode;
       if (mode !== "green" && mode !== "blackout") {
@@ -89,6 +100,15 @@ export async function PATCH(
           { status: 400 }
         );
       }
+      if (!getPeriod(periodId)) {
+        return NextResponse.json(
+          { error: `Unknown period ${periodId}.` },
+          { status: 400 }
+        );
+      }
+      const key = `${periodId}:${mode}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       links.push({ periodId, mode });
     }
     setPostPeriods(postId, links);
