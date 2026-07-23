@@ -504,6 +504,35 @@ export function approvePublication(id: number): boolean {
   return info.changes > 0;
 }
 
+/** Flag a posted, non-dry-run publication for an on-demand metrics fetch. */
+export function requestMetricsRefresh(
+  publicationId: number
+): "ok" | "not_found" | "not_posted" {
+  const db = getDb();
+  const pub = db
+    .prepare("SELECT status, is_dry_run FROM publications WHERE id = ?")
+    .get(publicationId) as { status: string; is_dry_run: number } | undefined;
+  if (!pub) return "not_found";
+  if (pub.status !== "posted" || pub.is_dry_run === 1) return "not_posted";
+  db.prepare(
+    "UPDATE publications SET metrics_refresh_requested_at = ? WHERE id = ?"
+  ).run(nowIso(), publicationId);
+  return "ok";
+}
+
+/** Flag ALL eligible posted publications for a metrics fetch. Returns the count flagged. */
+export function requestMetricsRefreshAll(): number {
+  const db = getDb();
+  const info = db
+    .prepare(
+      `UPDATE publications SET metrics_refresh_requested_at = ?
+        WHERE status = 'posted' AND is_dry_run = 0
+          AND remote_post_id IS NOT NULL AND remote_post_id != 'DRYRUN'`
+    )
+    .run(nowIso());
+  return info.changes;
+}
+
 // ---- Periods (reusable in-season window library) ---------------------------------
 export function listPeriods(): Period[] {
   return getDb().prepare("SELECT * FROM periods ORDER BY name ASC").all() as Period[];
