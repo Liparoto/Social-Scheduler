@@ -68,6 +68,7 @@ def select_candidates(conn, channel_id: int, now):
           p.cooldown_days AS cooldown_days,
           (SELECT MAX(pub.published_at) FROM publications pub
              WHERE pub.post_id = p.id AND pub.channel_id = :cid AND pub.status = 'posted'
+               AND pub.is_dry_run = 0
           ) AS last_posted,
           (SELECT COALESCE(MAX(IFNULL(pm.reach,0) + IFNULL(pm.saves,0)), 0)
              FROM post_metrics pm

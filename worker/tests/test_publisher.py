@@ -158,6 +158,49 @@ def test_one_time_retires_only_after_all_targets_posted(conn, config, make_publi
     assert conn.execute("SELECT content_status FROM posts WHERE id=?", (post_id,)).fetchone()[0] == "retired"
 
 
+def test_dry_run_publication_does_not_count_toward_retirement(conn, config, make_publication):
+    from worker.publisher import _maybe_retire_one_time
+    from datetime import datetime, timezone
+    now = datetime(2026, 7, 22, tzinfo=timezone.utc)
+
+    # A one-time post targeting two channels.
+    pub = make_publication(post_type="single", n_assets=1, now=now)
+    post_id, chan_a = pub["post_id"], pub["channel_id"]
+    conn.execute("UPDATE posts SET content_kind='one_time' WHERE id=?", (post_id,))
+    chan_b = conn.execute(
+        "INSERT INTO channels (platform, account_name, remote_account_id, access_token) "
+        "VALUES ('instagram','B','2','t')").lastrowid
+    conn.executemany("INSERT INTO post_targets (post_id, channel_id) VALUES (?,?)",
+                     [(post_id, chan_a), (post_id, chan_b)])
+    conn.commit()
+
+    # A dry-run 'posted' publication to A, and a real one to B -> must NOT retire.
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at, "
+        "is_dry_run, remote_post_id) VALUES (?,?, '2026-07-01T00:00:00+00:00', 'posted', "
+        "'2026-07-01T00:00:00+00:00', 1, 'DRYRUN')",
+        (post_id, chan_a),
+    )
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+        "VALUES (?,?, '2026-07-02T00:00:00+00:00', 'posted', '2026-07-02T00:00:00+00:00')",
+        (post_id, chan_b),
+    )
+    conn.commit()
+    assert _maybe_retire_one_time(conn, post_id, now) is False
+    assert conn.execute("SELECT content_status FROM posts WHERE id=?", (post_id,)).fetchone()[0] != "retired"
+
+    # Once A also gets a REAL posted publication -> retire.
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+        "VALUES (?,?, '2026-07-03T00:00:00+00:00', 'posted', '2026-07-03T00:00:00+00:00')",
+        (post_id, chan_a),
+    )
+    conn.commit()
+    assert _maybe_retire_one_time(conn, post_id, now) is True
+    assert conn.execute("SELECT content_status FROM posts WHERE id=?", (post_id,)).fetchone()[0] == "retired"
+
+
 # ---- Caption variant selection --------------------------------------------------
 def test_caption_selection_prefers_platform_then_rotates_generic(conn, config, make_publication):
     from worker.publisher import _select_caption

@@ -209,6 +209,19 @@ def test_one_time_only_until_posted_once(conn):
     assert p not in picks(conn, ch, 10)                   # never again, even long after
 
 
+def test_dry_run_publication_not_counted_as_posted(conn):
+    ch = make_channel(conn)
+    p = make_post(conn, ch, content_kind="one_time")
+    # A dry-run 'posted' publication to this channel must NOT count as "already posted".
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at, "
+        "is_dry_run, remote_post_id) VALUES (?,?,?,'posted',?,1,'DRYRUN')",
+        (p, ch, (NOW - timedelta(days=1)).isoformat(), (NOW - timedelta(days=1)).isoformat()),
+    )
+    conn.commit()
+    assert p in picks(conn, ch, 10)
+
+
 def test_per_post_cooldown_override(conn):
     ch = make_channel(conn)  # channel reuse default = 180 days
     p = make_post(conn, ch)

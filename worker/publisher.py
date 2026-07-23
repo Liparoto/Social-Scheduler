@@ -53,7 +53,7 @@ def _maybe_retire_one_time(conn, post_id: int, now: datetime) -> bool:
     for t in targets:
         done = conn.execute(
             "SELECT 1 FROM publications WHERE post_id = ? AND channel_id = ? "
-            "AND status = 'posted' LIMIT 1",
+            "AND status = 'posted' AND is_dry_run = 0 LIMIT 1",
             (post_id, t["channel_id"]),
         ).fetchone()
         if not done:
