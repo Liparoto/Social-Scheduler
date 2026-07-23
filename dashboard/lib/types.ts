@@ -12,6 +12,13 @@ export type PublicationStatus =
   | "failed"
   | "canceled";
 
+// Content model (migration 0002_content_model.sql). content_status is a SEPARATE axis
+// from PostStatus above: content_status governs automation eligibility (draft/ready/
+// retired), while PostStatus stays the coarse overview lifecycle hint. Never conflate them.
+export type ContentKind = "one_time" | "evergreen";
+export type ContentStatus = "draft" | "ready" | "retired";
+export type PeriodMode = "green" | "blackout";
+
 export interface Channel {
   id: number;
   platform: Platform;
@@ -54,9 +61,33 @@ export interface Post {
   first_comment: string | null;
   post_type: PostType;
   status: PostStatus;
+  content_kind: ContentKind;
+  content_status: ContentStatus;
+  cooldown_days: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string | null;
+}
+
+export interface Period {
+  id: number;
+  name: string;
+  recurs_yearly: 0 | 1;
+  start_month: number | null;
+  start_day: number | null;
+  end_month: number | null;
+  end_day: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  created_at: string;
+}
+
+export interface CaptionVariant {
+  id: number;
+  post_id: number;
+  platform: string | null;
+  body: string;
+  sort_order: number;
 }
 
 export interface Publication {

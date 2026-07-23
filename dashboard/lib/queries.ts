@@ -1,6 +1,17 @@
 import "server-only";
 import { getDb, nowIso } from "./db";
-import type { Asset, Channel, Post, Publication, PostType } from "./types";
+import type {
+  Asset,
+  CaptionVariant,
+  Channel,
+  ContentKind,
+  ContentStatus,
+  Period,
+  PeriodMode,
+  Post,
+  Publication,
+  PostType,
+} from "./types";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -132,7 +143,38 @@ export function recentAssets(limit = 60): Asset[] {
 }
 
 // ---- Posts + publications (the scheduling write) --------------------------------
-export interface CreatePostInput {
+
+/** Shared shape for the content-model side-tables a post can optionally arrive with. */
+interface ContentModelInput {
+  target_channel_ids?: number[];
+  content_kind?: ContentKind;
+  content_status?: ContentStatus;
+  cooldown_days?: number | null;
+  caption_variants?: { platform: string | null; body: string; sort_order: number }[];
+  period_links?: { periodId: number; mode: PeriodMode }[];
+}
+
+/** Writes the content-model side-table rows for a freshly-created post, INSIDE the caller's transaction. */
+function insertContentModelRows(db: ReturnType<typeof getDb>, postId: number, data: ContentModelInput): void {
+  if (data.target_channel_ids?.length) {
+    const insert = db.prepare("INSERT INTO post_targets (post_id, channel_id) VALUES (?, ?)");
+    for (const channelId of data.target_channel_ids) insert.run(postId, channelId);
+  }
+  if (data.period_links?.length) {
+    const insert = db.prepare(
+      "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
+    );
+    for (const link of data.period_links) insert.run(postId, link.periodId, link.mode);
+  }
+  if (data.caption_variants?.length) {
+    const insert = db.prepare(
+      "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?, ?, ?, ?)"
+    );
+    for (const v of data.caption_variants) insert.run(postId, v.platform, v.body, v.sort_order);
+  }
+}
+
+export interface CreatePostInput extends ContentModelInput {
   caption: string;
   first_comment: string;
   post_type: PostType;
@@ -145,6 +187,8 @@ export interface CreatePostInput {
 /**
  * Create a post with its ordered assets and one publication PER target channel.
  * All in a single transaction — a post either lands fully or not at all.
+ * Content-model fields (kind/status/cooldown/targets/periods/caption variants) are all
+ * optional so existing callers keep working with today's schema defaults.
  * Returns the new post id and the created publication ids.
  */
 export function createPostWithPublications(
@@ -154,13 +198,19 @@ export function createPostWithPublications(
   const tx = db.transaction((data: CreatePostInput) => {
     const postInfo = db
       .prepare(
-        `INSERT INTO posts (caption, first_comment, post_type, status, created_by)
-         VALUES (@caption, @first_comment, @post_type, 'scheduled', @created_by)`
+        `INSERT INTO posts
+           (caption, first_comment, post_type, status, content_kind, content_status,
+            cooldown_days, created_by)
+         VALUES (@caption, @first_comment, @post_type, 'scheduled', @content_kind,
+            @content_status, @cooldown_days, @created_by)`
       )
       .run({
         caption: data.caption || null,
         first_comment: data.first_comment || null,
         post_type: data.post_type,
+        content_kind: data.content_kind || "evergreen",
+        content_status: data.content_status || "draft",
+        cooldown_days: data.cooldown_days ?? null,
         created_by: data.created_by || null,
       });
     const postId = Number(postInfo.lastInsertRowid);
@@ -187,33 +237,45 @@ export function createPostWithPublications(
       );
       publicationIds.push(Number(info.lastInsertRowid));
     }
+
+    insertContentModelRows(db, postId, data);
+
     return { postId, publicationIds };
   });
   return tx(input);
 }
 
 // ---- Draft posts + library ------------------------------------------------------
-export interface CreateDraftInput {
+export interface CreateDraftInput extends ContentModelInput {
   caption: string;
   first_comment: string;
   asset_ids: number[];
   created_by?: string;
 }
 
-/** Create a post + ordered assets with NO publications (a reusable draft). */
+/**
+ * Create a post + ordered assets with NO publications (a reusable draft).
+ * Content-model fields are optional — existing callers keep today's defaults.
+ */
 export function createDraftPost(input: CreateDraftInput): number {
   const db = getDb();
   const postType = input.asset_ids.length > 1 ? "carousel" : "single";
   const tx = db.transaction((data: CreateDraftInput) => {
     const info = db
       .prepare(
-        `INSERT INTO posts (caption, first_comment, post_type, status, created_by)
-         VALUES (@caption, @first_comment, @post_type, 'draft', @created_by)`
+        `INSERT INTO posts
+           (caption, first_comment, post_type, status, content_kind, content_status,
+            cooldown_days, created_by)
+         VALUES (@caption, @first_comment, @post_type, 'draft', @content_kind,
+            @content_status, @cooldown_days, @created_by)`
       )
       .run({
         caption: data.caption || null,
         first_comment: data.first_comment || null,
         post_type: postType,
+        content_kind: data.content_kind || "evergreen",
+        content_status: data.content_status || "draft",
+        cooldown_days: data.cooldown_days ?? null,
         created_by: data.created_by || null,
       });
     const postId = Number(info.lastInsertRowid);
@@ -221,9 +283,17 @@ export function createDraftPost(input: CreateDraftInput): number {
       "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, ?)"
     );
     data.asset_ids.forEach((a, i) => link.run(postId, a, i));
+
+    insertContentModelRows(db, postId, data);
+
     return postId;
   });
   return tx(input);
+}
+
+/** Fetch a single post by id (for existence checks in API routes). */
+export function getPost(id: number): Post | undefined {
+  return getDb().prepare("SELECT * FROM posts WHERE id = ?").get(id) as Post | undefined;
 }
 
 export interface PostLibraryRow extends Post {
@@ -232,6 +302,9 @@ export interface PostLibraryRow extends Post {
   scheduled_count: number;
   posted_count: number;
   last_posted_at: string | null;
+  target_count: number;
+  green_period_count: number;
+  blackout_period_count: number;
 }
 
 export function listPosts(limit = 200): PostLibraryRow[] {
@@ -246,7 +319,12 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status = 'posted') AS posted_count,
          (SELECT MAX(pub.published_at) FROM publications pub WHERE pub.post_id = p.id
-            AND pub.status = 'posted') AS last_posted_at
+            AND pub.status = 'posted') AS last_posted_at,
+         (SELECT COUNT(*) FROM post_targets pt WHERE pt.post_id = p.id) AS target_count,
+         (SELECT COUNT(*) FROM post_periods pp WHERE pp.post_id = p.id
+            AND pp.mode = 'green') AS green_period_count,
+         (SELECT COUNT(*) FROM post_periods pp WHERE pp.post_id = p.id
+            AND pp.mode = 'blackout') AS blackout_period_count
        FROM posts p
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`
@@ -352,4 +430,164 @@ export function approvePublication(id: number): boolean {
     )
     .run({ id, now: nowIso() });
   return info.changes > 0;
+}
+
+// ---- Periods (reusable in-season window library) ---------------------------------
+export function listPeriods(): Period[] {
+  return getDb().prepare("SELECT * FROM periods ORDER BY name ASC").all() as Period[];
+}
+
+export function getPeriod(id: number): Period | undefined {
+  return getDb().prepare("SELECT * FROM periods WHERE id = ?").get(id) as
+    | Period
+    | undefined;
+}
+
+export interface CreatePeriodInput {
+  name: string;
+  recurs_yearly: boolean;
+  start_month?: number | null;
+  start_day?: number | null;
+  end_month?: number | null;
+  end_day?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export function createPeriod(input: CreatePeriodInput): number {
+  const info = getDb()
+    .prepare(
+      `INSERT INTO periods
+         (name, recurs_yearly, start_month, start_day, end_month, end_day, start_date, end_date)
+       VALUES (@name, @recurs_yearly, @start_month, @start_day, @end_month, @end_day,
+         @start_date, @end_date)`
+    )
+    .run({
+      name: input.name,
+      recurs_yearly: input.recurs_yearly ? 1 : 0,
+      start_month: input.start_month ?? null,
+      start_day: input.start_day ?? null,
+      end_month: input.end_month ?? null,
+      end_day: input.end_day ?? null,
+      start_date: input.start_date ?? null,
+      end_date: input.end_date ?? null,
+    });
+  return Number(info.lastInsertRowid);
+}
+
+export function updatePeriod(
+  id: number,
+  fields: Partial<{
+    name: string;
+    recurs_yearly: number;
+    start_month: number | null;
+    start_day: number | null;
+    end_month: number | null;
+    end_day: number | null;
+    start_date: string | null;
+    end_date: string | null;
+  }>
+): void {
+  const keys = Object.keys(fields);
+  if (keys.length === 0) return;
+  const setClause = keys.map((k) => `${k} = @${k}`).join(", ");
+  getDb()
+    .prepare(`UPDATE periods SET ${setClause} WHERE id = @id`)
+    .run({ ...fields, id });
+}
+
+/** Periods has no updated_at column and post_periods/CASCADE handles cleanup of links. */
+export function deletePeriod(id: number): boolean {
+  const info = getDb().prepare("DELETE FROM periods WHERE id = ?").run(id);
+  return info.changes > 0;
+}
+
+// ---- Post targeting (explicit per-account "who is this for") ---------------------
+export function getPostTargets(postId: number): number[] {
+  const rows = getDb()
+    .prepare("SELECT channel_id FROM post_targets WHERE post_id = ? ORDER BY channel_id ASC")
+    .all(postId) as { channel_id: number }[];
+  return rows.map((r) => r.channel_id);
+}
+
+/** Replace a post's target set atomically (delete-all then insert — the "all" snapshot). */
+export function setPostTargets(postId: number, channelIds: number[]): void {
+  const db = getDb();
+  const tx = db.transaction((ids: number[]) => {
+    db.prepare("DELETE FROM post_targets WHERE post_id = ?").run(postId);
+    const insert = db.prepare("INSERT INTO post_targets (post_id, channel_id) VALUES (?, ?)");
+    for (const id of ids) insert.run(postId, id);
+  });
+  tx(channelIds);
+}
+
+// ---- Post periods (green/blackout links; blackout wins — enforced in the worker) -
+export interface PostPeriodLink {
+  period_id: number;
+  mode: PeriodMode;
+}
+
+export function getPostPeriods(postId: number): PostPeriodLink[] {
+  return getDb()
+    .prepare("SELECT period_id, mode FROM post_periods WHERE post_id = ? ORDER BY period_id ASC")
+    .all(postId) as PostPeriodLink[];
+}
+
+/** Replace a post's period links atomically (delete-all then insert). */
+export function setPostPeriods(
+  postId: number,
+  links: { periodId: number; mode: PeriodMode }[]
+): void {
+  const db = getDb();
+  const tx = db.transaction((rows: { periodId: number; mode: PeriodMode }[]) => {
+    db.prepare("DELETE FROM post_periods WHERE post_id = ?").run(postId);
+    const insert = db.prepare(
+      "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
+    );
+    for (const r of rows) insert.run(postId, r.periodId, r.mode);
+  });
+  tx(links);
+}
+
+// ---- Caption variants (1..N per post; platform NULL = generic/rotated) -----------
+export function getCaptionVariants(postId: number): CaptionVariant[] {
+  return getDb()
+    .prepare(
+      "SELECT * FROM caption_variants WHERE post_id = ? ORDER BY sort_order ASC, id ASC"
+    )
+    .all(postId) as CaptionVariant[];
+}
+
+/** Replace a post's caption variants atomically (delete-all then insert). */
+export function setCaptionVariants(
+  postId: number,
+  variants: { platform: string | null; body: string; sort_order: number }[]
+): void {
+  const db = getDb();
+  const tx = db.transaction((rows: typeof variants) => {
+    db.prepare("DELETE FROM caption_variants WHERE post_id = ?").run(postId);
+    const insert = db.prepare(
+      "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?, ?, ?, ?)"
+    );
+    for (const v of rows) insert.run(postId, v.platform, v.body, v.sort_order);
+  });
+  tx(variants);
+}
+
+// ---- Post content-model fields (kind/status/cooldown) -----------------------------
+/** Dynamic SET, same pattern as updateChannel. */
+export function updatePostContentModel(
+  postId: number,
+  fields: Partial<{
+    content_kind: ContentKind;
+    content_status: ContentStatus;
+    cooldown_days: number | null;
+  }>
+): void {
+  const keys = Object.keys(fields);
+  if (keys.length === 0) return;
+  const setClause = keys.map((k) => `${k} = @${k}`).join(", ");
+  getDb()
+    .prepare(`UPDATE posts SET ${setClause}, updated_at = @updated_at WHERE id = @id`)
+    .run({ ...fields, id: postId, updated_at: nowIso() });
 }
