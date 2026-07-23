@@ -125,3 +125,43 @@ def test_metrics_then_ranking_prefers_higher_performer(conn, config):
 
     got = [r["post_id"] for r in select_candidates(conn, ch, NOW)][:1]
     assert got == [high_post]
+
+
+def test_manual_flag_overrides_interval_and_is_cleared(conn, config, fake_client):
+    ch = _channel(conn)
+    _, pub = _posted_pub(conn, ch, published_at=(NOW - timedelta(days=1)).isoformat())
+    # A fresh snapshot at NOW → within the 6h interval, so normally skipped.
+    conn.execute(
+        "INSERT INTO post_metrics (publication_id, fetched_at, reach) VALUES (?,?,10)",
+        (pub, NOW.isoformat()),
+    )
+    conn.commit()
+    assert run_metrics(conn, config, fake_client, NOW) == 0  # gated by interval
+
+    conn.execute(
+        "UPDATE publications SET metrics_refresh_requested_at=? WHERE id=?",
+        (NOW.isoformat(), pub),
+    )
+    conn.commit()
+    assert run_metrics(conn, config, fake_client, NOW) == 1  # flag overrides the gate
+    flag = conn.execute(
+        "SELECT metrics_refresh_requested_at FROM publications WHERE id=?", (pub,)
+    ).fetchone()[0]
+    assert flag is None  # cleared after the fetch
+
+
+def test_manual_flag_cleared_even_on_fetch_failure(conn, config):
+    from worker.tests.conftest import FakeGraphClient
+    ch = _channel(conn)
+    _, pub = _posted_pub(conn, ch, published_at=(NOW - timedelta(days=1)).isoformat())
+    conn.execute(
+        "UPDATE publications SET metrics_refresh_requested_at=? WHERE id=?",
+        (NOW.isoformat(), pub),
+    )
+    conn.commit()
+    client = FakeGraphClient(fail_on=["insights"])
+    assert run_metrics(conn, config, client, NOW) == 0  # fetch failed, nothing recorded
+    flag = conn.execute(
+        "SELECT metrics_refresh_requested_at FROM publications WHERE id=?", (pub,)
+    ).fetchone()[0]
+    assert flag is None  # cleared even though the fetch failed

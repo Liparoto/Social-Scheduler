@@ -44,9 +44,12 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
           AND pub.remote_post_id != 'DRYRUN'
           AND pub.published_at IS NOT NULL
           AND pub.published_at >= ?
-          AND NOT EXISTS (
-            SELECT 1 FROM post_metrics pm
-            WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM post_metrics pm
+              WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
+            )
+            OR pub.metrics_refresh_requested_at IS NOT NULL
           )
         """,
         (max_age_cutoff, interval_cutoff),
@@ -84,22 +87,31 @@ def run_metrics(conn, config: Config, client, now, logger=None) -> int:
     )
     fetched = 0
     for pub in due:
-        channel = conn.execute(
-            "SELECT access_token FROM channels WHERE id = ?", (pub["channel_id"],)
-        ).fetchone()
-        token = channel["access_token"] if channel else None
-        if not token:
-            continue
+        was_flagged = pub["metrics_refresh_requested_at"] is not None
         try:
-            insights = client.get_media_insights(
-                pub["remote_post_id"], token, REQUESTED_METRICS
-            )
-        except Exception as exc:  # noqa: BLE001 — a metrics fetch failure is non-fatal
-            if logger:
-                logger.info("[metrics pub %s] fetch failed: %s", pub["id"], exc)
-            continue
-        _record(conn, pub["id"], now_iso, insights)
-        fetched += 1
+            channel = conn.execute(
+                "SELECT access_token FROM channels WHERE id = ?", (pub["channel_id"],)
+            ).fetchone()
+            token = channel["access_token"] if channel else None
+            if not token:
+                continue
+            try:
+                insights = client.get_media_insights(
+                    pub["remote_post_id"], token, REQUESTED_METRICS
+                )
+            except Exception as exc:  # noqa: BLE001 — a metrics fetch failure is non-fatal
+                if logger:
+                    logger.info("[metrics pub %s] fetch failed: %s", pub["id"], exc)
+                continue
+            _record(conn, pub["id"], now_iso, insights)
+            fetched += 1
+        finally:
+            if was_flagged:
+                conn.execute(
+                    "UPDATE publications SET metrics_refresh_requested_at = NULL WHERE id = ?",
+                    (pub["id"],),
+                )
+                conn.commit()
     if logger and fetched:
         logger.info("[metrics] fetched %d snapshot(s)", fetched)
     return fetched
