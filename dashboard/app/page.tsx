@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { getActiveChannels, getPublicationsOverview } from "@/lib/queries";
-import { PageHeader, StatusBadge, ChannelChip, EmptyState } from "@/components/ui";
-import { PublicationActions } from "@/components/publication-actions";
+import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { RefreshAllMetrics } from "@/components/refresh-all-metrics";
+import { PublicationQueue } from "@/components/publication-queue";
 import { formatInTz, tzAbbrev, channelColor } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -101,97 +101,7 @@ export default function OverviewPage() {
               top so they&rsquo;re never silent.
             </EmptyState>
           ) : (
-            <div className="overflow-hidden rounded-card border border-border bg-surface">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-faint">
-                    <th className="px-4 py-2.5 font-medium">Post</th>
-                    <th className="px-4 py-2.5 font-medium">Channel</th>
-                    <th className="px-4 py-2.5 font-medium">When</th>
-                    <th className="px-4 py-2.5 font-medium">Status</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pubs.map((p) => (
-                    <tr key={p.id} className="border-b border-border last:border-0 align-top">
-                      <td className="px-4 py-3">
-                        <div className="flex items-start gap-3">
-                          <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
-                            {p.first_asset_id ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={`/api/media/${p.first_asset_id}?variant=thumb`}
-                                alt=""
-                                className="h-full w-full object-cover"
-                              />
-                            ) : null}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="line-clamp-2 max-w-xs text-ink">
-                              {p.post_caption || (
-                                <span className="text-faint italic">No caption</span>
-                              )}
-                            </p>
-                            <p className="data mt-0.5 text-[11px] text-faint">
-                              {p.post_type}
-                              {p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}
-                              {p.remote_post_id && p.remote_post_id !== "DRYRUN"
-                                ? ` · ${p.remote_post_id}`
-                                : ""}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <ChannelChip
-                          id={p.channel_id}
-                          platform={p.channel_platform}
-                          name={p.channel_name}
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="data text-xs text-ink-soft">
-                          {formatInTz(p.scheduled_at, p.channel_timezone)}
-                        </span>
-                        <span className="data block text-[10px] text-faint">
-                          {tzAbbrev(p.channel_timezone)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={p.status} dryRun={p.is_dry_run === 1} />
-                        {p.status === "posted" && p.m_fetched_at ? (
-                          <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
-                            <span title="Reach">◎ {p.m_reach ?? "—"}</span>
-                            <span title="Saves">⤓ {p.m_saves ?? "—"}</span>
-                            <span title="Likes">♥ {p.m_likes ?? "—"}</span>
-                          </p>
-                        ) : p.status === "posted" && p.is_dry_run !== 1 ? (
-                          <p className="data mt-1 text-[10px] text-faint">metrics pending…</p>
-                        ) : null}
-                        {p.last_error ? (
-                          <p className="mt-1 max-w-xs text-[11px] text-status-failed line-clamp-2">
-                            {p.last_error}
-                          </p>
-                        ) : null}
-                        {p.attempt_count > 0 && p.status !== "failed" ? (
-                          <p className="data mt-0.5 text-[10px] text-faint">
-                            attempt {p.attempt_count}
-                          </p>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <PublicationActions
-                          id={p.id}
-                          status={p.status}
-                          isDryRun={p.is_dry_run === 1}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <PublicationQueue pubs={pubs} channels={channels} />
           )}
         </section>
       </div>
