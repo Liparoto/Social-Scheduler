@@ -212,6 +212,10 @@ export function LibraryView({
               tabIndex={0}
               onClick={() => toggle(p.id)}
               onKeyDown={(e) => {
+                // Let keyboard activation of the nested title/thumbnail link navigate
+                // without also toggling selection (stopPropagation on the link guards
+                // click, not the bubbling keydown).
+                if ((e.target as HTMLElement).closest("a")) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   toggle(p.id);
