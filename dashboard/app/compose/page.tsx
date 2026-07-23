@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { getActiveChannels, listPeriods, listTags } from "@/lib/queries";
+import { getActiveChannels, listPeriods, listTags, listPosts } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { PageHeader, EmptyState } from "@/components/ui";
-import { Composer } from "@/components/composer";
+import { ComposeSwitcher } from "@/components/compose-switcher";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +16,15 @@ export default function ComposePage() {
   }));
   const timeOfDayTags = listTags("time_of_day");
   const topicTags = listTags("topic");
+  const libraryPosts = listPosts().map((p) => ({
+    id: p.id,
+    first_asset_id: p.first_asset_id,
+    caption: p.caption,
+    content_kind: p.content_kind,
+    content_status: p.content_status,
+  }));
+  const defaultDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10); // tomorrow (UTC)
+  const defaultTime = "09:00";
 
   return (
     <div>
@@ -33,12 +42,15 @@ export default function ComposePage() {
             .
           </EmptyState>
         ) : (
-          <Composer
+          <ComposeSwitcher
             channels={channels}
             defaultTimezone={config.defaultTimezone}
             periods={listPeriods()}
             timeOfDayTags={timeOfDayTags}
             topicTags={topicTags}
+            libraryPosts={libraryPosts}
+            defaultDate={defaultDate}
+            defaultTime={defaultTime}
           />
         )}
       </div>
