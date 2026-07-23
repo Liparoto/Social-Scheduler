@@ -240,7 +240,23 @@ The "open a post and manage it" piece of ④ — unblocks editing existing posts
       (pre-populate, save round-trip persists, 404, bulk-select preserved).
 - Scope note (deferred): editing images and rescheduling existing sends are NOT in this screen.
 
-Remaining for ④'s full overview + ③ bulk import: still separate future work.
+Remaining: ④'s full overview is still separate future work.
+
+---
+
+## Content management — sub-project ③ Bulk import (manual)  `[x] done`
+Design: `docs/design-bulk-import.md` · Plan: `docs/superpowers/plans/2026-07-23-bulk-import.md`
+Multi-select images → one Draft post each with shared batch defaults; fully local (no AI/cloud).
+- [x] `createDraftPostsBulk(items, shared)`: N single-image drafts in ONE transaction
+      (wraps `createDraftPost`; a per-image caption becomes the post's single generic variant).
+- [x] `POST /api/posts/bulk-import`: validates items (≤100, each asset exists) + shared defaults
+      (kind/status/targets/tags/periods) FULLY before writing — any 400 creates zero rows.
+- [x] `/import` page + `<BulkImport>`: multi-image upload (reuses `/api/assets/upload` dedup) →
+      thumbnail grid with per-image captions → batch defaults panel → "Create N drafts" →
+      Library. Sidebar "Import" + Library "Bulk import" links. Verified: create path made 2
+      drafts (captions+tag+target) shown in Library; page/nav render; whole-branch review clean.
+- Deferred (spec §7 — the seam for later): AI-assisted captions/tags (needs owner LLM opt-in),
+  folder-path import, CSV manifest, carousel grouping.
 
 ---
 
