@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createDraftPost, getChannel, getPeriod } from "@/lib/queries";
+import { createDraftPost, getChannel, getPeriod, listTags } from "@/lib/queries";
 import type { ContentKind, ContentStatus } from "@/lib/types";
-import { parseCaptionVariants, parsePeriodLinks } from "@/lib/content-model-validation";
+import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 
 export const runtime = "nodejs";
 
@@ -54,6 +54,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid period_links." }, { status: 400 });
   }
 
+  const validTagIds = new Set(listTags().map((t) => t.id));
+  const tagIds = parseTagIds(body.tag_ids, (id) => validTagIds.has(id));
+  if (tagIds === "invalid") {
+    return NextResponse.json({ error: "Invalid tag_ids." }, { status: 400 });
+  }
+
   const postId = createDraftPost({
     caption: (body.caption || "").trim(),
     first_comment: (body.first_comment || "").trim(),
@@ -64,6 +70,7 @@ export async function POST(req: NextRequest) {
     target_channel_ids: targetChannelIds,
     caption_variants: captionVariants ?? undefined,
     period_links: periodLinks ?? undefined,
+    tag_ids: tagIds ?? undefined,
   });
   return NextResponse.json({ postId }, { status: 201 });
 }

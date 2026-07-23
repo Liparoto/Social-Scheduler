@@ -3,12 +3,15 @@ import {
   getChannel,
   getPeriod,
   getPost,
+  listTags,
   setCaptionVariants,
   setPostPeriods,
+  setPostTags,
   setPostTargets,
   updatePostContentModel,
 } from "@/lib/queries";
 import type { ContentKind, ContentStatus, PeriodMode } from "@/lib/types";
+import { parseTagIds } from "@/lib/content-model-validation";
 
 export const runtime = "nodejs";
 
@@ -143,6 +146,15 @@ export async function PATCH(
       );
     }
     setCaptionVariants(postId, variants);
+  }
+
+  if ("tag_ids" in body) {
+    const validTagIds = new Set(listTags().map((t) => t.id));
+    const tagIds = parseTagIds(body.tag_ids, (id) => validTagIds.has(id));
+    if (tagIds === "invalid") {
+      return NextResponse.json({ error: "Invalid tag_ids." }, { status: 400 });
+    }
+    setPostTags(postId, tagIds ?? []);
   }
 
   return NextResponse.json({ ok: true });

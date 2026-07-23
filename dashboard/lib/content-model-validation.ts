@@ -52,3 +52,21 @@ export function parsePeriodLinks(
   }
   return out;
 }
+
+export function parseTagIds(
+  input: unknown,
+  tagExists: (id: number) => boolean
+): number[] | "invalid" | undefined {
+  if (input === undefined) return undefined;
+  if (!Array.isArray(input)) return "invalid";
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const id of input) {
+    if (typeof id !== "number" || !Number.isInteger(id)) return "invalid";
+    if (!tagExists(id)) return "invalid";
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
