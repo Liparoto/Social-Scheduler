@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ThemeControls } from "@/components/theme-controls";
 
 const NAV = [
   { href: "/", label: "Overview", hint: "Queue & status" },
@@ -49,7 +50,7 @@ export function Sidebar() {
                   href={item.href}
                   className={`block rounded-lg px-3 py-2 transition-colors ${
                     active
-                      ? "bg-brand-weak text-brand-ink"
+                      ? "bg-brand-weak text-brand-strong"
                       : "text-ink-soft hover:bg-surface-sunken"
                   }`}
                 >
@@ -62,7 +63,8 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      <div className="p-3 border-t border-border">
+      <div className="p-3 border-t border-border space-y-3">
+        <ThemeControls />
         <p className="px-3 text-[11px] leading-relaxed text-faint">
           Worker runs separately.
           <br />

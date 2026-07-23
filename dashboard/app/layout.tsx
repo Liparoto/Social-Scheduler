@@ -24,9 +24,18 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      data-theme="socialscheduler"
+      data-mode="light"
+      suppressHydrationWarning
       className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} h-full`}
     >
       <body className="min-h-full">
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('ss-theme'),m=localStorage.getItem('ss-mode');var v={socialscheduler:1,claude:1,apt:1,fyzical:1,default:1,solarized:1,vela:1};var d=document.documentElement;if(t&&v[t])d.setAttribute('data-theme',t);if(m==='light'||m==='dark')d.setAttribute('data-mode',m);}catch(e){}})();",
+          }}
+        />
         <div className="flex min-h-screen">
           <Sidebar />
           <main className="flex-1 min-w-0">{children}</main>

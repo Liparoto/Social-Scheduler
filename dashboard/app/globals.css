@@ -24,6 +24,13 @@
   --color-accent-ink: #c94a22;
   --color-accent-weak: #fdeae2;
 
+  /* Button foreground (white or dark per theme) + pill/chip text on the -weak tints.
+     Split out so brand/accent stay vivid while buttons and pills each stay legible. */
+  --color-on-brand: #ffffff;
+  --color-on-accent: #ffffff;
+  --color-brand-strong: #0a4437;
+  --color-accent-strong: #b23c17;
+
   /* Status semantics (draft / scheduled / posted / failed / publishing) */
   --color-status-draft: #64748b;
   --color-status-scheduled: #2563eb;
@@ -72,4 +79,309 @@ body {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ==========================================================================
+   Themes — data-theme (family) × data-mode (light|dark) override the
+   @theme --color-* defaults. SocialScheduler-light = the @theme default
+   (no block needed). Token roles: brand/accent = solid button + identity;
+   on-brand/on-accent = that button's text (white or dark, per theme);
+   brand-ink/accent-ink = button hover + solid secondary bg; brand-weak/
+   accent-weak = tinted pill/chip bg; brand-strong/accent-strong = pill/chip
+   text. Values verified for WCAG AA in docs/design-themes.md §4.
+   ========================================================================== */
+
+/* Shared dark-mode status set (light status = @theme default). */
+html[data-mode="dark"] {
+  --color-status-draft: #94a3b8;
+  --color-status-scheduled: #60a5fa;
+  --color-status-posted: #34d399;
+  --color-status-failed: #f87171;
+  --color-status-publishing: #fbbf24;
+}
+
+html[data-theme="socialscheduler"][data-mode="dark"] {
+  --color-canvas: #0f1417;
+  --color-surface: #161d22;
+  --color-surface-sunken: #1e262c;
+  --color-border: #2a333b;
+  --color-border-strong: #3a454e;
+  --color-ink: #e8ecf0;
+  --color-ink-soft: #c2cad2;
+  --color-muted: #8b95a1;
+  --color-faint: #5f6975;
+  --color-brand: #127a61;
+  --color-on-brand: #ffffff;
+  --color-brand-ink: #0d5b48;
+  --color-brand-weak: #173f34;
+  --color-brand-strong: #7fd9c0;
+  --color-accent: #f0653a;
+  --color-on-accent: #ffffff;
+  --color-accent-ink: #c94a22;
+  --color-accent-weak: #3a2019;
+  --color-accent-strong: #ff9d78;
+}
+
+html[data-theme="claude"][data-mode="light"] {
+  --color-canvas: #faf9f5;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #efece1;
+  --color-border: #ddd9c8;
+  --color-border-strong: #cfc9b4;
+  --color-ink: #141413;
+  --color-ink-soft: #3d3a34;
+  --color-muted: #5a564c;
+  --color-faint: #8a857a;
+  --color-brand: #d97757;
+  --color-on-brand: #3a1e12;
+  --color-brand-ink: #c25f39;
+  --color-brand-weak: #f6e7df;
+  --color-brand-strong: #a8492c;
+  --color-accent: #d97757;
+  --color-on-accent: #3a1e12;
+  --color-accent-ink: #c25f39;
+  --color-accent-weak: #f6e7df;
+  --color-accent-strong: #a8492c;
+}
+
+html[data-theme="claude"][data-mode="dark"] {
+  --color-canvas: #1a1716;
+  --color-surface: #2d2724;
+  --color-surface-sunken: #3a322d;
+  --color-border: #423a34;
+  --color-border-strong: #55483f;
+  --color-ink: #faf9f5;
+  --color-ink-soft: #d9d4cb;
+  --color-muted: #b0aea5;
+  --color-faint: #837e75;
+  --color-brand: #e08a68;
+  --color-on-brand: #2a1109;
+  --color-brand-ink: #cf7a58;
+  --color-brand-weak: #3a2a22;
+  --color-brand-strong: #f0a988;
+  --color-accent: #e08a68;
+  --color-on-accent: #2a1109;
+  --color-accent-ink: #cf7a58;
+  --color-accent-weak: #3a2a22;
+  --color-accent-strong: #f0a988;
+}
+
+html[data-theme="apt"][data-mode="light"] {
+  --color-canvas: #f7f4e8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #efe9d4;
+  --color-border: #d8ceac;
+  --color-border-strong: #c9bd94;
+  --color-ink: #292c5f;
+  --color-ink-soft: #454880;
+  --color-muted: #6f5e22;
+  --color-faint: #9a8a55;
+  --color-brand: #b2973d;
+  --color-on-brand: #1a1c3e;
+  --color-brand-ink: #9c8433;
+  --color-brand-weak: #efe6c9;
+  --color-brand-strong: #6b5a1f;
+  --color-accent: #b2973d;
+  --color-on-accent: #1a1c3e;
+  --color-accent-ink: #9c8433;
+  --color-accent-weak: #efe6c9;
+  --color-accent-strong: #6b5a1f;
+}
+
+html[data-theme="apt"][data-mode="dark"] {
+  --color-canvas: #1a1c3e;
+  --color-surface: #292c5f;
+  --color-surface-sunken: #353a78;
+  --color-border: #3a3f7a;
+  --color-border-strong: #4a4f90;
+  --color-ink: #f4e9c7;
+  --color-ink-soft: #d8cfa8;
+  --color-muted: #bfae7b;
+  --color-faint: #8a805c;
+  --color-brand: #cbb04e;
+  --color-on-brand: #1a1c3e;
+  --color-brand-ink: #b59a3e;
+  --color-brand-weak: #38321c;
+  --color-brand-strong: #e6cf7a;
+  --color-accent: #cbb04e;
+  --color-on-accent: #1a1c3e;
+  --color-accent-ink: #b59a3e;
+  --color-accent-weak: #38321c;
+  --color-accent-strong: #e6cf7a;
+}
+
+html[data-theme="fyzical"][data-mode="light"] {
+  --color-canvas: #f4f8fb;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #eaf2f9;
+  --color-border: #d5dee9;
+  --color-border-strong: #c2cfde;
+  --color-ink: #1b365d;
+  --color-ink-soft: #34517a;
+  --color-muted: #4a6480;
+  --color-faint: #8298b2;
+  --color-brand: #0091da;
+  --color-on-brand: #ffffff;
+  --color-brand-ink: #0073ad;
+  --color-brand-weak: #e6f4fb;
+  --color-brand-strong: #00618f;
+  --color-accent: #0091da;
+  --color-on-accent: #ffffff;
+  --color-accent-ink: #0073ad;
+  --color-accent-weak: #e6f4fb;
+  --color-accent-strong: #00618f;
+}
+
+html[data-theme="fyzical"][data-mode="dark"] {
+  --color-canvas: #0c1a2e;
+  --color-surface: #142844;
+  --color-surface-sunken: #1b365d;
+  --color-border: #274263;
+  --color-border-strong: #345177;
+  --color-ink: #e6f4fb;
+  --color-ink-soft: #bcd6ec;
+  --color-muted: #9fc2e0;
+  --color-faint: #6b89a8;
+  --color-brand: #35abe6;
+  --color-on-brand: #04263a;
+  --color-brand-ink: #2b98cf;
+  --color-brand-weak: #10314f;
+  --color-brand-strong: #8fd3f2;
+  --color-accent: #35abe6;
+  --color-on-accent: #04263a;
+  --color-accent-ink: #2b98cf;
+  --color-accent-weak: #10314f;
+  --color-accent-strong: #8fd3f2;
+}
+
+html[data-theme="default"][data-mode="light"] {
+  --color-canvas: #f7f3ec;
+  --color-surface: #fdfcfa;
+  --color-surface-sunken: #ece6db;
+  --color-border: #ddd6c7;
+  --color-border-strong: #cec6b3;
+  --color-ink: #322e28;
+  --color-ink-soft: #524b40;
+  --color-muted: #736a5c;
+  --color-faint: #a39a89;
+  --color-brand: #453a2e;
+  --color-on-brand: #ffffff;
+  --color-brand-ink: #2f271e;
+  --color-brand-weak: #e8e1d3;
+  --color-brand-strong: #2f271e;
+  --color-accent: #453a2e;
+  --color-on-accent: #ffffff;
+  --color-accent-ink: #2f271e;
+  --color-accent-weak: #e8e1d3;
+  --color-accent-strong: #2f271e;
+}
+
+html[data-theme="default"][data-mode="dark"] {
+  --color-canvas: #1c1c1c;
+  --color-surface: #212121;
+  --color-surface-sunken: #2b2b2b;
+  --color-border: #333333;
+  --color-border-strong: #444444;
+  --color-ink: #fafafa;
+  --color-ink-soft: #d4d4d4;
+  --color-muted: #adadad;
+  --color-faint: #6f6f6f;
+  --color-brand: #e6e6e6;
+  --color-on-brand: #1c1c1c;
+  --color-brand-ink: #d4d4d4;
+  --color-brand-weak: #2f2f2f;
+  --color-brand-strong: #e6e6e6;
+  --color-accent: #e6e6e6;
+  --color-on-accent: #1c1c1c;
+  --color-accent-ink: #d4d4d4;
+  --color-accent-weak: #2f2f2f;
+  --color-accent-strong: #e6e6e6;
+}
+
+html[data-theme="solarized"][data-mode="light"] {
+  --color-canvas: #fdf6e3;
+  --color-surface: #fffdf5;
+  --color-surface-sunken: #eee8d5;
+  --color-border: #e3dcc4;
+  --color-border-strong: #d5cdb0;
+  --color-ink: #586e75;
+  --color-ink-soft: #657b83;
+  --color-muted: #839496;
+  --color-faint: #93a1a1;
+  --color-brand: #268bd2;
+  --color-on-brand: #ffffff;
+  --color-brand-ink: #1e6fa8;
+  --color-brand-weak: #d9ebf7;
+  --color-brand-strong: #155a8a;
+  --color-accent: #cb4b16;
+  --color-on-accent: #ffffff;
+  --color-accent-ink: #a53d12;
+  --color-accent-weak: #f6e0d3;
+  --color-accent-strong: #8f3410;
+}
+
+html[data-theme="solarized"][data-mode="dark"] {
+  --color-canvas: #002b36;
+  --color-surface: #073642;
+  --color-surface-sunken: #094352;
+  --color-border: #0e4b5a;
+  --color-border-strong: #145868;
+  --color-ink: #93a1a1;
+  --color-ink-soft: #839496;
+  --color-muted: #657b83;
+  --color-faint: #586e75;
+  --color-brand: #268bd2;
+  --color-on-brand: #ffffff;
+  --color-brand-ink: #1c6094;
+  --color-brand-weak: #0a3a4a;
+  --color-brand-strong: #6fb8e8;
+  --color-accent: #cb4b16;
+  --color-on-accent: #ffffff;
+  --color-accent-ink: #b5410f;
+  --color-accent-weak: #3a2013;
+  --color-accent-strong: #e8825a;
+}
+
+html[data-theme="vela"][data-mode="light"] {
+  --color-canvas: #fffaf0;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f3eee1;
+  --color-border: #e3ddce;
+  --color-border-strong: #d4ccba;
+  --color-ink: #32312e;
+  --color-ink-soft: #554c3a;
+  --color-muted: #6f665a;
+  --color-faint: #9a9384;
+  --color-brand: #738b9c;
+  --color-on-brand: #ffffff;
+  --color-brand-ink: #5a7183;
+  --color-brand-weak: #dfe7ea;
+  --color-brand-strong: #455563;
+  --color-accent: #32312e;
+  --color-on-accent: #ffffff;
+  --color-accent-ink: #201f1d;
+  --color-accent-weak: #e9e5dc;
+  --color-accent-strong: #32312e;
+}
+
+html[data-theme="vela"][data-mode="dark"] {
+  --color-canvas: #32312e;
+  --color-surface: #3d3b37;
+  --color-surface-sunken: #454340;
+  --color-border: #4f4c47;
+  --color-border-strong: #605c56;
+  --color-ink: #fffaf0;
+  --color-ink-soft: #ded8cb;
+  --color-muted: #b3a89a;
+  --color-faint: #837c6e;
+  --color-brand: #8ba3b4;
+  --color-on-brand: #20272c;
+  --color-brand-ink: #7b95a8;
+  --color-brand-weak: #3a4650;
+  --color-brand-strong: #b8ccd8;
+  --color-accent: #8ba3b4;
+  --color-on-accent: #20272c;
+  --color-accent-ink: #7b95a8;
+  --color-accent-weak: #3a4650;
+  --color-accent-strong: #b8ccd8;
 }
