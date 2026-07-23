@@ -20,7 +20,7 @@ import { PeriodAttach } from "./period-attach";
 const card = "rounded-card border border-border bg-surface p-5";
 const segBtn = (active: boolean) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
-    active ? "bg-brand-weak font-medium text-brand-ink" : "text-muted hover:text-ink"
+    active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
 
 export function PostEditor({
@@ -213,7 +213,7 @@ export function PostEditor({
           <button
             onClick={save}
             disabled={pending}
-            className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
+            className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
             {pending ? "Saving…" : "Save changes"}
           </button>

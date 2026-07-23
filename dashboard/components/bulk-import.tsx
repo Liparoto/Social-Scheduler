@@ -13,7 +13,7 @@ type Item = { uid: string; assetId: number; name: string; caption: string; dedup
 const card = "rounded-card border border-border bg-surface p-5";
 const segBtn = (active: boolean) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
-    active ? "bg-brand-weak font-medium text-brand-ink" : "text-muted hover:text-ink"
+    active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
 
 export function BulkImport({
@@ -112,7 +112,7 @@ export function BulkImport({
     <div className="space-y-6">
       {/* Upload */}
       <section className={card}>
-        <label className="inline-flex cursor-pointer items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink">
+        <label className="inline-flex cursor-pointer items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink">
           {uploading ? "Uploading…" : "Add images"}
           <input
             type="file"
@@ -229,7 +229,7 @@ export function BulkImport({
         <button
           onClick={create}
           disabled={creating || uploading || items.length === 0}
-          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
+          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
         >
           {creating ? "Creating…" : `Create ${items.length} draft${items.length === 1 ? "" : "s"}`}
         </button>

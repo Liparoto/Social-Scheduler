@@ -147,7 +147,7 @@ export function AutofillConfig(props: Props) {
             <button
               onClick={save}
               disabled={pending}
-              className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
+              className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
             >
               {pending ? "Saving…" : "Save auto-fill"}
             </button>

@@ -69,7 +69,7 @@ export function CaptionVariantsEditor({
       <button
         type="button"
         onClick={add}
-        className="mt-2 text-xs font-medium text-brand-ink hover:underline"
+        className="mt-2 text-xs font-medium text-brand-strong hover:underline"
       >
         + Add caption variant
       </button>

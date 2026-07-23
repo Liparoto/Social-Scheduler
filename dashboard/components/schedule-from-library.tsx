@@ -203,7 +203,7 @@ export function ScheduleFromLibrary({
           <button
             onClick={schedule}
             disabled={busy || targets.size === 0}
-            className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
+            className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
             {busy ? "Scheduling…" : `Schedule to ${targets.size} account${targets.size === 1 ? "" : "s"}`}
           </button>

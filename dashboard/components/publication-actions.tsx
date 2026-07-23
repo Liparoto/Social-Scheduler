@@ -62,7 +62,7 @@ export function PublicationActions({
         <button
           onClick={() => act("approve")}
           disabled={pending}
-          className="rounded-md bg-brand px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-ink disabled:opacity-50"
+          className="rounded-md bg-brand px-2.5 py-1 text-xs font-medium text-on-brand hover:bg-brand-ink disabled:opacity-50"
         >
           {pending ? "Approving…" : "Approve"}
         </button>

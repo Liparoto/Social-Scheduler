@@ -55,7 +55,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink"
+        className="inline-flex items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink"
       >
         Add channel
       </button>
@@ -157,7 +157,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
         <button
           onClick={submit}
           disabled={pending}
-          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
+          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
         >
           {pending ? "Saving…" : "Save channel"}
         </button>

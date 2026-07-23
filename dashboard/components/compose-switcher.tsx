@@ -7,7 +7,7 @@ import { ScheduleFromLibrary, type LibraryPickItem, type ChannelLite } from "./s
 
 const segBtn = (active: boolean) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
-    active ? "bg-brand-weak font-medium text-brand-ink" : "text-muted hover:text-ink"
+    active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
 
 export function ComposeSwitcher({

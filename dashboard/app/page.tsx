@@ -29,7 +29,7 @@ export default function OverviewPage() {
         action={
           <Link
             href="/compose"
-            className="inline-flex items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-accent-ink"
+            className="inline-flex items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent shadow-sm hover:bg-accent-ink"
           >
             Compose post
           </Link>

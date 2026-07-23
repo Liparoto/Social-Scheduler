@@ -56,14 +56,14 @@ export function PeriodAttach({
                 <div className="inline-flex shrink-0 rounded-lg border border-border p-0.5">
                   <button
                     type="button"
-                    className={segBtn(!mode, "bg-brand-weak text-brand-ink")}
+                    className={segBtn(!mode, "bg-brand-weak text-brand-strong")}
                     onClick={() => setMode(p.id, null)}
                   >
                     Off
                   </button>
                   <button
                     type="button"
-                    className={segBtn(mode === "green", "bg-status-posted/20 text-brand-ink")}
+                    className={segBtn(mode === "green", "bg-status-posted/20 text-brand-strong")}
                     onClick={() => setMode(p.id, "green")}
                   >
                     Green

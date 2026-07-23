@@ -34,7 +34,7 @@ export function ChannelToggle({
       disabled={pending}
       className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
         value
-          ? "border-brand/30 bg-brand-weak text-brand-ink"
+          ? "border-brand/30 bg-brand-weak text-brand-strong"
           : "border-border bg-surface text-muted hover:bg-surface-sunken"
       }`}
     >

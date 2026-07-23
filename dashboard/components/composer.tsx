@@ -185,7 +185,7 @@ export function Composer({
     "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
   const segBtn = (active: boolean) =>
     `rounded-md px-3 py-1.5 text-sm transition-colors ${
-      active ? "bg-brand-weak font-medium text-brand-ink" : "text-muted hover:text-ink"
+      active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
     }`;
 
   return (
@@ -287,7 +287,7 @@ export function Composer({
               </ul>
             </div>
           )}
-          {notice ? <p className="mt-3 text-xs text-brand-ink">{notice}</p> : null}
+          {notice ? <p className="mt-3 text-xs text-brand-strong">{notice}</p> : null}
         </section>
 
         {/* Content kind */}
@@ -416,7 +416,7 @@ export function Composer({
         </section>
 
         {error ? (
-          <p className="rounded-lg bg-accent-weak px-3 py-2 text-sm text-accent-ink">{error}</p>
+          <p className="rounded-lg bg-accent-weak px-3 py-2 text-sm text-accent-strong">{error}</p>
         ) : null}
       </div>
 
@@ -492,7 +492,7 @@ export function Composer({
         <button
           onClick={submit}
           disabled={submitting}
-          className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-50"
+          className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
         >
           {submitting ? "Scheduling…" : "Schedule post"}
         </button>

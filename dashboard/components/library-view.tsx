@@ -217,7 +217,7 @@ export function LibraryView({
                 onClick={() => setTagFilter(on ? null : name)}
                 className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   on
-                    ? "border-brand bg-brand/10 text-brand-ink"
+                    ? "border-brand bg-brand/10 text-brand-strong"
                     : "border-border bg-surface text-muted hover:bg-surface-sunken"
                 }`}
               >
@@ -234,7 +234,7 @@ export function LibraryView({
                 onClick={() => setPlatformFilter(on ? null : plat)}
                 className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
                   on
-                    ? "border-brand bg-brand/10 text-brand-ink"
+                    ? "border-brand bg-brand/10 text-brand-strong"
                     : "border-border bg-surface text-muted hover:bg-surface-sunken"
                 }`}
               >
@@ -437,7 +437,7 @@ export function LibraryView({
         </div>
 
         {error ? <p className="mt-3 text-sm text-status-failed">{error}</p> : null}
-        {notice ? <p className="mt-3 text-sm text-brand-ink">{notice}</p> : null}
+        {notice ? <p className="mt-3 text-sm text-brand-strong">{notice}</p> : null}
 
         <div className="mt-3 flex items-center justify-between gap-4">
           <p className="text-[11px] text-faint">
@@ -452,7 +452,7 @@ export function LibraryView({
           <button
             onClick={schedule}
             disabled={pending}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-ink disabled:opacity-50"
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
           >
             {pending ? "Scheduling…" : "Bulk schedule"}
           </button>

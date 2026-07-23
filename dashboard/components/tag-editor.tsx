@@ -13,7 +13,7 @@ const BAND_LABEL: Record<string, string> = {
 const chip = (active: boolean) =>
   `rounded-full border px-3 py-1 text-sm transition-colors ${
     active
-      ? "border-brand bg-brand-weak font-medium text-brand-ink"
+      ? "border-brand bg-brand-weak font-medium text-brand-strong"
       : "border-border text-muted hover:text-ink"
   }`;
 
