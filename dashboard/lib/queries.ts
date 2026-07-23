@@ -143,6 +143,16 @@ export function recentAssets(limit = 60): Asset[] {
     .all(limit) as Asset[];
 }
 
+/** A post's assets in carousel order (for the edit screen's read-only image strip). */
+export function getPostAssets(postId: number): Asset[] {
+  return getDb()
+    .prepare(
+      `SELECT a.* FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+        WHERE pa.post_id = ? ORDER BY pa.sort_order ASC`
+    )
+    .all(postId) as Asset[];
+}
+
 // ---- Posts + publications (the scheduling write) --------------------------------
 
 /** Shared shape for the content-model side-tables a post can optionally arrive with. */
