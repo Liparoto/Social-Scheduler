@@ -183,11 +183,18 @@ Design: `docs/design-content-model.md` · Plan: `docs/superpowers/plans/2026-07-
 - [ ] **Owner action:** run `python3 migrate.py` on the live DB to apply `0002` (the launcher
       does this automatically). Backfills the existing Grand Teton post to ready/targeted.
 
-### Phase B — dashboard UI  `[ ]` (next plan)
-- [ ] Compose: content_kind, content_status, account targeting, period attach, caption variants.
-- [ ] Periods manager screen (create/edit the reusable window library).
-- [ ] Library: bulk re-target (fold a new account into existing content) + content overview
-      columns (kind/status/season/targets). "All" = snapshot-expand to current channels.
+### Phase B — dashboard UI  `[x] done`
+Plan: `docs/superpowers/plans/2026-07-23-content-model-phase-b.md`. All verified in-browser.
+- [x] B1 — data layer: types + queries + API for periods/targets/caption_variants/kind/status;
+      shared validation; smoke test. (reviewed + fixed)
+- [x] B3 — Periods manager (`/periods`): create/edit/delete named windows; yearly (wrap-around)
+      vs one-off picker with live plain-English preview; **single-day option** (July 4th).
+- [x] B2 — Composer: content_kind, account targeting, 1..N caption variants (generic + per-
+      platform), green/blackout period attach, library Draft/Ready status. Verified: fields
+      persist + validate (invalid period → 400).
+- [x] B4 — Library: bulk re-target (add/remove an account across selected posts, idempotent) +
+      overview badges (kind / content_status / targets / season). Verified round-trip.
+- [ ] Optional: whole-Phase-B code review (per-slice done; final capstone review pending).
 
 ---
 
