@@ -240,7 +240,7 @@ The "open a post and manage it" piece of ④ — unblocks editing existing posts
       (pre-populate, save round-trip persists, 404, bulk-select preserved).
 - Scope note (deferred): editing images and rescheduling existing sends are NOT in this screen.
 
-Remaining: ④'s full overview is still separate future work.
+Note: ④'s full overview is now done — see the sub-project ④ section below.
 
 ---
 
@@ -257,6 +257,34 @@ Multi-select images → one Draft post each with shared batch defaults; fully lo
       drafts (captions+tag+target) shown in Library; page/nav render; whole-branch review clean.
 - Deferred (spec §7 — the seam for later): AI-assisted captions/tags (needs owner LLM opt-in),
   folder-path import, CSV manifest, carousel grouping.
+
+---
+
+## Content management — sub-project ④ Library overview  `[x] done`
+Design: `docs/design-library-overview.md` · Plan: `docs/superpowers/plans/2026-07-23-library-overview.md`
+Builds on the post-management screen. Adds to the Library (all client-side):
+- [x] Summary stat strip (Ready/Draft/Retired/Evergreen/One-time/total).
+- [x] Status filter (draft/ready/retired) + Kind filter (evergreen/one-time), AND-combined with the
+      existing tag/platform chips.
+- [x] Caption search; Sort (Newest / Recently posted / Least recently posted — never-posted last).
+- [x] "showing N of M" count. Verified in-browser; bulk-schedule / re-target / edit links intact.
+- Deferred: per-post performance rollup, saved views, pagination.
+
+---
+
+## Post-workflow batch (items 1–3, alongside ④)  `[x] done`
+Three quality-of-life features shipped in one design→build batch (subagent-driven, whole-batch review):
+- [x] **Compose → "From library"** — pick an existing post + channels + date/time to schedule it
+      (per-channel tz), reusing `bulkCreatePublications`. New `POST /api/posts/[id]/schedule`,
+      `<ComposeSwitcher>` toggle + `<ScheduleFromLibrary>` picker.
+      Design: `docs/design-compose-from-library.md`.
+- [x] **Manual metrics refresh** — migration `0004` adds `publications.metrics_refresh_requested_at`;
+      the worker honors it as a one-shot override of BOTH the interval and age gates, then clears it;
+      per-row "Refresh metrics" + Overview "Refresh all". Async-honest ("Queued — updates next worker run").
+      Design: `docs/design-metrics-refresh.md`.
+- [x] **Scheduled-view filters** — Overview Publications table extracted into `<PublicationQueue>` with
+      account / platform / status filters + "showing N of M". Design: `docs/design-scheduled-view-filters.md`.
+- [x] Owner action done: `0004` applied to the live DB.
 
 ---
 
