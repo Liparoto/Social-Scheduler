@@ -167,6 +167,30 @@ short-lived, worker-managed Cloudflare quick tunnel. Design: `docs/design-publis
 
 ---
 
+## Content management — sub-project ① Content model  `[x] Phase A done`
+Design: `docs/design-content-model.md` · Plan: `docs/superpowers/plans/2026-07-23-content-model-phase-a.md`
+
+### Phase A — data + automation logic  `[x] done`
+- [x] Migration `0002_content_model.sql`: `posts.content_kind`/`content_status`/`cooldown_days`
+      + tables `periods`, `post_periods`, `post_targets`, `caption_variants`; additive backfill
+      (existing posts → ready/evergreen, targets from non-failed publications, caption → variant).
+- [x] `worker/periods.py`: yearly (wrap-around) + one-off window math, evaluated in channel tz.
+- [x] Auto-fill eligibility gates: content_status, per-account targeting, one-time (once per
+      account), evergreen cooldown (per-post override), green/blackout periods (blackout wins).
+- [x] One-time auto-retirement once all targets have posted; dry-runs don't count.
+- [x] Caption-variant rotation at publish (platform-specific → generic rotated → fallback).
+- [x] Verified: 61 worker tests pass; each task TDD + reviewed; whole-branch review clean.
+- [ ] **Owner action:** run `python3 migrate.py` on the live DB to apply `0002` (the launcher
+      does this automatically). Backfills the existing Grand Teton post to ready/targeted.
+
+### Phase B — dashboard UI  `[ ]` (next plan)
+- [ ] Compose: content_kind, content_status, account targeting, period attach, caption variants.
+- [ ] Periods manager screen (create/edit the reusable window library).
+- [ ] Library: bulk re-target (fold a new account into existing content) + content overview
+      columns (kind/status/season/targets). "All" = snapshot-expand to current channels.
+
+---
+
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 - [ ] Facebook Pages publish + metrics adapter.
