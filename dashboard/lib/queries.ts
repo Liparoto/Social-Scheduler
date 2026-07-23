@@ -510,10 +510,21 @@ export function requestMetricsRefresh(
 ): "ok" | "not_found" | "not_posted" {
   const db = getDb();
   const pub = db
-    .prepare("SELECT status, is_dry_run FROM publications WHERE id = ?")
-    .get(publicationId) as { status: string; is_dry_run: number } | undefined;
+    .prepare("SELECT status, is_dry_run, remote_post_id FROM publications WHERE id = ?")
+    .get(publicationId) as
+    | { status: string; is_dry_run: number; remote_post_id: string | null }
+    | undefined;
   if (!pub) return "not_found";
-  if (pub.status !== "posted" || pub.is_dry_run === 1) return "not_posted";
+  // Must match what the worker can actually fetch (posted, real remote id, not dry-run),
+  // so a queued flag is always picked up and cleared — never stuck reading "Queued".
+  if (
+    pub.status !== "posted" ||
+    pub.is_dry_run === 1 ||
+    !pub.remote_post_id ||
+    pub.remote_post_id === "DRYRUN"
+  ) {
+    return "not_posted";
+  }
   db.prepare(
     "UPDATE publications SET metrics_refresh_requested_at = ? WHERE id = ?"
   ).run(nowIso(), publicationId);

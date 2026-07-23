@@ -165,3 +165,24 @@ def test_manual_flag_cleared_even_on_fetch_failure(conn, config):
         "SELECT metrics_refresh_requested_at FROM publications WHERE id=?", (pub,)
     ).fetchone()[0]
     assert flag is None  # cleared even though the fetch failed
+
+
+def test_manual_flag_overrides_age_window_and_is_cleared(conn, config, fake_client):
+    """A manual refresh is user-initiated and one-shot, so it bypasses the age cap
+    (metrics_max_age_days), not just the 6h interval — otherwise the flag would stick."""
+    ch = _channel(conn)
+    # Published 40 days ago — beyond the 30-day default window; never auto-refreshed.
+    old = (NOW - timedelta(days=40)).isoformat()
+    _, pub = _posted_pub(conn, ch, published_at=old)
+    assert run_metrics(conn, config, fake_client, NOW) == 0  # age-gated normally
+
+    conn.execute(
+        "UPDATE publications SET metrics_refresh_requested_at=? WHERE id=?",
+        (NOW.isoformat(), pub),
+    )
+    conn.commit()
+    assert run_metrics(conn, config, fake_client, NOW) == 1  # manual flag bypasses the age gate
+    flag = conn.execute(
+        "SELECT metrics_refresh_requested_at FROM publications WHERE id=?", (pub,)
+    ).fetchone()[0]
+    assert flag is None  # cleared, so the UI won't read "Queued" forever

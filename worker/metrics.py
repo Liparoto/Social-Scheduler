@@ -43,12 +43,17 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
           AND pub.remote_post_id IS NOT NULL
           AND pub.remote_post_id != 'DRYRUN'
           AND pub.published_at IS NOT NULL
-          AND pub.published_at >= ?
           AND (
-            NOT EXISTS (
-              SELECT 1 FROM post_metrics pm
-              WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
+            -- Automatic refresh: within the age window AND past the interval gate.
+            (
+              pub.published_at >= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM post_metrics pm
+                WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
+              )
             )
+            -- Manual refresh: user-initiated + one-shot, so it overrides BOTH the age
+            -- window and the interval gate (else the flag would never clear).
             OR pub.metrics_refresh_requested_at IS NOT NULL
           )
         """,
