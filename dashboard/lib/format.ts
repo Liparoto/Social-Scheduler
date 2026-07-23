@@ -38,6 +38,35 @@ export function humanBytes(n: number | null): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Plain-English description of a period's window. Shared by the server list and the
+// client form's live preview, so both read identically.
+export function describePeriod(p: {
+  recurs_yearly: number;
+  start_month: number | null;
+  start_day: number | null;
+  end_month: number | null;
+  end_day: number | null;
+  start_date: string | null;
+  end_date: string | null;
+}): string {
+  if (p.recurs_yearly) {
+    const sm = p.start_month ?? 1, sd = p.start_day ?? 1;
+    const em = p.end_month ?? 1, ed = p.end_day ?? 1;
+    const wraps = sm * 100 + sd > em * 100 + ed; // start after end -> spans the New Year
+    const s = `${MONTHS_SHORT[sm - 1]} ${sd}`;
+    const e = `${MONTHS_SHORT[em - 1]} ${ed}`;
+    return `${s} – ${e}, every year${wraps ? " (spans the New Year)" : ""}`;
+  }
+  const fmt = (iso: string | null) =>
+    iso
+      ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" })
+          .format(new Date(`${iso}T00:00:00`))
+      : "—";
+  return `${fmt(p.start_date)} – ${fmt(p.end_date)}`;
+}
+
 // Deterministic per-channel accent so each account reads as its own lane.
 // Golden-angle spacing keeps adjacent channel ids well-separated in hue.
 export function channelHue(channelId: number): number {
