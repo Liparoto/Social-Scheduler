@@ -68,3 +68,35 @@ def weekly_slots(
                     break
         cursor += timedelta(days=1)
     return slots
+
+
+def weekly_date_slots(
+    weekdays: set[int],
+    tz_name: str,
+    after: datetime,
+    band_times: list[tuple[int, int]],
+) -> list[datetime]:
+    """One UTC slot per (hour, minute) in `band_times`, each on the next matching
+    cadence day (one post per active day), strictly increasing and strictly after
+    `after`. Unlike weekly_slots, each slot's time comes from its own band entry.
+    """
+    tz = ZoneInfo(tz_name)
+    cursor = after.astimezone(tz).date()
+    prev = after
+    slots: list[datetime] = []
+    i = 0
+    horizon = len(band_times) * 8 + 366
+    for _ in range(horizon):
+        if i >= len(band_times):
+            break
+        if cursor.weekday() in weekdays:
+            hh, mm = band_times[i]
+            utc_dt = datetime.combine(cursor, dtime(hh, mm), tz).astimezone(UTC)
+            if utc_dt > prev:
+                slots.append(utc_dt)
+                prev = utc_dt
+                i += 1
+                cursor += timedelta(days=1)  # one auto-post per active day
+                continue
+        cursor += timedelta(days=1)
+    return slots
