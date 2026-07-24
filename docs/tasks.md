@@ -403,11 +403,15 @@ without touching the database directly.
 - [x] Originals and IG-conformed image copies, named `postID_caption_position`.
 - [x] `Export-Mac.command` double-click launcher — mirrors Start/Update's voice, opens the
       finished folder in Finder, never touches the database.
+- [x] `Export-Windows.bat` — same launcher for Windows clones (opens File Explorer). Added
+      `tzdata` to `requirements.txt` so `zoneinfo` has a database on Windows, where the OS
+      ships none — without it the local-time columns (and the worker's scheduling) fall back
+      to UTC. Note: the `.bat` mirrors the verified Mac launcher but has not been run on an
+      actual Windows machine.
 - [x] Secrets excluded by allow-list (`CHANNEL_COLUMNS` in `worker/export/collect.py`); guarded
       by both a name-specific test and a structural test that rejects any future
       token/secret/password/key/credential-shaped column, plus a grep over a real export.
-- [ ] Future: re-import from `export.json`; `--since` / `--channel` filters;
-      `Export-Windows.bat`.
+- [ ] Future: re-import from `export.json`; `--since` / `--channel` filters.
 
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.

@@ -64,6 +64,8 @@ or it isn't a git checkout, it stops with a plain explanation and changes nothin
 - **macOS:** double-click **`Export-Mac.command`** — saves every post, image, and stat into a
   dated folder in `~/Documents/SocialScheduler Exports/`, ready to drag into Google Drive.
   Read-only: it never changes or posts anything.
+- **Windows:** double-click **`Export-Windows.bat`** — same export, into
+  `%USERPROFILE%\Documents\SocialScheduler Exports\`, opened in File Explorer when done.
 
 **Manual (for developers):**
 1. Copy `.env.example` → `.env` and fill in your own Meta app + per-channel credentials.
