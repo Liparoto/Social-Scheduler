@@ -72,7 +72,10 @@ def unlinked_filename(asset: ExportedAsset) -> str:
     it sorts and reads the same way as post-linked images do.
     """
     ext = Path(asset.storage_path).suffix.lower() or ".bin"
-    return f"{asset.asset_id:04d}_{slugify(asset.original_filename)}{ext}"
+    # Slugify only the stem (filename without extension) so "Orphan Shot.jpg"
+    # becomes "orphan-shot", not "orphan-shot-jpg".
+    stem = Path(asset.original_filename).stem if asset.original_filename else None
+    return f"{asset.asset_id:04d}_{slugify(stem)}{ext}"
 
 
 def copy_images(bundle: ExportBundle, asset_root: Path, out_dir: Path) -> CopyResult:

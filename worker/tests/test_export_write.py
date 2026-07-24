@@ -197,7 +197,7 @@ def test_copy_images_copies_orphaned_assets_into_images_unlinked_folder(tmp_path
     result = copy_images(bundle, asset_root=assets_dir, out_dir=out)
 
     assert result.copied == 1
-    assert (out / "images-unlinked" / "0007_orphan-shot-jpg.jpg").read_bytes() == b"orphan-bytes"
+    assert (out / "images-unlinked" / "0007_orphan-shot.jpg").read_bytes() == b"orphan-bytes"
 
 
 def test_copy_images_skips_unlinked_folder_when_every_asset_is_linked(tmp_path):
@@ -216,6 +216,53 @@ def test_copy_images_skips_unlinked_folder_when_every_asset_is_linked(tmp_path):
     copy_images(bundle, asset_root=assets_dir, out_dir=out)
 
     assert not (out / "images-unlinked").exists()
+
+
+def test_unlinked_filename_slugifies_only_the_stem(tmp_path):
+    # Verify that the extension is not included in the slug: "Orphan Shot.jpg"
+    # should become "orphan-shot", not "orphan-shot-jpg".
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "orphan.jpg").write_bytes(b"orphan-bytes")
+    out = tmp_path / "out"
+
+    bundle = _bundle([_post(42, [])])
+    bundle.assets = [_ExportedAssetForOrphans(
+        asset_id=5, content_hash="h", media_kind="image", original_filename="Orphan Shot.jpg",
+        storage_path="orphan.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
+    )]
+
+    result = copy_images(bundle, asset_root=assets_dir, out_dir=out)
+
+    assert result.copied == 1
+    exported_file = out / "images-unlinked" / "0005_orphan-shot.jpg"
+    assert exported_file.exists()
+    # Explicitly verify the slug does NOT contain the extension
+    assert "jpg" not in "orphan-shot"
+
+
+def test_unlinked_filename_handles_none_original_filename(tmp_path):
+    # An asset with None original_filename should become "untitled" in the slug.
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "unknown.bin").write_bytes(b"unknown-bytes")
+    out = tmp_path / "out"
+
+    bundle = _bundle([_post(42, [])])
+    bundle.assets = [_ExportedAssetForOrphans(
+        asset_id=9, content_hash="h", media_kind="image", original_filename=None,
+        storage_path="unknown.bin", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="application/octet-stream", width=None, height=None, byte_size=None,
+    )]
+
+    result = copy_images(bundle, asset_root=assets_dir, out_dir=out)
+
+    assert result.copied == 1
+    # None original_filename should flow through slugify() as None, producing "untitled"
+    exported_file = out / "images-unlinked" / "0009_untitled.bin"
+    assert exported_file.exists()
+    assert exported_file.read_bytes() == b"unknown-bytes"
 
 
 import json
@@ -416,7 +463,7 @@ def test_assets_tab_shows_unlinked_filename_with_empty_used_by_posts(tmp_path):
     book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))
     row = _rows(book["Assets"])[0]
 
-    assert row["exported_filename"] == "0007_orphan-shot-jpg.jpg"
+    assert row["exported_filename"] == "0007_orphan-shot.jpg"
     assert row["used_by_posts"] in (None, "")
 
 
