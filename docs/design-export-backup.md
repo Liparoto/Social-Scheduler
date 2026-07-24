@@ -101,9 +101,21 @@ Running the export creates one dated, self-contained folder:
 │   ├── 0042_shoulder-mobility-tips_1.jpg
 │   ├── 0042_shoulder-mobility-tips_2.jpg
 │   └── 0051_balance-screening-week_1.jpg
-└── images-published/               only assets whose IG copy differs from the original
-    └── 0042_shoulder-mobility-tips_1.jpg
+├── images-published/               only assets whose IG copy differs from the original
+│   └── 0042_shoulder-mobility-tips_1.jpg
+└── images-unlinked/                assets belonging to no post (see below)
+    └── 0007_orphan-shot.jpg
 ```
+
+### Unlinked assets
+
+An asset can end up attached to no post at all — an upload abandoned before the post was
+created, or a post that was later deleted (`post_assets` cascades on delete, but `assets`
+is `ON DELETE RESTRICT`, so the image row outlives its post). Those originals are exactly
+what a backup exists to preserve, so they are exported to `images-unlinked/` as
+`{asset_id}_{original-filename-slug}{ext}`. The folder is created only when there is at
+least one. In the `Assets` tab they appear with an empty `used_by_posts`, which is what
+marks them as belonging to nothing.
 
 Finder opens on the folder when the run completes.
 
@@ -125,8 +137,10 @@ the workbook open.
 
 ### Timestamps
 
-Every timestamp column renders in the relevant channel's IANA timezone, with the raw
-UTC value in an adjacent column. The database stores UTC; a spreadsheet that silently
+The `Sends` tab renders each timestamp in the relevant channel's IANA timezone with the
+raw UTC value in an adjacent column. Columns elsewhere that carry a bare stored value are
+named with a `_utc` suffix (`created_at_utc`, `last_posted_at_utc`, `fetched_at_utc`) so
+the reader is never left guessing which zone a cell is in. The database stores UTC; a spreadsheet that silently
 displayed UTC would cause every send time to be misread. Where no channel applies
 (post `created_at`), the local system timezone is used.
 
@@ -137,7 +151,7 @@ displayed UTC would cause every send time to be misread. Where no channel applie
 `post_id` · `caption` · `first_comment` · `post_type` · `content_kind` ·
 `content_status` · `status` · `tags` · `green_periods` · `blackout_periods` ·
 `cooldown_days` · `target_channels` · `image_files` · `times_posted` ·
-`last_posted_at` · `total_reach` · `total_likes` · `created_by` · `created_at`
+`last_posted_at_utc` · `total_reach` · `total_likes` · `created_by` · `created_at_utc`
 
 The primary tab, designed to be useful alone. Multi-value fields (`tags`,
 `target_channels`, `image_files`) are comma-joined; `image_files` preserves
@@ -163,7 +177,7 @@ shortcode, and cannot be turned into a public URL offline.
 
 ### `Metrics` — one row per snapshot
 
-`publication_id` · `post_id` · `fetched_at` · `reach` · `impressions` · `likes` ·
+`publication_id` · `post_id` · `fetched_at_utc` · `reach` · `impressions` · `likes` ·
 `comments` · `saves` · `shares` · `video_views`
 
 Every snapshot is kept, not only the most recent, so accumulation over a post's 30-day
@@ -226,6 +240,15 @@ This is a backup tool, so it must be structurally incapable of making things wor
   is flagged `MISSING` in the `Assets` tab and counted in `README.txt`. A partial
   backup known to be partial beats a crash and no backup at all.
 - **Never logs secrets.** Consistent with existing project logging rules.
+- **Control characters are stripped from workbook cells.** openpyxl refuses to write
+  them, and a caption pasted from Word or a PDF routinely contains one — unsanitized, a
+  single such character would abort the entire export. `export.json` keeps the original
+  text untouched, so nothing is actually lost.
+- **One read transaction spans the whole collection.** Without it each query would take
+  its own WAL snapshot, and a publish the worker commits mid-export could yield a
+  self-inconsistent backup — a send whose post is missing from the same file.
+- **No traceback ever reaches the user.** Unexpected errors are caught, reported in
+  plain English, and exit non-zero. This is a tool someone double-clicks.
 
 ### Error handling
 
