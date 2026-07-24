@@ -159,11 +159,19 @@ export function PublicationQueue({
                       ) : null}
                     </span>
                     {p.status === "posted" && p.m_fetched_at ? (
-                      <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
-                        <span title="Reach">◎ {p.m_reach ?? "—"}</span>
-                        <span title="Saves">⤓ {p.m_saves ?? "—"}</span>
-                        <span title="Likes">♥ {p.m_likes ?? "—"}</span>
-                      </p>
+                      p.channel_platform === "facebook" ? (
+                        <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
+                          <span title="Reactions">♥ {p.m_likes ?? "—"}</span>
+                          <span title="Comments">💬 {p.m_comments ?? "—"}</span>
+                          <span title="Shares">↪ {p.m_shares ?? "—"}</span>
+                        </p>
+                      ) : (
+                        <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
+                          <span title="Reach">◎ {p.m_reach ?? "—"}</span>
+                          <span title="Saves">⤓ {p.m_saves ?? "—"}</span>
+                          <span title="Likes">♥ {p.m_likes ?? "—"}</span>
+                        </p>
+                      )
                     ) : p.status === "posted" && p.is_dry_run !== 1 ? (
                       <p className="data mt-1 text-[10px] text-faint">metrics pending…</p>
                     ) : null}

@@ -512,6 +512,8 @@ export interface PublicationRow extends Publication {
   m_reach: number | null;
   m_saves: number | null;
   m_likes: number | null;
+  m_comments: number | null;
+  m_shares: number | null;
   m_fetched_at: string | null;
 }
 
@@ -531,6 +533,8 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          lm.reach      AS m_reach,
          lm.saves      AS m_saves,
          lm.likes      AS m_likes,
+         lm.comments   AS m_comments,
+         lm.shares     AS m_shares,
          lm.fetched_at AS m_fetched_at
        FROM publications pub
        JOIN posts p    ON p.id = pub.post_id
