@@ -122,7 +122,7 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
     # Refresh metrics for already-published posts (throttled per publication).
     from .metrics import run_metrics
 
-    run_metrics(conn, config, client, now, logger=logger)
+    run_metrics(conn, config, client, now, logger=logger, client_for=client_for)
     return processed
 
 

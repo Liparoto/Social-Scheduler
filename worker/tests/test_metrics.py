@@ -186,3 +186,88 @@ def test_manual_flag_overrides_age_window_and_is_cleared(conn, config, fake_clie
         "SELECT metrics_refresh_requested_at FROM publications WHERE id=?", (pub,)
     ).fetchone()[0]
     assert flag is None  # cleared, so the UI won't read "Queued" forever
+
+
+def _posted_fb_pub(conn, make_publication, now):
+    """A Facebook publication already posted, due for a metrics fetch."""
+    pub = make_publication(platform="facebook", now=now)
+    conn.execute(
+        """UPDATE publications
+              SET status='posted', is_dry_run=0, remote_post_id='page_1',
+                  published_at=?
+            WHERE id=?""",
+        (now.isoformat(), pub["id"]),
+    )
+    conn.commit()
+    return conn.execute(
+        "SELECT * FROM publications WHERE id = ?", (pub["id"],)
+    ).fetchone()
+
+
+def test_facebook_metrics_use_the_page_endpoints_and_map_to_our_columns(
+    conn, config, fake_client, make_publication
+):
+    now = datetime.now(timezone.utc)
+    pub = _posted_fb_pub(conn, make_publication, now)
+
+    assert run_metrics(conn, config, fake_client, now) == 1
+
+    kinds = [k for k, _ in fake_client.calls]
+    assert "page_summary" in kinds
+    assert "insights" not in kinds  # the IG media-insights call must not be used
+
+    row = conn.execute(
+        "SELECT * FROM post_metrics WHERE publication_id = ?", (pub["id"],)
+    ).fetchone()
+    assert row["likes"] == 12       # reactions total
+    assert row["comments"] == 3
+    assert row["shares"] == 2
+    assert row["reach"] == 40       # post_total_media_view_unique
+    assert row["saves"] is None     # an Instagram-only concept
+
+
+def test_a_deprecated_insight_metric_still_records_the_stable_counts(
+    conn, config, fake_client, make_publication
+):
+    # Meta retired a batch of post-insight names on 2026-06-15 and keeps changing them.
+    # An invalid-metric error must NOT cost us the reactions/comments/shares we can get.
+    now = datetime.now(timezone.utc)
+    pub = _posted_fb_pub(conn, make_publication, now)
+    fake_client.fail_on.add("page_insights")
+
+    assert run_metrics(conn, config, fake_client, now) == 1
+
+    row = conn.execute(
+        "SELECT * FROM post_metrics WHERE publication_id = ?", (pub["id"],)
+    ).fetchone()
+    assert row["likes"] == 12
+    assert row["comments"] == 3
+    assert row["reach"] is None      # unavailable, stored as unknown rather than 0
+
+
+def test_losing_the_stable_counts_skips_the_snapshot(
+    conn, config, fake_client, make_publication
+):
+    now = datetime.now(timezone.utc)
+    pub = _posted_fb_pub(conn, make_publication, now)
+    fake_client.fail_on.add("page_summary")
+
+    assert run_metrics(conn, config, fake_client, now) == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM post_metrics WHERE publication_id = ?", (pub["id"],)
+    ).fetchone()[0] == 0
+
+
+def test_metrics_pick_the_client_for_each_channels_platform(
+    conn, config, fake_client, make_publication
+):
+    now = datetime.now(timezone.utc)
+    _posted_fb_pub(conn, make_publication, now)
+    seen = []
+
+    def client_for(platform):
+        seen.append(platform)
+        return fake_client
+
+    assert run_metrics(conn, config, fake_client, now, client_for=client_for) == 1
+    assert seen == ["facebook"]
