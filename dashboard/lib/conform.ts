@@ -17,11 +17,6 @@ export interface ConformResult {
   lowRes: boolean;
 }
 
-/** Nearest in-range ratio for an out-of-range image (w/h). */
-function targetRatio(ratio: number): number {
-  return ratio < IG_MIN_RATIO ? IG_MIN_RATIO : IG_MAX_RATIO;
-}
-
 async function encodeUnderLimit(pipe: Sharp): Promise<Buffer> {
   for (const quality of [90, 82, 74, 66, 58, 50]) {
     const out = await pipe.clone().jpeg({ quality, mozjpeg: true }).toBuffer();
@@ -34,18 +29,26 @@ export async function conformImage(
   input: Buffer,
   mode: ConformMode = "crop",
 ): Promise<ConformResult> {
-  // Normalize: honor EXIF rotation, strip to sRGB, cap width at 1440.
-  const base = sharp(input).rotate().toColourspace("srgb");
-  const meta = await base.metadata();
+  // Normalize: honor EXIF rotation, strip to sRGB. This MUST be materialized
+  // into a real buffer before we read metadata — sharp's .metadata() reflects
+  // the dimensions of whatever has actually been *executed*, not operations
+  // merely queued on a pipeline (.rotate(), .resize(), etc). Reading metadata
+  // right after queuing .rotate() (without executing it) returns the source's
+  // PRE-rotation width/height, which are swapped for any EXIF orientation tag
+  // that requires a 90°/270° turn (tags 5-8 — routine for vertical phone
+  // photos). Executing first guarantees srcW/srcH below are the true,
+  // post-rotation pixel dimensions that every downstream calculation depends on.
+  const rotated = await sharp(input).rotate().toColourspace("srgb").toBuffer();
+  const meta = await sharp(rotated).metadata();
   const srcW = meta.width ?? 0;
   const srcH = meta.height ?? 0;
   const ratio = srcH === 0 ? 1 : srcW / srcH;
   const lowRes = srcW < IG_MIN_WIDTH;
 
-  let pipe = base.clone();
+  let pipe = sharp(rotated);
   // Track the working dimensions ourselves: sharp's metadata() reflects the
-  // *input* image, not pipeline operations queued via resize()/rotate(), so
-  // querying it again after .resize() still reports the pre-resize size.
+  // *input* image, not pipeline operations queued via resize(), so querying
+  // it again after .resize() still reports the pre-resize size.
   let curW = srcW;
   let curH = srcH;
   if (srcW > IG_MAX_WIDTH) {
@@ -59,17 +62,22 @@ export async function conformImage(
 
   if (!inRange) {
     resolvedMode = mode === "pad" ? "pad" : "crop";
-    const tr = targetRatio(ratio);
     // Work from the (possibly downscaled) current dimensions.
     const w = curW;
     const h = curH;
+    const tooWide = ratio > IG_MAX_RATIO;
     if (resolvedMode === "crop") {
-      // Center-crop to target ratio.
+      // Center-crop toward the target bound, shrinking only one dimension.
+      // Math.floor on the constrained dimension guarantees the resulting
+      // ratio lands strictly within [MIN, MAX] even after integer rounding
+      // (Math.round can push a ratio a hair past the bound it's supposed to
+      // satisfy, e.g. 3000x1000 landing at ~1.9104 > 1.91).
       let cw = w;
-      let ch = Math.round(w / tr);
-      if (ch > h) {
-        ch = h;
-        cw = Math.round(h * tr);
+      let ch = h;
+      if (tooWide) {
+        cw = Math.floor(h * IG_MAX_RATIO);
+      } else {
+        ch = Math.floor(w / IG_MIN_RATIO);
       }
       pipe = pipe.extract({
         left: Math.floor((w - cw) / 2),
@@ -78,12 +86,14 @@ export async function conformImage(
         height: ch,
       });
     } else {
-      // Pad (letterbox) to target ratio on a white background.
+      // Pad (letterbox) toward the target bound, growing only one dimension.
+      // Math.ceil guarantees the resulting ratio lands within [MIN, MAX].
       let pw = w;
-      let ph = Math.round(w / tr);
-      if (ph < h) {
-        ph = h;
-        pw = Math.round(h * tr);
+      let ph = h;
+      if (tooWide) {
+        ph = Math.ceil(w / IG_MAX_RATIO);
+      } else {
+        pw = Math.ceil(h * IG_MIN_RATIO);
       }
       pipe = pipe.extend({
         top: Math.floor((ph - h) / 2),
