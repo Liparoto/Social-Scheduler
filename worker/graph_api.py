@@ -213,6 +213,14 @@ class GraphClient:
             out["fb_shares"] = shares["count"]
         return out
 
+    def get_page_info(self, page_id: str, token: str) -> dict:
+        """Minimal read-only node fetch, used by preflight to prove a Page token and
+        Page id are valid. Facebook Pages have no content_publishing_limit endpoint,
+        so this is the FB equivalent of that IG quota check — it proves reachability,
+        not quota.
+        """
+        return self._get(page_id, {"fields": "id,name", "access_token": token})
+
     def get_page_post_insights(self, post_id: str, token: str, metrics: list[str]) -> dict:
         """Insight metrics for a Page post. Returns {metric_name: value}.
 

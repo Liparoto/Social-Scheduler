@@ -1,9 +1,17 @@
 """Preflight: verify channel credentials WITHOUT publishing anything.
 
-For each configured channel (or one via --channel), calls the read-only
-content_publishing_limit endpoint. A success proves the access token and the IG user
-id are valid and that content-publishing is reachable; it also reports the account's
-real remaining quota. Publishes nothing.
+For each configured channel (or one via --channel), checks that platform's read-only
+proof of reachability:
+  * Instagram — the content_publishing_limit endpoint. A success proves the access
+    token and IG user id are valid and content-publishing is reachable; it also
+    reports the account's real remaining quota.
+  * Facebook Pages — a plain node read (id, name). Pages have no
+    content_publishing_limit endpoint, so this instead proves the Page token and
+    Page id are valid and the Page is reachable. There is no publish quota to report.
+
+Uses ClientRegistry so each channel is checked against the correct Graph host for its
+platform (Facebook is always graph.facebook.com; Instagram uses the install's
+META_GRAPH_BASE).
 
     python3 -m worker.preflight              # check every active channel
     python3 -m worker.preflight --channel 1  # check just channel #1
@@ -16,14 +24,59 @@ from __future__ import annotations
 import sys
 
 from . import db
+from .clients import ClientRegistry
 from .config import Config
-from .graph_api import GraphClient, GraphAPIError
+from .graph_api import GraphAPIError
+
+
+def check_channels(rows, registry: ClientRegistry, *, print_fn=print) -> bool:
+    """Check every channel row. Returns True iff all of them are reachable.
+
+    Split out from main() so tests can drive it against a fake ClientRegistry/client
+    without touching real env/DB wiring.
+    """
+    all_ok = True
+    for ch in rows:
+        name = f"#{ch['id']} {ch['account_name']} ({ch['platform']})"
+        if not ch["access_token"]:
+            print_fn(f"  ✗ {name}: no access token set")
+            all_ok = False
+            continue
+        if not ch["remote_account_id"]:
+            print_fn(f"  ✗ {name}: no account id set")
+            all_ok = False
+            continue
+        client = registry.for_platform(ch["platform"])
+        try:
+            if ch["platform"] == "facebook":
+                info = client.get_page_info(ch["remote_account_id"], ch["access_token"])
+                page_name = info.get("name", ch["account_name"])
+                print_fn(
+                    f"  ✓ {name}: token OK — Page reachable "
+                    f"({page_name}; Pages have no publish quota)"
+                )
+            else:
+                usage, total, duration = client.get_content_publishing_limit(
+                    ch["remote_account_id"], ch["access_token"]
+                )
+                hours = (duration or 0) // 3600
+                print_fn(
+                    f"  ✓ {name}: token OK — published {usage}/{total} in the last "
+                    f"{hours}h window"
+                )
+        except GraphAPIError as exc:
+            print_fn(f"  ✗ {name}: {exc}")
+            all_ok = False
+        except Exception as exc:  # noqa: BLE001
+            print_fn(f"  ✗ {name}: {exc}")
+            all_ok = False
+    return all_ok
 
 
 def main() -> int:
     config = Config.from_env()
     conn = db.connect(config.database_path)
-    client = GraphClient(config.graph_version, base_url=config.graph_base)
+    registry = ClientRegistry(config)
 
     channel_id = None
     if "--channel" in sys.argv:
@@ -43,32 +96,7 @@ def main() -> int:
         return 0
 
     print(f"Graph API {config.graph_version} — checking {len(rows)} channel(s)\n")
-    all_ok = True
-    for ch in rows:
-        name = f"#{ch['id']} {ch['account_name']} ({ch['platform']})"
-        if not ch["access_token"]:
-            print(f"  ✗ {name}: no access token set")
-            all_ok = False
-            continue
-        if not ch["remote_account_id"]:
-            print(f"  ✗ {name}: no account id set")
-            all_ok = False
-            continue
-        try:
-            usage, total, duration = client.get_content_publishing_limit(
-                ch["remote_account_id"], ch["access_token"]
-            )
-            hours = (duration or 0) // 3600
-            print(
-                f"  ✓ {name}: token OK — published {usage}/{total} in the last "
-                f"{hours}h window"
-            )
-        except GraphAPIError as exc:
-            print(f"  ✗ {name}: {exc}")
-            all_ok = False
-        except Exception as exc:  # noqa: BLE001
-            print(f"  ✗ {name}: {exc}")
-            all_ok = False
+    all_ok = check_channels(rows, registry)
 
     print()
     print("All channels reachable." if all_ok else "Some channels failed — see above.")

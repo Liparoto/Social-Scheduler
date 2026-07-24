@@ -62,10 +62,15 @@ class FakeGraphClient:
     """Same method surface as GraphClient; records calls, no network."""
 
     def __init__(self, limit=(0, 50, 86400), fail_on=None, insights=None,
-                 page_summary=None, page_insights=None):
+                 page_summary=None, page_insights=None, fail_child_index=None):
         self.calls = []
         self.limit = limit
         self.fail_on = set(fail_on or [])
+        # 1-based index of the unpublished carousel child (create_page_photo(published=False)
+        # call) that should fail, e.g. fail_child_index=3 fails the 3rd child upload. Lets
+        # tests exercise "child N of M fails" without failing every "page_child" call.
+        self.fail_child_index = fail_child_index
+        self._child_n = 0
         self.insights = insights or {
             "reach": 100, "likes": 10, "comments": 2, "saved": 5, "shares": 1,
         }
@@ -117,11 +122,18 @@ class FakeGraphClient:
     # -- Facebook Page surface -----------------------------------------------------
     def create_page_photo(self, page_id, image_url, token, *, caption=None, published=True):
         self.calls.append(("page_photo" if published else "page_child", image_url))
-        if "page_photo" in self.fail_on:
-            raise RuntimeError("page photo boom")
-        self._n += 1
         if published:
+            if "page_photo" in self.fail_on:
+                raise RuntimeError("page photo boom")
+            self._n += 1
             return {"id": f"photo-{self._n}", "post_id": f"page_{self._n}"}
+        # Unpublished path (carousel children): its own fail_on key ("page_child"), plus
+        # fail_child_index to fail one specific child instead of the whole set — otherwise
+        # "child 3 of 5 fails, 1-2 already uploaded" is untestable.
+        self._child_n += 1
+        if "page_child" in self.fail_on or self.fail_child_index == self._child_n:
+            raise RuntimeError(f"page child boom (child {self._child_n})")
+        self._n += 1
         return {"id": f"photo-{self._n}"}
 
     def create_page_feed_post(self, page_id, token, *, message=None, attached_media=None):
@@ -130,6 +142,12 @@ class FakeGraphClient:
             raise RuntimeError("page feed boom")
         self._n += 1
         return f"page_{self._n}"
+
+    def get_page_info(self, page_id, token):
+        self.calls.append(("page_info", page_id))
+        if "page_info" in self.fail_on:
+            raise RuntimeError("page info boom")
+        return {"id": page_id, "name": "Test FB Page"}
 
     def get_page_post_summary(self, post_id, token):
         self.calls.append(("page_summary", post_id))
