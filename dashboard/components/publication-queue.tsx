@@ -143,7 +143,21 @@ export function PublicationQueue({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <StatusBadge status={p.status} dryRun={p.is_dry_run === 1} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <StatusBadge status={p.status} dryRun={p.is_dry_run === 1} />
+                      {p.is_held === 1 ? (
+                        <span
+                          className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium"
+                          style={{
+                            color: "var(--color-status-draft)",
+                            backgroundColor:
+                              "color-mix(in srgb, var(--color-status-draft) 12%, white)",
+                          }}
+                        >
+                          Held
+                        </span>
+                      ) : null}
+                    </span>
                     {p.status === "posted" && p.m_fetched_at ? (
                       <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
                         <span title="Reach">◎ {p.m_reach ?? "—"}</span>
@@ -170,6 +184,9 @@ export function PublicationQueue({
                       status={p.status}
                       isDryRun={p.is_dry_run === 1}
                       workerOnline={workerOnline}
+                      isHeld={p.is_held === 1}
+                      scheduledAt={p.scheduled_at}
+                      channelTimezone={p.channel_timezone}
                     />
                   </td>
                 </tr>
