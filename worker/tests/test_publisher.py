@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from worker import db
 from worker.publisher import publish_one
+from worker.tests.conftest import FakeGraphClient
 
 NOW = datetime(2026, 7, 22, 18, 0, 0, tzinfo=timezone.utc)
 
@@ -225,3 +226,90 @@ def test_caption_selection_prefers_platform_then_rotates_generic(conn, config, m
                  (post_id, "instagram", "ig-special", 5))
     conn.commit()
     assert _select_caption(conn, post_id, "instagram", 0) == "ig-special"
+
+
+# ---- Facebook Pages --------------------------------------------------------------
+def test_facebook_single_publishes_in_one_call_and_stores_the_feed_post_id(
+    conn, config, fake_client, make_publication
+):
+    pub = make_publication(platform="facebook")
+    out = publish_one(conn, pub, config, fake_client, dry_run=False)
+
+    assert out.result == "posted"
+    kinds = [k for k, _ in fake_client.calls]
+    # No "limit": Facebook Pages have no content_publishing_limit endpoint.
+    # No container/status polling either — a Page photo publishes in one call.
+    assert kinds == ["page_photo"]
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "posted"
+    # post_id (the feed post), NOT id (the photo) — insights are read against the post.
+    assert row["remote_post_id"] == "page_1"
+
+
+def test_facebook_carousel_uploads_unpublished_photos_then_one_feed_post(
+    conn, config, fake_client, make_publication
+):
+    pub = make_publication(post_type="carousel", n_assets=3, platform="facebook")
+    out = publish_one(conn, pub, config, fake_client, dry_run=False)
+
+    assert out.result == "posted"
+    kinds = [k for k, _ in fake_client.calls]
+    assert kinds == ["page_child", "page_child", "page_child", "page_feed"]
+    # The feed post attaches exactly the media_fbids returned by the uploads.
+    attached = [arg for k, arg in fake_client.calls if k == "page_feed"][0]
+    assert attached == ("photo-1", "photo-2", "photo-3")
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["remote_post_id"] == "page_4"
+
+
+def test_facebook_publish_failure_is_visible_and_retried(
+    conn, config, fake_client, make_publication
+):
+    pub = make_publication(platform="facebook")
+    fake_client.fail_on.add("page_photo")
+    out = publish_one(conn, pub, config, fake_client, dry_run=False)
+
+    assert out.result == "retry_scheduled"
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "scheduled"
+    assert row["attempt_count"] == 1
+    assert "page photo boom" in row["last_error"]
+    assert row["next_retry_at"] is not None
+
+
+def test_facebook_dry_run_publishes_nothing(
+    conn, config, fake_client, make_publication
+):
+    pub = make_publication(platform="facebook")
+    out = publish_one(conn, pub, config, fake_client, dry_run=True)
+
+    assert out.result == "dry_run"
+    assert fake_client.calls == []
+    assert out.plan["platform"] == "facebook"
+    assert out.plan["account_id"] == "PAGE1"
+
+
+def test_facebook_multi_photo_mid_carousel_child_failure_leaves_it_retryable(
+    conn, config, make_publication
+):
+    """Photo 3 of 5 fails to upload. Photos 1-2 are already uploaded (unpublished) —
+    those orphans are a documented gotcha (docs/meta-setup.md), not cleaned up here — but
+    the feed post itself must NEVER be created from a partial set, and the publication
+    must come back visibly retryable rather than silently stuck or double-posted.
+    """
+    client = FakeGraphClient(fail_child_index=3)
+    pub = make_publication(post_type="carousel", n_assets=5, platform="facebook")
+    out = publish_one(conn, pub, config, client, dry_run=False)
+
+    assert out.result == "retry_scheduled"
+    kinds = [k for k, _ in client.calls]
+    # Two successful children, then the third fails — and publishing stops right there.
+    assert kinds == ["page_child", "page_child", "page_child"]
+    assert "page_feed" not in kinds  # never posts the feed with a partial media set
+
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "scheduled"
+    assert row["attempt_count"] == 1
+    assert row["last_error"] is not None
+    assert "child 3" in row["last_error"]
+    assert row["next_retry_at"] is not None

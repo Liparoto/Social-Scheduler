@@ -76,6 +76,10 @@ class Config:
     # often than this interval per publication (keeps API usage sane).
     metrics_max_age_days: int = 30
     metrics_min_interval_hours: int = 6
+    # Facebook Page-post insight metric names. Meta deprecated a large batch on
+    # 2026-06-15 and keeps renaming them, so this is configurable and read as
+    # best-effort: if the name is invalid we store null instead of failing.
+    fb_post_insight_metrics: str = "post_total_media_view_unique"
     # Publish delivery: Meta downloads images from a public URL, so at publish time the
     # worker serves the local asset store on 127.0.0.1:<asset_port> and exposes it via a
     # short-lived tunnel. See docs/design-publish-delivery.md.
@@ -116,6 +120,9 @@ class Config:
             poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "30")),
             metrics_max_age_days=int(os.environ.get("METRICS_MAX_AGE_DAYS", "30")),
             metrics_min_interval_hours=int(os.environ.get("METRICS_MIN_INTERVAL_HOURS", "6")),
+            fb_post_insight_metrics=os.environ.get(
+                "FB_POST_INSIGHT_METRICS", "post_total_media_view_unique"
+            ),
             asset_port=int(os.environ.get("ASSET_PORT", "8787")),
             cloudflared_path=os.environ.get("CLOUDFLARED_PATH", "cloudflared"),
             tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),

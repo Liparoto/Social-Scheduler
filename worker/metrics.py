@@ -1,4 +1,4 @@
-"""Metrics fetch job.
+"""Metrics fetch job (Instagram media insights + Facebook Page-post counts).
 
 For each real (non-dry-run) published publication, periodically fetch its insights
 from the Graph API and append a time-series row to post_metrics. Those rows feed the
@@ -21,6 +21,7 @@ REQUESTED_METRICS = ["reach", "likes", "comments", "saved", "shares"]
 
 # Map insight names -> our post_metrics columns.
 COLUMN_MAP = {
+    # Instagram media insights
     "reach": "reach",
     "impressions": "impressions",
     "likes": "likes",
@@ -29,6 +30,14 @@ COLUMN_MAP = {
     "shares": "shares",
     "video_views": "video_views",
     "plays": "video_views",
+    # Facebook Page posts: stable edge summaries...
+    "fb_reactions": "likes",
+    "fb_comments": "comments",
+    "fb_shares": "shares",
+    # ...plus best-effort insight names for reach/views (see Config.fb_post_insight_metrics).
+    "post_total_media_view_unique": "reach",
+    "post_impressions_unique": "reach",
+    "post_impressions": "impressions",
 }
 
 
@@ -66,9 +75,15 @@ def _record(conn, publication_id: int, fetched_at: str, insights: dict) -> None:
         "reach": None, "impressions": None, "likes": None, "comments": None,
         "saves": None, "shares": None, "video_views": None,
     }
+    # Several Meta metric names intentionally map to the same column (e.g. both
+    # post_total_media_view_unique and post_impressions_unique -> reach), so an operator
+    # may reasonably configure more than one. The FIRST mapped value wins per column —
+    # relying on `insights` iteration order to reflect the operator's configured
+    # preference (see _fetch_facebook) — rather than the last one Meta happened to
+    # return. `0` is a legitimate value, so only skip when the column is still unset.
     for name, value in insights.items():
         col = COLUMN_MAP.get(name)
-        if col:
+        if col and cols[col] is None and value is not None:
             cols[col] = value
     conn.execute(
         """INSERT INTO post_metrics
@@ -84,9 +99,52 @@ def _record(conn, publication_id: int, fetched_at: str, insights: dict) -> None:
     conn.commit()
 
 
-def run_metrics(conn, config: Config, client, now, logger=None) -> int:
+def _fetch_instagram(client, remote_post_id: str, token: str, config, logger, pub_id) -> dict:
+    return client.get_media_insights(remote_post_id, token, REQUESTED_METRICS)
+
+
+def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub_id) -> dict:
+    """Stable counts first, then reach/views as best-effort.
+
+    Reactions/comments/shares are plain edge summaries and are required — if they fail,
+    the caller skips this snapshot. The insights call is the fragile one (Meta keeps
+    retiring metric names), so a failure there only costs us reach: we log it and record
+    the counts we did get.
+    """
+    summary = client.get_page_post_summary(remote_post_id, token)
+    metrics = [m.strip() for m in config.fb_post_insight_metrics.split(",") if m.strip()]
+    insights: dict = {}
+    if metrics:
+        try:
+            fetched = client.get_page_post_insights(remote_post_id, token, metrics)
+        except Exception as exc:  # noqa: BLE001 — best-effort by design
+            fetched = {}
+            if logger:
+                logger.info(
+                    "[metrics pub %s] Facebook insight metrics unavailable (%s): %s",
+                    pub_id, ",".join(metrics), exc,
+                )
+        # Order the returned insights by the operator's configured preference, so that
+        # when multiple configured names map to the same post_metrics column (see
+        # COLUMN_MAP / _record), the first one the operator listed wins deterministically
+        # rather than whatever order Meta's response happened to use. Any names Meta
+        # returned that weren't configured are appended after, so raw_json stays complete.
+        for name in metrics:
+            if name in fetched:
+                insights[name] = fetched[name]
+        for name, value in fetched.items():
+            if name not in insights:
+                insights[name] = value
+    return {**summary, **insights}
+
+
+_FETCHERS = {"instagram": _fetch_instagram, "facebook": _fetch_facebook}
+
+
+def run_metrics(conn, config: Config, client, now, logger=None, client_for=None) -> int:
     """Fetch + store metrics for all due publications. Returns count fetched."""
     now_iso = now.isoformat()
+    pick_client = client_for or (lambda _platform: client)
     due = publications_needing_metrics(
         conn, now, config.metrics_max_age_days, config.metrics_min_interval_hours
     )
@@ -95,14 +153,25 @@ def run_metrics(conn, config: Config, client, now, logger=None) -> int:
         was_flagged = pub["metrics_refresh_requested_at"] is not None
         try:
             channel = conn.execute(
-                "SELECT access_token FROM channels WHERE id = ?", (pub["channel_id"],)
+                "SELECT access_token, platform FROM channels WHERE id = ?",
+                (pub["channel_id"],),
             ).fetchone()
             token = channel["access_token"] if channel else None
             if not token:
                 continue
+            platform = channel["platform"]
+            fetch = _FETCHERS.get(platform)
+            if fetch is None:
+                if logger:
+                    logger.info(
+                        "[metrics pub %s] no metrics adapter for platform '%s'",
+                        pub["id"], platform,
+                    )
+                continue
             try:
-                insights = client.get_media_insights(
-                    pub["remote_post_id"], token, REQUESTED_METRICS
+                insights = fetch(
+                    pick_client(platform), pub["remote_post_id"], token,
+                    config, logger, pub["id"],
                 )
             except Exception as exc:  # noqa: BLE001 — a metrics fetch failure is non-fatal
                 if logger:

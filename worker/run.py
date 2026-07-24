@@ -17,8 +17,8 @@ import time
 from datetime import datetime, timezone
 
 from . import db
+from .clients import ClientRegistry
 from .config import Config, dry_run_active, kill_switch_active, load_env
-from .graph_api import GraphClient
 from .logging_setup import configure_logging
 
 _stop = False
@@ -29,12 +29,17 @@ def _request_stop(signum, _frame):
     _stop = True
 
 
-def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=time.sleep) -> int:
+def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=None,
+             sleep_fn=time.sleep) -> int:
     """Process one batch of due publications. Returns how many were acted on.
 
     Respects the live kill switch (checked here AND between items, so flipping it
     mid-batch stops further publishing promptly).
     """
+    # A channel's platform decides which Graph host to use (see clients.base_url_for).
+    # Without a resolver (tests, --once with a single client) everything uses `client`.
+    pick_client = client_for or (lambda _platform: client)
+
     load_env(override=True)  # pick up live edits to the switches
 
     now = now or datetime.now(timezone.utc)
@@ -107,7 +112,9 @@ def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=ti
                 if logger:
                     logger.warning("KILL_SWITCH flipped mid-batch — stopping.")
                 break
-            publish_one(conn, pub, config, client, dry_run=dry_run,
+            channel = db.get_channel(conn, pub["channel_id"])
+            pub_client = pick_client(channel["platform"]) if channel else client
+            publish_one(conn, pub, config, pub_client, dry_run=dry_run,
                         asset_base_url=asset_base_url, now=now,
                         logger=logger, sleep_fn=sleep_fn)
             processed += 1
@@ -115,11 +122,11 @@ def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=ti
     # Refresh metrics for already-published posts (throttled per publication).
     from .metrics import run_metrics
 
-    run_metrics(conn, config, client, now, logger=logger)
+    run_metrics(conn, config, client, now, logger=logger, client_for=client_for)
     return processed
 
 
-def run_forever(config: Config, client, logger) -> None:
+def run_forever(config: Config, client, logger, *, client_for=None) -> None:
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
     conn = db.connect(config.database_path)
@@ -129,7 +136,7 @@ def run_forever(config: Config, client, logger) -> None:
             # Defense in depth: a bug or unexpected error in one cycle must never take the
             # daemon down. Log it and keep polling — the kill switch is the only stop.
             try:
-                run_once(conn, config, client, logger=logger)
+                run_once(conn, config, client, client_for=client_for, logger=logger)
             except Exception:  # noqa: BLE001
                 logger.exception("run_once failed; continuing to next cycle")
             for _ in range(config.poll_interval):
@@ -144,18 +151,21 @@ def run_forever(config: Config, client, logger) -> None:
 def main() -> int:
     config = Config.from_env()
     logger = configure_logging(config.database_path.parent / "logs")
-    client = GraphClient(config.graph_version, base_url=config.graph_base)
+    registry = ClientRegistry(config)
+    # Default client for code paths that don't know a platform yet; per-publication
+    # selection happens inside run_once via client_for.
+    client = registry.for_platform("instagram")
 
     if "--once" in sys.argv:
         conn = db.connect(config.database_path)
         try:
-            n = run_once(conn, config, client, logger=logger)
+            n = run_once(conn, config, client, client_for=registry.for_platform, logger=logger)
             logger.info("Processed %d publication(s).", n)
         finally:
             conn.close()
         return 0
 
-    run_forever(config, client, logger)
+    run_forever(config, client, logger, client_for=registry.for_platform)
     return 0
 
 

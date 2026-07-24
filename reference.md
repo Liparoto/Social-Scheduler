@@ -131,6 +131,23 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
   (community cites Jan 27, 2025). Both naming sets currently appear in Meta docs mapped to
   their respective login configs.
 
+### Facebook Pages publishing (verified 2026-07-23)
+- Single photo: `POST /{page-id}/photos` with `url`, `caption`, `published=true`. The response
+  carries both `id` (photo) and **`post_id`** (the feed post) — store `post_id`, since insights
+  are read against the post.
+- Multi-photo: upload each with `published=false`, collect each `id`, then
+  `POST /{page-id}/feed` with `message` + `attached_media[i]={"media_fbid": <id>}`
+  (indexed JSON fields on a form-encoded request). Photos and videos can't be mixed this way.
+- **No container/status polling** and **no `content_publishing_limit`** on Pages — the IG quota
+  gate is skipped for Facebook rather than replaced with a hardcoded number.
+- Requires a **Page** access token (`pages_manage_posts`); works on your own Page with the app
+  in Development mode + an admin role, no App Review.
+- Metrics: reactions/comments/shares come from edge summaries on the post
+  (`reactions.summary(total_count)`, `comments.summary(total_count)`, `shares`) and are stable.
+  Post **insights** metric names are volatile — Meta deprecated a large batch on **2026-06-15**
+  (reach/impressions moving to "views"/"unique media viewers"), so reach is fetched best-effort
+  via `FB_POST_INSIGHT_METRICS` and stored null when the name is rejected.
+
 ### Open items to resolve at implementation time
 1. Confirm the **actual** `quota_total` per account at runtime (50 vs 100).
 2. Confirm the exact **Facebook Page** publish + metrics endpoints when we build that adapter

@@ -147,3 +147,16 @@ post recycling).
   metrics fetch, verified against the live post — before relying on automation.
 - Confirm a mixed IG+FB post fans out and each publishes independently (one failing doesn't
   block the other).
+
+## Known limitations
+
+- **Autofill's "prefer top performers" ranking scores every Facebook post as 0.**
+  `worker/autofill.py` ranks recycling candidates by
+  `MAX(IFNULL(pm.reach,0) + IFNULL(pm.saves,0))`. Facebook posts almost never have a
+  non-null `reach` (best-effort, frequently rejected by Meta) and never have `saves` (an
+  Instagram-only concept), so that sum is 0 for essentially every FB post — the
+  "prefer top performers" tier silently collapses to a tie, and FB recycling falls back to
+  age/staleness order. This is a known gap, not a bug to hot-fix here: changing the formula
+  would also change Instagram's ranking, and best-performing-post recycling is its own
+  planned sub-project (see `docs/tasks.md`, Phase 6+ backlog) that should revisit the
+  ranking formula for both platforms together.

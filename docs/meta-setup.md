@@ -122,6 +122,56 @@ If it fails, the publication shows **Failed** with the exact Graph API error —
 - Media containers **expire after 24h** — the worker publishes promptly, so this only matters
   if a post sits failed for a day.
 - Publishing rate limit is read live per account (Meta's own docs disagree on 50 vs 100) — the
-  worker paces itself; you don't set a number.
+  worker paces itself; you don't set a number. (Instagram only — Pages have no such endpoint
+  and aren't gated.)
 - Our uploader currently accepts JPEG/PNG/WebP, but **Meta only accepts JPEG for image posts** —
   use JPEG for anything you'll actually publish. (A validation tightening we can add.)
+
+---
+
+## Adding a Facebook Page
+
+Publishing to your own Page works with your app in **Development mode** — no App Review —
+as long as you're an **admin** on both the app and the Page. Same arrangement as Instagram.
+
+1. **Nothing to change in `.env`.** Facebook Pages are always reached on
+   `graph.facebook.com`, and the worker picks the right host per channel automatically —
+   leave `META_GRAPH_BASE` exactly as it is. (This matters if your Instagram channel is on
+   the Instagram-Login path — `META_GRAPH_BASE=https://graph.instagram.com` — because
+   changing that setting for Facebook's sake would break every Instagram publish.)
+2. **Give your app the permissions.** In the Graph API Explorer, pick your app and request
+   `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`.
+3. **Get your Page id and a Page access token.** Call `GET /me/accounts` in the Explorer.
+   Each entry has the Page's `id` and an `access_token` — that token is the *Page* token,
+   which is what SocialScheduler needs (a personal user token will not publish).
+4. **Make the token long-lived.** Short-lived Page tokens expire in about an hour. Exchange
+   yours for a long-lived one, then re-run step 3 to get a Page token derived from it:
+   `GET /oauth/access_token?grant_type=fb_exchange_token&client_id=<APP_ID>&client_secret=<APP_SECRET>&fb_exchange_token=<SHORT_TOKEN>`
+5. **Add the channel.** In the dashboard: **Channels → Add channel**, platform
+   **Facebook Page**, put the Page id in the id field and the long-lived Page token in the
+   token field.
+6. **Verify without posting.** Run `python3 -m worker.preflight` — it checks credentials and
+   publishes nothing. For a Facebook channel this is a plain Page read (Pages have no
+   publish-quota endpoint like Instagram's), so a `✓` here means the token and Page id work.
+   Then schedule a post with `DRY_RUN=1` and confirm the worker logs the plan. Only then set
+   `DRY_RUN=0` for a real post.
+
+**What gets published.** A single-image post goes up in one call. A multi-image post uploads
+each photo unpublished, then attaches them to one feed post (Facebook's equivalent of a
+carousel). Videos, Reels and Stories aren't supported yet. Images are conformed to
+Instagram's shape today (cropped/padded to the 4:5–1.91:1 range) even though Facebook itself
+accepts most aspect ratios — Facebook just gets the same derivative Instagram would use.
+
+**About the numbers.** Reactions, comments and shares are always available, and those are what
+a Facebook row shows in the queue. Reach/views is different: it depends on a Facebook insights
+metric name, and Meta retired a batch of those in June 2026 and keeps changing them. When the
+metric works, reach appears alongside the other three; when it doesn't, reach is simply left
+out and everything else still works. You can point it at a different metric with
+`FB_POST_INSIGHT_METRICS` in `.env`.
+
+**Gotcha: a failed multi-image post can leave orphaned photos.** If photo 3 of 5 fails to
+upload, photos 1 and 2 are already sitting in the Page's media library as unpublished
+photos — they're harmless (nothing is posted to the feed until all uploads succeed) but
+they aren't cleaned up automatically, and a retry uploads fresh copies rather than reusing
+them. You can safely delete the leftover unpublished photos from Meta Business Suite's media
+library if you want to tidy up.

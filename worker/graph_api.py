@@ -1,4 +1,4 @@
-"""Meta Graph API client for Instagram content publishing.
+"""Meta Graph API client for Instagram and Facebook Page content publishing.
 
 Implements the verified flow (see reference.md, checked against v25.0):
   * create a media container (POST /{ig-user-id}/media)
@@ -12,6 +12,8 @@ client with the same methods and exercise the whole pipeline without real HTTP.
 """
 
 from __future__ import annotations
+
+import json
 
 import requests
 
@@ -100,6 +102,13 @@ class GraphClient:
             f"{media_id}/insights",
             {"metric": ",".join(metrics), "access_token": token},
         )
+        return self._parse_insights(data)
+
+    @staticmethod
+    def _parse_insights(data: dict) -> dict:
+        """Both IG media and FB Page-post insights use the same response shape:
+        {"data": [{"name": ..., "values": [{"value": N}]}, ...]}
+        """
         out: dict = {}
         for item in data.get("data", []):
             name = item.get("name")
@@ -126,3 +135,101 @@ class GraphClient:
             cfg.get("quota_total"),
             cfg.get("quota_duration"),
         )
+
+    # -- Facebook Page publishing ---------------------------------------------------
+    # A Page post is simpler than IG: no container to poll. A single photo publishes in
+    # one call; a multi-photo post uploads each photo UNPUBLISHED, then attaches them to
+    # one feed post. Meta fetches image_url server-side, exactly like IG.
+    def create_page_photo(
+        self,
+        page_id: str,
+        image_url: str,
+        token: str,
+        *,
+        caption: str | None = None,
+        published: bool = True,
+    ) -> dict:
+        """Upload a photo to a Page. Returns the raw response.
+
+        When published=True the response carries both `id` (the photo) and `post_id`
+        (the feed post — the id insights are read against). When published=False it
+        returns only `id`, to be used as a media_fbid in create_page_feed_post().
+        """
+        data = {
+            "url": image_url,
+            "access_token": token,
+            "published": "true" if published else "false",
+        }
+        # An unpublished child photo never shows its caption anywhere — the text goes on
+        # the feed post as `message` instead.
+        if caption and published:
+            data["caption"] = caption
+        return self._post(f"{page_id}/photos", data)
+
+    def create_page_feed_post(
+        self,
+        page_id: str,
+        token: str,
+        *,
+        message: str | None = None,
+        attached_media: list[str] | None = None,
+    ) -> str:
+        """Create a Page feed post, optionally attaching already-uploaded photos."""
+        data = {"access_token": token}
+        if message:
+            data["message"] = message
+        for i, media_fbid in enumerate(attached_media or []):
+            # Form-encoded requests take attached_media as indexed JSON objects.
+            data[f"attached_media[{i}]"] = json.dumps({"media_fbid": str(media_fbid)})
+        return self._post(f"{page_id}/feed", data)["id"]
+
+    def get_page_post_summary(self, post_id: str, token: str) -> dict:
+        """Stable engagement counts for a Page post.
+
+        These are plain edge summaries, NOT insights, so they are unaffected by the
+        2026-06-15 Page-insights metric deprecation. Returns only what came back —
+        a missing key means "unknown", which must stay null rather than become 0.
+        """
+        data = self._get(
+            post_id,
+            {
+                "fields": (
+                    "reactions.summary(total_count).limit(0),"
+                    "comments.summary(total_count).limit(0),"
+                    "shares"
+                ),
+                "access_token": token,
+            },
+        )
+        out: dict = {}
+        reactions = (data.get("reactions") or {}).get("summary") or {}
+        if "total_count" in reactions:
+            out["fb_reactions"] = reactions["total_count"]
+        comments = (data.get("comments") or {}).get("summary") or {}
+        if "total_count" in comments:
+            out["fb_comments"] = comments["total_count"]
+        shares = data.get("shares") or {}
+        if "count" in shares:
+            out["fb_shares"] = shares["count"]
+        return out
+
+    def get_page_info(self, page_id: str, token: str) -> dict:
+        """Minimal read-only node fetch, used by preflight to prove a Page token and
+        Page id are valid. Facebook Pages have no content_publishing_limit endpoint,
+        so this is the FB equivalent of that IG quota check — it proves reachability,
+        not quota.
+        """
+        return self._get(page_id, {"fields": "id,name", "access_token": token})
+
+    def get_page_post_insights(self, post_id: str, token: str, metrics: list[str]) -> dict:
+        """Insight metrics for a Page post. Returns {metric_name: value}.
+
+        Meta deprecated a large set of these names on 2026-06-15 and keeps changing
+        them, so an invalid metric raises here and the CALLER treats it as best-effort
+        (see metrics._fetch_facebook) rather than a hard failure.
+        """
+        data = self._get(
+            f"{post_id}/insights",
+            {"metric": ",".join(metrics), "access_token": token},
+        )
+        return self._parse_insights(data)
