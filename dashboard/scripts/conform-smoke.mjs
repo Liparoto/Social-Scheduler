@@ -50,4 +50,12 @@ assert("rotated: does not throw / returns", !!r.buffer);
 assert("rotated: ratio in range", ratioOf(r) >= IG_MIN_RATIO && ratioOf(r) <= IG_MAX_RATIO);
 assert("rotated: under 8MB", r.buffer.length <= IG_MAX_BYTES);
 
+// Extreme-tall pad source (3000x4000): downscales to 1440x1920, then the pad
+// branch would grow width to ceil(1920*0.8)=1536 — past IG_MAX_WIDTH. The
+// final safeguard resize must clamp it back down to <=1440.
+r = await conformImage(await mk(3000, 4000), "pad");
+assert("extreme-tall pad: mode pad", r.mode === "pad");
+assert("extreme-tall pad: width <= 1440", r.width <= IG_MAX_WIDTH);
+assert("extreme-tall pad: ratio >= 0.8", ratioOf(r) >= IG_MIN_RATIO);
+
 console.log("\nALL CONFORM SMOKE CHECKS PASSED");

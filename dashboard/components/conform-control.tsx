@@ -24,24 +24,30 @@ export function ConformControl({
   const [reviewed, setReviewed] = useState(needsReview === 0);
   const [bust, setBust] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   async function choose(next: ConformMode) {
     if (next === mode && reviewed) return;
     setError(null);
-    const res = await fetch(`/api/assets/${assetId}/conform`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: next }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      setError(body.error ?? "Could not update framing.");
-      return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/assets/${assetId}/conform`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error ?? "Could not update framing.");
+        return;
+      }
+      setMode(next);
+      setReviewed(true);
+      setBust((b) => b + 1);
+      startTransition(() => router.refresh());
+    } finally {
+      setBusy(false);
     }
-    setMode(next);
-    setReviewed(true);
-    setBust((b) => b + 1);
-    startTransition(() => router.refresh());
   }
 
   if (reviewed) {
@@ -61,7 +67,7 @@ export function ConformControl({
         <div className="inline-flex rounded-md border border-border p-0.5">
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || busy}
             className={segBtn(mode === "crop")}
             onClick={() => choose("crop")}
           >
@@ -69,7 +75,7 @@ export function ConformControl({
           </button>
           <button
             type="button"
-            disabled={pending}
+            disabled={pending || busy}
             className={segBtn(mode === "pad")}
             onClick={() => choose("pad")}
           >

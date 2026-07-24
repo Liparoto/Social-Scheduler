@@ -18,11 +18,14 @@ export interface ConformResult {
 }
 
 async function encodeUnderLimit(pipe: Sharp): Promise<Buffer> {
+  // Flatten transparency to white before encoding — a no-op on images without
+  // an alpha channel, and consistent with the white pad background above.
+  const flattened = pipe.flatten({ background: { r: 255, g: 255, b: 255, alpha: 1 } });
   for (const quality of [90, 82, 74, 66, 58, 50]) {
-    const out = await pipe.clone().jpeg({ quality, mozjpeg: true }).toBuffer();
+    const out = await flattened.clone().jpeg({ quality, mozjpeg: true }).toBuffer();
     if (out.length <= IG_MAX_BYTES) return out;
   }
-  return pipe.clone().jpeg({ quality: 45, mozjpeg: true }).toBuffer();
+  return flattened.clone().jpeg({ quality: 45, mozjpeg: true }).toBuffer();
 }
 
 export async function conformImage(
@@ -85,6 +88,8 @@ export async function conformImage(
         width: cw,
         height: ch,
       });
+      curW = cw;
+      curH = ch;
     } else {
       // Pad (letterbox) toward the target bound, growing only one dimension.
       // Math.ceil guarantees the resulting ratio lands within [MIN, MAX].
@@ -102,7 +107,27 @@ export async function conformImage(
         right: Math.ceil((pw - w) / 2),
         background: { r: 255, g: 255, b: 255, alpha: 1 },
       });
+      curW = pw;
+      curH = ph;
     }
+  }
+
+  // Final safeguard: the pad branch can grow width past IG_MAX_WIDTH for
+  // extreme-tall sources (e.g. a 3000x4000 source downscales to 1440x1920,
+  // then pads to pw = ceil(1920*0.8) = 1536). Never let the encoded buffer
+  // exceed the engine's own width contract — resize preserves the (in-range)
+  // ratio. Crop mode only shrinks dimensions, so this is a no-op for it.
+  //
+  // Materialize before re-resizing: sharp merges multiple queued .resize()
+  // calls into a single op applied against the ORIGINAL input (not against
+  // the intermediate extract/extend result), so calling .resize() again on
+  // a pipe that already queued one from the initial downscale (line ~55)
+  // would silently recompute from srcW/srcH and ignore the pad's growth.
+  // Executing to a buffer first forces the queued ops to run, so the
+  // fresh sharp() below resizes the ACTUAL current pixels.
+  if (curW > IG_MAX_WIDTH) {
+    const materialized = await pipe.toBuffer();
+    pipe = sharp(materialized).resize({ width: IG_MAX_WIDTH });
   }
 
   const buffer = await encodeUnderLimit(pipe);
