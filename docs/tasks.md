@@ -427,6 +427,10 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       + best-effort reach via `FB_POST_INSIGHT_METRICS` (null, never fatal, when Meta
       rejects the name — a batch was deprecated 2026-06-15). Queue controls, captions,
       fan-out and dry-run all work unchanged.
+      **Known limitation:** autofill's "prefer top performers" ranking sums
+      `reach + saves`, both of which Facebook rarely/never provides, so it scores every FB
+      post as 0 and recycling falls back to age/staleness order for FB until the planned
+      best-performing-post work (see Phase 6+ backlog below) revisits the ranking formula.
 - [ ] Real-post verification (owner): add a test Page + long-lived Page token per
       `docs/meta-setup.md`, then one real photo + one real multi-photo post.
 - [ ] Reels/video (async container, status polling, `video_url`).
