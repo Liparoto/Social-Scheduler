@@ -174,3 +174,68 @@ def test_copy_images_missing_original_marks_the_asset_missing_even_if_conformed_
     )
 
     assert result.missing_asset_ids == {1}
+
+
+import json
+
+from worker.export.collect import ExportedChannel, ExportedSend
+from worker.export.write import write_json
+
+
+def _channel():
+    return ExportedChannel(
+        channel_id=1, platform="instagram", account_name="Test IG",
+        business_label=None, timezone="UTC", is_active=True, requires_approval=False,
+        autofill_enabled=False, cadence_config=None, min_queue_depth=0,
+        target_queue_depth=0, reuse_min_age_days=180, remote_account_id="178414",
+        linked_page_id=None,
+    )
+
+
+def test_write_json_round_trips_the_bundle(tmp_path):
+    bundle = _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "assets/a.jpg")])])
+    bundle.channels = [_channel()]
+
+    path = write_json(bundle, tmp_path)
+    data = json.loads(path.read_text())
+
+    assert path.name == "export.json"
+    assert data["generated_at"] == GENERATED_AT
+    assert data["posts"][0]["post_id"] == 42
+    assert data["posts"][0]["images"][0]["export_filename"] == "0042_test-post_1.jpg"
+    assert data["channels"][0]["account_name"] == "Test IG"
+
+
+def test_write_json_contains_no_token_field_anywhere(tmp_path):
+    bundle = _bundle([_post(42, [])])
+    bundle.channels = [_channel()]
+
+    raw = write_json(bundle, tmp_path).read_text()
+
+    assert "access_token" not in raw
+    assert "token_expires_at" not in raw
+
+
+def test_write_json_preserves_non_ascii_captions(tmp_path):
+    post = _post(42, [])
+    post.caption = "Café ☕ mobility"
+    bundle = _bundle([post])
+
+    data = json.loads(write_json(bundle, tmp_path).read_text())
+
+    assert data["posts"][0]["caption"] == "Café ☕ mobility"
+
+
+def test_write_json_includes_sends_and_records_schema_version(tmp_path):
+    bundle = _bundle([])
+    bundle.sends = [ExportedSend(
+        publication_id=7, post_id=42, caption_preview="hello", channel_label="Test IG (instagram)",
+        scheduled_at_utc="2026-07-24T18:00:00+00:00", scheduled_at_local="2026-07-24 18:00",
+        published_at_utc=None, published_at_local=None, status="scheduled", is_held=False,
+        is_dry_run=False, attempt_count=0, last_error=None, remote_post_id=None,
+    )]
+
+    data = json.loads(write_json(bundle, tmp_path).read_text())
+
+    assert data["sends"][0]["publication_id"] == 7
+    assert data["format_version"] == 1

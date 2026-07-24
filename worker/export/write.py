@@ -6,8 +6,9 @@ module touches the database or the network.
 
 from __future__ import annotations
 
+import json
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from worker.export.collect import ExportBundle
@@ -90,3 +91,30 @@ def copy_images(bundle: ExportBundle, asset_root: Path, out_dir: Path) -> CopyRe
                     is_original=False,
                 )
     return result
+
+
+# Bump when the JSON shape changes incompatibly, so a future importer can branch.
+JSON_FORMAT_VERSION = 1
+
+
+def write_json(bundle: ExportBundle, out_dir: Path) -> Path:
+    """Full-fidelity machine-readable dump, for a future re-import.
+
+    Nested rather than flat: a post CONTAINS its images, which a spreadsheet cannot
+    express. Secrets are absent because collect.py never read them — this is not a
+    raw table dump.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format_version": JSON_FORMAT_VERSION,
+        "generated_at": bundle.generated_at,
+        "posts": [asdict(p) for p in bundle.posts],
+        "sends": [asdict(s) for s in bundle.sends],
+        "metrics": [asdict(m) for m in bundle.metrics],
+        "assets": [asdict(a) for a in bundle.assets],
+        "channels": [asdict(c) for c in bundle.channels],
+    }
+    path = out_dir / "export.json"
+    # ensure_ascii=False keeps captions readable if someone opens this in a text editor.
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
