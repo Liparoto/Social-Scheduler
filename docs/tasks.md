@@ -163,7 +163,8 @@ short-lived, worker-managed Cloudflare quick tunnel. Design: `docs/design-publis
       live in ~8s, media id `18015397358720320`, permalink `instagram.com/p/DbHvdnEEUEr`,
       `is_dry_run=0`, no errors; DRY_RUN restored to 1 after. FULL PIPELINE VALIDATED.
       Gap found: dashboard uploads are stored as-is, so images must be conformed to Meta
-      specs (≤8 MB, aspect 4:5–1.91:1, ≤1440px wide, sRGB) — address in image management.
+      specs (≤8 MB, aspect 4:5–1.91:1, ≤1440px wide, sRGB). ✅ **CLOSED** by the Image
+      conformance sub-project below.
 
 ---
 
@@ -285,6 +286,51 @@ Three quality-of-life features shipped in one design→build batch (subagent-dri
 - [x] **Scheduled-view filters** — Overview Publications table extracted into `<PublicationQueue>` with
       account / platform / status filters + "showing N of M". Design: `docs/design-scheduled-view-filters.md`.
 - [x] Owner action done: `0004` applied to the live DB.
+
+---
+
+## Theme system — 7 families × light/dark  `[x] done`
+Design: `docs/design-themes.md` · Plan: `docs/superpowers/plans/2026-07-23-themes.md`
+Switchable themes (SocialScheduler [default], Claude, APT, FYZICAL, Default, Solarized, Vela) each
+with a light + dark variant. `<html data-theme data-mode>` + `[data-theme][data-mode]` CSS blocks;
+Tailwind v4 auto-generates utilities from the `--color-*` vars. localStorage persistence + no-flash
+head script; sidebar picker + sun/moon toggle. Added `on-brand`/`on-accent`/`-strong` foreground
+tokens so all buttons/pills pass WCAG AA across all 14 palettes. Verified in-browser.
+
+---
+
+## Worker liveness + honest metrics refresh  `[x] done`
+Migration `0005` adds `worker_heartbeat`; the worker stamps `last_seen_at` every poll (before the
+kill-switch check — alive != publishing). The Overview shows a **Worker online/offline** pill
+(`getWorkerStatus`, 120s window) and the Refresh buttons warn when the worker looks offline instead
+of silently promising an update that won't come. Root-caused from "metrics stuck at 0": the worker
+is a polling daemon and wasn't running, so the birth-snapshot (0/0 at publish instant) never
+refreshed — the API had the real numbers the whole time. 80 worker tests; browser-verified both
+states.
+
+---
+
+## Image conformance — make uploads publish-safe  `[x] done`
+Design: `docs/design-image-conformance.md` · Plan: `docs/superpowers/plans/2026-07-23-image-conformance.md`
+Closes the Phase 5.5 gap: every uploaded image is conformed to the IG feed-image spec **on upload**
+so the worker always sends Meta a valid file, and the framing decision is made once and remembered
+per-asset (so evergreen auto-fill reuses it).
+- [x] Task 0 — verified the live IG spec (8MB / 4:5–1.91:1 / 320–1440px / sRGB) → `reference.md`.
+- [x] Migration `0006`: `assets.publish_path` / `conform_mode` / `needs_review` (additive).
+- [x] `dashboard/lib/conform.ts` — pure `sharp` engine: EXIF-rotate (materialized), sRGB, ≤1440,
+      JPEG stepping to ≤8MB; out-of-range ratio → center-crop (default) or letterbox-pad, flagged.
+- [x] Conform on upload: writes a `pub/<hash>.jpg` derivative + stores the framing decision;
+      original preserved; conform failure is non-fatal (falls back to original).
+- [x] Worker `_resolve_url` precedence: external `public_url` → `publish_path` → `storage_path`.
+- [x] `POST /api/assets/[id]/conform` — switch crop⇄pad, re-derives from the original, persists.
+- [x] Dashboard `<ConformControl>`: "Auto-cropped — review framing" badge + Crop⇄Pad toggle +
+      conformed preview, in composer / import / post-editor.
+- [x] Verified: 82 worker tests; dashboard `tsc` clean; each task TDD/smoke + reviewed; the whole
+      flow browser-verified (upload out-of-range → badge → toggle Pad → re-derived 1440×754 @1.910,
+      persisted; back-compat: legacy assets fall back to the original).
+- Deferred (Phase 6 / follow-up): Reels/Stories/video conformance; Facebook Pages specs; carousel
+  same-ratio harmonization; blurred-fill pad + manual crop framing; pad-width>1440 cap for extreme
+  tall sources (benign — Meta auto-scales width).
 
 ---
 
