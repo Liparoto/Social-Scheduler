@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-export function RefreshAllMetrics() {
+export function RefreshAllMetrics({ workerOnline = true }: { workerOnline?: boolean }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -16,13 +16,23 @@ export function RefreshAllMetrics() {
       setMsg(body.error ?? "Something went wrong.");
       return;
     }
-    setMsg(`Queued ${body.requested} — updates after the next worker run.`);
+    setMsg(
+      workerOnline
+        ? `Queued ${body.requested} — updates after the next worker run.`
+        : `Queued ${body.requested}, but the worker looks offline — start it to apply.`
+    );
     startTransition(() => router.refresh());
   }
 
   return (
     <div className="flex items-center gap-2">
-      {msg ? <span className="data text-[11px] text-muted">{msg}</span> : null}
+      {msg ? (
+        <span
+          className={`data text-[11px] ${msg && !workerOnline ? "text-status-scheduled" : "text-muted"}`}
+        >
+          {msg}
+        </span>
+      ) : null}
       <button
         onClick={run}
         disabled={pending}

@@ -8,10 +8,12 @@ export function PublicationActions({
   id,
   status,
   isDryRun = false,
+  workerOnline = true,
 }: {
   id: number;
   status: PublicationStatus;
   isDryRun?: boolean;
+  workerOnline?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -78,10 +80,17 @@ export function PublicationActions({
           onClick={refreshMetrics}
           disabled={pending || queued}
           className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
-          title="Queue a metrics fetch on the next worker run"
+          title={
+            workerOnline
+              ? "Queue a metrics fetch on the next worker run"
+              : "Worker looks offline — this will apply once you start it"
+          }
         >
           {queued ? "Queued ✓" : "Refresh metrics"}
         </button>
+        {queued && !workerOnline ? (
+          <span className="text-[10px] text-status-scheduled">Worker offline — starts when it runs</span>
+        ) : null}
         {error ? <span className="text-[10px] text-status-failed">{error}</span> : null}
       </div>
     );

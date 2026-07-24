@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { getActiveChannels, getPublicationsOverview } from "@/lib/queries";
+import { getActiveChannels, getPublicationsOverview, getWorkerStatus } from "@/lib/queries";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { RefreshAllMetrics } from "@/components/refresh-all-metrics";
 import { PublicationQueue } from "@/components/publication-queue";
+import { WorkerStatus } from "@/components/worker-status";
 import { formatInTz, tzAbbrev, channelColor } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,7 @@ export const dynamic = "force-dynamic";
 export default function OverviewPage() {
   const channels = getActiveChannels();
   const pubs = getPublicationsOverview();
+  const worker = getWorkerStatus();
 
   const scheduledByChannel = new Map<number, number>();
   const nextByChannel = new Map<number, string>();
@@ -93,7 +95,10 @@ export default function OverviewPage() {
             <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-muted">
               Publications
             </h2>
-            <RefreshAllMetrics />
+            <div className="flex items-center gap-3">
+              <WorkerStatus online={worker.online} lastSeenAt={worker.lastSeenAt} />
+              <RefreshAllMetrics workerOnline={worker.online} />
+            </div>
           </div>
           {pubs.length === 0 ? (
             <EmptyState title="Nothing here yet">
@@ -101,7 +106,7 @@ export default function OverviewPage() {
               top so they&rsquo;re never silent.
             </EmptyState>
           ) : (
-            <PublicationQueue pubs={pubs} channels={channels} />
+            <PublicationQueue pubs={pubs} channels={channels} workerOnline={worker.online} />
           )}
         </section>
       </div>

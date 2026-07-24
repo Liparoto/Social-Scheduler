@@ -23,9 +23,11 @@ const selectCls =
 export function PublicationQueue({
   pubs,
   channels,
+  workerOnline = true,
 }: {
   pubs: PublicationRow[];
   channels: { id: number; account_name: string; platform: string }[];
+  workerOnline?: boolean;
 }) {
   const [account, setAccount] = useState<"all" | number>("all");
   const [platform, setPlatform] = useState<"all" | "instagram" | "facebook">("all");
@@ -167,6 +169,7 @@ export function PublicationQueue({
                       id={p.id}
                       status={p.status}
                       isDryRun={p.is_dry_run === 1}
+                      workerOnline={workerOnline}
                     />
                   </td>
                 </tr>

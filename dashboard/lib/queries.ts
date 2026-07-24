@@ -799,3 +799,22 @@ export function updatePostContentModel(
     .prepare(`UPDATE posts SET ${setClause}, updated_at = @updated_at WHERE id = @id`)
     .run({ ...fields, id: postId, updated_at: nowIso() });
 }
+
+// ---- Worker liveness --------------------------------------------------------------
+/** The worker is a separate process that must be running for metrics refreshes,
+ *  scheduled publishing, and auto-fill to happen. It stamps worker_heartbeat every
+ *  poll (~30s); we treat it as online if that stamp is recent. Generous window so a
+ *  slow poll or clock skew doesn't flap the indicator. */
+const WORKER_ONLINE_WINDOW_MS = 120_000;
+
+export function getWorkerStatus(): { online: boolean; lastSeenAt: string | null } {
+  const row = getDb()
+    .prepare("SELECT last_seen_at FROM worker_heartbeat WHERE id = 1")
+    .get() as { last_seen_at: string } | undefined;
+  if (!row) return { online: false, lastSeenAt: null };
+  const ageMs = Date.now() - new Date(row.last_seen_at).getTime();
+  return {
+    online: Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= WORKER_ONLINE_WINDOW_MS,
+    lastSeenAt: row.last_seen_at,
+  };
+}
