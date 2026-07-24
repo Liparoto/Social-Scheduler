@@ -494,8 +494,11 @@ def test_readme_reports_asset_count_and_problem_count_as_distinct_figures(tmp_pa
 
     text = write_readme(_bundle([]), tmp_path, result).read_text()
 
+    # Asset count: exactly "1 image file(s) could not be found" sentence
     assert "1 image file(s) could not be found" in text
-    assert "2" in text  # the problem count, distinct from the "1" image count
+    # Problem count: the sentence stating problems recorded (distinct from asset count)
+    assert "2 problem(s) were recorded during export" in text
+    # Both problem lines must be present (not just their asset IDs somewhere else)
     assert "asset 2: original not found at /x/gone1.jpg" in text
     assert "asset 2: original not found at /x/gone2.jpg" in text
 
