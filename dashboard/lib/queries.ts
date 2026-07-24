@@ -10,6 +10,7 @@ import type {
   PeriodMode,
   Post,
   Publication,
+  PostPublicationRow,
   PostType,
   Tag,
 } from "./types";
@@ -386,6 +387,39 @@ export function getPost(id: number): Post | undefined {
   return getDb().prepare("SELECT * FROM posts WHERE id = ?").get(id) as Post | undefined;
 }
 
+/**
+ * Delete a post outright. Blocked if any of its publications is 'posted' or 'publishing'
+ * (a live send must never be erased out from under the worker or the record of what
+ * actually went out). FK ON DELETE CASCADE removes publications/post_assets/
+ * caption_variants/post_tags/post_periods; assets are content-hash-shared and are NOT
+ * deleted here.
+ */
+export function deletePost(id: number): "ok" | "not_found" | "has_live" {
+  const db = getDb();
+  const post = db.prepare("SELECT id FROM posts WHERE id = ?").get(id);
+  if (!post) return "not_found";
+  const live = db
+    .prepare("SELECT 1 FROM publications WHERE post_id = ? AND status IN ('posted','publishing') LIMIT 1")
+    .get(id);
+  if (live) return "has_live";
+  db.prepare("DELETE FROM posts WHERE id = ?").run(id);
+  return "ok";
+}
+
+/** A post's publications joined with their channel, for the edit screen's per-channel queue view. */
+export function getPostPublications(postId: number): PostPublicationRow[] {
+  return getDb()
+    .prepare(
+      `SELECT pub.id, pub.channel_id, pub.scheduled_at, pub.status, pub.is_held,
+              pub.is_dry_run, pub.remote_post_id,
+              c.account_name AS channel_name, c.platform AS channel_platform,
+              c.timezone AS channel_timezone
+       FROM publications pub JOIN channels c ON c.id = pub.channel_id
+       WHERE pub.post_id = ? ORDER BY pub.scheduled_at ASC`
+    )
+    .all(postId) as PostPublicationRow[];
+}
+
 export interface PostLibraryRow extends Post {
   first_asset_id: number | null;
   asset_count: number;
@@ -544,6 +578,46 @@ export function cancelPublication(id: number): boolean {
       `UPDATE publications
        SET status = 'canceled', next_retry_at = NULL, updated_at = @now
        WHERE id = @id AND status IN ('scheduled', 'pending_approval')`
+    )
+    .run({ id, now: nowIso() });
+  return info.changes > 0;
+}
+
+export function deletePublication(id: number): boolean {
+  const info = getDb()
+    .prepare(
+      `DELETE FROM publications
+       WHERE id = @id AND status IN ('scheduled','pending_approval','canceled','failed')`
+    )
+    .run({ id });
+  return info.changes > 0;
+}
+
+export function reschedulePublication(id: number, scheduledAtUtc: string): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE publications SET scheduled_at = @at, next_retry_at = NULL, updated_at = @now
+       WHERE id = @id AND status IN ('scheduled','pending_approval')`
+    )
+    .run({ id, at: scheduledAtUtc, now: nowIso() });
+  return info.changes > 0;
+}
+
+export function holdPublication(id: number): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE publications SET is_held = 1, updated_at = @now
+       WHERE id = @id AND is_held = 0 AND status IN ('scheduled','pending_approval')`
+    )
+    .run({ id, now: nowIso() });
+  return info.changes > 0;
+}
+
+export function resumePublication(id: number): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE publications SET is_held = 0, updated_at = @now
+       WHERE id = @id AND is_held = 1 AND status IN ('scheduled','pending_approval')`
     )
     .run({ id, now: nowIso() });
   return info.changes > 0;

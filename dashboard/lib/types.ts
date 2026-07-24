@@ -114,7 +114,21 @@ export interface Publication {
   first_comment_status: "none" | "pending" | "posted" | "failed";
   first_comment_remote_id: string | null;
   is_dry_run: number;
+  is_held: number;
   created_by: string | null;
   created_at: string;
   updated_at: string | null;
+}
+
+export interface PostPublicationRow {
+  id: number;
+  channel_id: number;
+  channel_name: string;
+  channel_platform: string;
+  channel_timezone: string;
+  scheduled_at: string;
+  status: PublicationStatus;
+  is_held: number;
+  is_dry_run: number;
+  remote_post_id: string | null;
 }
