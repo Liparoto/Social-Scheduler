@@ -114,6 +114,11 @@ is retained for the Phase 6 **Facebook Pages** adapter. A mixed install (IG-Logi
 install-wide. Full step-by-step in **docs/meta-setup.md**.
 
 ### 6. Media-type differences & recent changes
+- **Feed image spec (VERIFIED 2026-07-23, Meta docs):** max file size **8 MB**; aspect ratio
+  **4:5 → 1.91:1**; width **min 320 / max 1440 px** (Meta auto-scales outside this); color
+  **sRGB** (Meta auto-converts). We conform on upload anyway (see `docs/design-image-conformance.md`)
+  so the framing decision (crop vs pad for out-of-range ratios) is explicit and Meta never
+  silently crops. File size + aspect ratio are the rules Meta won't fix for us.
 - **Reels/video:** `media_type=REELS` (or legacy `VIDEO`), pass `video_url` (not `image_url`),
   plus `cover_url`, `thumb_offset`, `audio_name`, `share_to_feed`. Containers are **async** —
   **must** poll `status_code` until `FINISHED`. Large uploads use resumable `upload_type`.
