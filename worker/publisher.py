@@ -193,9 +193,10 @@ def _publish_fb_single(client, plan, token) -> str:
     res = client.create_page_photo(
         plan["account_id"], plan["asset_urls"][0], token, caption=plan["caption"]
     )
-    # Prefer post_id (the feed post). Fall back to the photo id so a response missing
-    # post_id still records something we can look up, rather than crashing.
-    return res.get("post_id") or res["id"]
+    # Prefer post_id (the feed post) when present, even if falsy. Fall back to the
+    # photo id only when post_id is genuinely absent from the response, so a response
+    # missing post_id still records something we can look up, rather than crashing.
+    return res["post_id"] if "post_id" in res else res["id"]
 
 
 def _publish_fb_multi(client, plan, token) -> str:

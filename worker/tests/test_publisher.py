@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from worker import db
 from worker.publisher import publish_one
+from worker.tests.conftest import FakeGraphClient
 
 NOW = datetime(2026, 7, 22, 18, 0, 0, tzinfo=timezone.utc)
 
@@ -286,3 +287,29 @@ def test_facebook_dry_run_publishes_nothing(
     assert fake_client.calls == []
     assert out.plan["platform"] == "facebook"
     assert out.plan["account_id"] == "PAGE1"
+
+
+def test_facebook_multi_photo_mid_carousel_child_failure_leaves_it_retryable(
+    conn, config, make_publication
+):
+    """Photo 3 of 5 fails to upload. Photos 1-2 are already uploaded (unpublished) —
+    those orphans are a documented gotcha (docs/meta-setup.md), not cleaned up here — but
+    the feed post itself must NEVER be created from a partial set, and the publication
+    must come back visibly retryable rather than silently stuck or double-posted.
+    """
+    client = FakeGraphClient(fail_child_index=3)
+    pub = make_publication(post_type="carousel", n_assets=5, platform="facebook")
+    out = publish_one(conn, pub, config, client, dry_run=False)
+
+    assert out.result == "retry_scheduled"
+    kinds = [k for k, _ in client.calls]
+    # Two successful children, then the third fails — and publishing stops right there.
+    assert kinds == ["page_child", "page_child", "page_child"]
+    assert "page_feed" not in kinds  # never posts the feed with a partial media set
+
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "scheduled"
+    assert row["attempt_count"] == 1
+    assert row["last_error"] is not None
+    assert "child 3" in row["last_error"]
+    assert row["next_retry_at"] is not None
