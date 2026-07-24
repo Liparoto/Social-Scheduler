@@ -189,3 +189,135 @@ def test_collect_posts_produces_globally_unique_image_filenames(conn):
 
     assert len(names) == 2
     assert len(set(names)) == 2
+
+
+import sqlite3
+
+from worker.export.collect import CHANNEL_COLUMNS, collect_all, to_local
+
+GENERATED_AT = "2026-07-24T19:30:00+00:00"
+
+
+def test_channel_allow_list_excludes_every_secret():
+    assert "access_token" not in CHANNEL_COLUMNS
+    assert "token_expires_at" not in CHANNEL_COLUMNS
+
+
+def test_channel_allow_list_only_names_real_columns(conn):
+    actual = {r[1] for r in conn.execute("PRAGMA table_info(channels)")}
+    assert set(CHANNEL_COLUMNS) <= actual
+
+
+def test_to_local_converts_utc_into_the_channel_timezone():
+    assert to_local("2026-07-24T18:00:00+00:00", "America/New_York") == "2026-07-24 14:00"
+
+
+def test_to_local_treats_naive_timestamps_as_utc():
+    assert to_local("2026-07-24T18:00:00", "America/New_York") == "2026-07-24 14:00"
+
+
+def test_to_local_falls_back_to_utc_for_an_unknown_timezone():
+    assert to_local("2026-07-24T18:00:00+00:00", "Mars/Olympus") == "2026-07-24 18:00"
+
+
+def test_to_local_returns_none_for_missing_timestamps():
+    assert to_local(None, "UTC") is None
+
+
+def test_collect_all_never_reads_the_access_token(conn, make_publication):
+    make_publication()
+
+    bundle = collect_all(conn, GENERATED_AT)
+
+    assert len(bundle.channels) == 1
+    assert not hasattr(bundle.channels[0], "access_token")
+
+
+def test_collect_all_on_an_empty_database_returns_empty_lists(conn):
+    bundle = collect_all(conn, GENERATED_AT)
+
+    assert bundle.generated_at == GENERATED_AT
+    assert bundle.posts == []
+    assert bundle.sends == []
+    assert bundle.metrics == []
+    assert bundle.assets == []
+    assert bundle.channels == []
+
+
+def test_collect_all_builds_sends_with_local_and_utc_times(conn, make_publication):
+    pub = make_publication()
+    conn.execute("UPDATE channels SET timezone = 'America/New_York'")
+    conn.execute(
+        "UPDATE publications SET scheduled_at = '2026-07-24T18:00:00+00:00' WHERE id = ?",
+        (pub["id"],),
+    )
+    conn.commit()
+
+    send = collect_all(conn, GENERATED_AT).sends[0]
+
+    assert send.scheduled_at_utc == "2026-07-24T18:00:00+00:00"
+    assert send.scheduled_at_local == "2026-07-24 14:00"
+    assert send.caption_preview == "hello world"
+
+
+def test_rollups_count_only_real_posted_sends(conn, make_publication):
+    pub = make_publication()
+    post_id = pub["post_id"]
+    channel_id = pub["channel_id"]
+    conn.execute(
+        "UPDATE publications SET status='posted', published_at='2026-07-01T12:00:00+00:00'"
+        " WHERE id = ?",
+        (pub["id"],),
+    )
+    # A dry run and a failure must not count toward times_posted.
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at,"
+        " is_dry_run) VALUES (?,?,'2026-07-02T12:00:00+00:00','posted',"
+        "'2026-07-02T12:00:00+00:00',1)",
+        (post_id, channel_id),
+    )
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status)"
+        " VALUES (?,?,'2026-07-03T12:00:00+00:00','failed')",
+        (post_id, channel_id),
+    )
+    conn.commit()
+
+    post = collect_all(conn, GENERATED_AT).posts[0]
+
+    assert post.times_posted == 1
+    assert post.last_posted_at == "2026-07-01T12:00:00+00:00"
+
+
+def test_rollups_sum_only_the_latest_metric_snapshot_per_send(conn, make_publication):
+    pub = make_publication()
+    conn.execute("UPDATE publications SET status='posted' WHERE id = ?", (pub["id"],))
+    for fetched, reach, likes in [
+        ("2026-07-01T00:00:00+00:00", 100, 10),
+        ("2026-07-05T00:00:00+00:00", 400, 40),
+    ]:
+        conn.execute(
+            "INSERT INTO post_metrics (publication_id, fetched_at, reach, likes)"
+            " VALUES (?,?,?,?)",
+            (pub["id"], fetched, reach, likes),
+        )
+    conn.commit()
+
+    bundle = collect_all(conn, GENERATED_AT)
+
+    # Both snapshots are kept for charting, but the rollup counts the newest only.
+    assert len(bundle.metrics) == 2
+    assert bundle.posts[0].total_reach == 400
+    assert bundle.posts[0].total_likes == 40
+
+
+def test_collect_all_is_read_only_under_query_only(db_path):
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON;")
+
+    # Must not raise: every statement collect_all issues is a read.
+    bundle = collect_all(conn, GENERATED_AT)
+
+    assert bundle.posts == []
+    conn.close()
