@@ -133,3 +133,44 @@ def test_copy_images_handles_a_bundle_with_no_images(tmp_path):
 
     assert result.copied == 0
     assert result.missing_asset_ids == set()
+
+
+def test_copy_images_missing_conformed_copy_does_not_mark_the_original_missing(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.jpg").write_bytes(b"original-bytes")
+    out = tmp_path / "out"
+
+    result = copy_images(
+        _bundle([_post(42, [_image(
+            1, "0042_test-post_1.jpg", "a.jpg",
+            publish_path="gone-pub.jpg", published_name="0042_test-post_1.jpg",
+        )])]),
+        asset_root=assets,
+        out_dir=out,
+    )
+
+    # The original exported fine — it must never be reported as missing just
+    # because the conformed (Instagram-ready) copy wasn't there.
+    assert result.copied == 1
+    assert result.missing_asset_ids == set()
+    assert len(result.problems) == 1
+    assert "gone-pub.jpg" in result.problems[0]
+
+
+def test_copy_images_missing_original_marks_the_asset_missing_even_if_conformed_copy_exists(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a-pub.jpg").write_bytes(b"cropped-bytes")
+    out = tmp_path / "out"
+
+    result = copy_images(
+        _bundle([_post(42, [_image(
+            1, "0042_test-post_1.jpg", "gone.jpg",
+            publish_path="a-pub.jpg", published_name="0042_test-post_1.jpg",
+        )])]),
+        asset_root=assets,
+        out_dir=out,
+    )
+
+    assert result.missing_asset_ids == {1}
