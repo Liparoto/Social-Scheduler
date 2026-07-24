@@ -8,6 +8,8 @@ import {
   getPostPeriods,
   getCaptionVariants,
   getChannels,
+  getActiveChannels,
+  getPostPublications,
   listPeriods,
   listTags,
 } from "@/lib/queries";
@@ -34,6 +36,8 @@ export default async function EditPostPage({
         post={post}
         assets={getPostAssets(postId)}
         channels={getChannels()}
+        sends={getPostPublications(postId)}
+        sendableChannels={getActiveChannels()}
         periods={listPeriods()}
         timeOfDayTags={listTags("time_of_day")}
         topicTags={listTags("topic")}

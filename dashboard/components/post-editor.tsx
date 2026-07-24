@@ -10,6 +10,7 @@ import type {
   Period,
   PeriodMode,
   Post,
+  PostPublicationRow,
   Tag,
 } from "@/lib/types";
 import { channelColor } from "@/lib/format";
@@ -17,6 +18,7 @@ import { CaptionVariantsEditor } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
+import { PostSendsPanel } from "./post-sends-panel";
 
 const card = "rounded-card border border-border bg-surface p-5";
 const segBtn = (active: boolean) =>
@@ -28,6 +30,8 @@ export function PostEditor({
   post,
   assets,
   channels,
+  sends,
+  sendableChannels,
   periods,
   timeOfDayTags,
   topicTags,
@@ -39,6 +43,8 @@ export function PostEditor({
   post: Post;
   assets: Asset[];
   channels: Channel[];
+  sends: PostPublicationRow[];
+  sendableChannels: Channel[];
   periods: Period[];
   timeOfDayTags: Tag[];
   topicTags: Tag[];
@@ -49,6 +55,9 @@ export function PostEditor({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [kind, setKind] = useState<ContentKind>(post.content_kind);
   const [status, setStatus] = useState<ContentStatus>(post.content_status);
   const [cooldown, setCooldown] = useState(
@@ -99,6 +108,20 @@ export function PostEditor({
     }
     setNotice("Changes saved.");
     startTransition(() => router.refresh());
+  }
+
+  async function deletePost() {
+    setDeleteError(null);
+    setDeleting(true);
+    const res = await fetch(`/api/posts/${post.id}`, { method: "DELETE" });
+    setDeleting(false);
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setDeleteError(b.error ?? "Could not delete this post.");
+      setConfirmDelete(false);
+      return;
+    }
+    router.push("/library");
   }
 
   return (
@@ -192,6 +215,9 @@ export function PostEditor({
       {/* Periods */}
       <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
 
+      {/* Scheduled sends (retarget/hold/remove/add) */}
+      <PostSendsPanel postId={post.id} sends={sends} channels={sendableChannels} />
+
       {/* Content status + cooldown + save */}
       <section className={card}>
         <h3 className="mb-1 font-display text-sm font-semibold text-ink">Content status</h3>
@@ -227,6 +253,40 @@ export function PostEditor({
             {pending ? "Saving…" : "Save changes"}
           </button>
         </div>
+      </section>
+
+      {/* Delete post — guarded, irreversible */}
+      <section className="rounded-card border border-status-failed/30 bg-surface p-5">
+        <h3 className="mb-1 font-display text-sm font-semibold text-status-failed">Delete post</h3>
+        <p className="mb-3 text-xs text-muted">
+          This deletes the post and all its scheduled/failed sends (shared images are kept).
+        </p>
+        {deleteError ? <p className="mb-3 text-sm text-status-failed">{deleteError}</p> : null}
+        {confirmDelete ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={deletePost}
+              disabled={deleting}
+              className="rounded-lg bg-status-failed px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {deleting ? "Deleting…" : "Confirm delete post"}
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleting}
+              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted hover:text-ink disabled:opacity-50"
+            >
+              Keep post
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="rounded-lg border border-status-failed px-4 py-2 text-sm font-medium text-status-failed hover:bg-status-failed/10"
+          >
+            Delete post…
+          </button>
+        )}
       </section>
     </div>
   );
