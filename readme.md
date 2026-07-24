@@ -33,6 +33,22 @@ kill switch · visible (never silent) publish failures.
 Early build. See `docs/plan.md` for the plan and `docs/tasks.md` for phased progress.
 `CLAUDE.md`, `context.md`, and `reference.md` are the source-of-truth context docs.
 
+## Get the code
+Open **Terminal** (macOS) or **Git Bash** (Windows), go to where you keep projects, and run:
+
+```
+git clone https://github.com/Liparoto/Social-Scheduler.git
+```
+
+That makes a `Social-Scheduler` folder — your own private install. Open it and follow the
+quick start below.
+
+> **Don't use GitHub's "Download ZIP".** A ZIP isn't a git checkout, so `Update-Mac.command` /
+> `Update-Windows.bat` can't pull new versions and will stop with an error. Clone it.
+
+Nothing personal is in this repo — no credentials, no database, no images. Your `.env` and your
+`/data` folder are created on *your* machine and are never uploaded.
+
 ## Quick start — start & update by double-click
 
 **Start it:**
