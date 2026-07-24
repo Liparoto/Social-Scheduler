@@ -100,6 +100,27 @@ def test_main_reports_a_corrupt_database_instead_of_crashing(config, tmp_path, m
     assert "not modified" in out.lower()
 
 
+def test_main_returns_1_on_an_unexpected_exception_instead_of_crashing(
+    config, tmp_path, monkeypatch, capsys
+):
+    # Anything not OSError/sqlite3.Error (e.g. openpyxl's IllegalCharacterError, or
+    # any other bug) must still exit cleanly for a non-technical person who
+    # double-clicked an icon — never a raw traceback.
+    monkeypatch.setattr(Config, "from_env", staticmethod(lambda: config))
+    monkeypatch.setattr("worker.export.__main__.DEFAULT_OUT_ROOT", tmp_path / "out")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr("worker.export.__main__.collect_all", _boom)
+
+    exit_code = main([])
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "not modified" in out.lower()
+
+
 def test_export_creates_the_expected_folder_layout(config, conn, make_publication, tmp_path):
     make_publication()
     _seed_assets(config, conn)
@@ -148,3 +169,66 @@ def test_export_completes_when_an_asset_file_is_missing(config, conn, make_publi
     assert result.missing_asset_ids
     assert "could not be found" in (out_dir / "README.txt").read_text()
     assert (out_dir / "SocialScheduler-Export.xlsx").is_file()
+
+
+def test_export_holds_one_snapshot_so_a_mid_collection_commit_is_not_visible(
+    config, conn, make_publication, tmp_path, monkeypatch
+):
+    # sqlite3 does not open a transaction for plain reads: without one, each of
+    # collect_all's 6+ SELECTs takes its own WAL snapshot, and a commit from
+    # another connection (e.g. the worker daemon) between two of them can leave
+    # the export self-inconsistent (a Sends row whose post doesn't exist, etc.).
+    # We interleave a write from a SEPARATE connection after the export's first
+    # read (which establishes its snapshot) but before its later reads, and
+    # confirm the later read does not see it.
+    pub = make_publication()
+    post_id, channel_id = pub["post_id"], pub["channel_id"]
+    conn.commit()
+    conn.close()
+
+    import worker.export.collect as collect_mod
+
+    original_add_rollups = collect_mod.add_rollups
+
+    def _add_rollups_with_interleaved_write(c, posts):
+        other = sqlite3.connect(str(config.database_path))
+        other.execute(
+            "INSERT INTO publications (post_id, channel_id, scheduled_at, status)"
+            " VALUES (?, ?, '2026-08-01T00:00:00+00:00', 'scheduled')",
+            (post_id, channel_id),
+        )
+        other.commit()
+        other.close()
+        return original_add_rollups(c, posts)
+
+    monkeypatch.setattr(collect_mod, "add_rollups", _add_rollups_with_interleaved_write)
+
+    out_dir, _ = run_export(config, out_root=tmp_path / "out", now=NOW)
+
+    data = json.loads((out_dir / "export.json").read_text())
+    # Only the original publication (from make_publication) may appear — the one
+    # inserted by the separate connection, mid-collection, must not leak in.
+    assert len(data["sends"]) == 1
+
+
+def test_export_transaction_is_open_during_collection(
+    config, conn, make_publication, tmp_path, monkeypatch
+):
+    make_publication()
+    conn.commit()
+    conn.close()
+
+    import worker.export.collect as collect_mod
+
+    seen_in_transaction = {}
+    original_collect_all = collect_mod.collect_all
+
+    def _spy(c, generated_at):
+        seen_in_transaction["value"] = c.in_transaction
+        return original_collect_all(c, generated_at)
+
+    monkeypatch.setattr("worker.export.__main__.collect_all", _spy)
+
+    run_export(config, out_root=tmp_path / "out", now=NOW)
+
+    assert seen_in_transaction["value"] is True

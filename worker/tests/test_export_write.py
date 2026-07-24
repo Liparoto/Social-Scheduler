@@ -176,6 +176,48 @@ def test_copy_images_missing_original_marks_the_asset_missing_even_if_conformed_
     assert result.missing_asset_ids == {1}
 
 
+from worker.export.collect import ExportedAsset as _ExportedAssetForOrphans
+
+
+def test_copy_images_copies_orphaned_assets_into_images_unlinked_folder(tmp_path):
+    # An asset present in bundle.assets but referenced by no post's images list —
+    # e.g. an abandoned compose upload, or the leftover original of a deleted post.
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "orphan.jpg").write_bytes(b"orphan-bytes")
+    out = tmp_path / "out"
+
+    bundle = _bundle([_post(42, [])])  # no images reference the orphan at all
+    bundle.assets = [_ExportedAssetForOrphans(
+        asset_id=7, content_hash="h", media_kind="image", original_filename="Orphan Shot.jpg",
+        storage_path="orphan.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
+    )]
+
+    result = copy_images(bundle, asset_root=assets_dir, out_dir=out)
+
+    assert result.copied == 1
+    assert (out / "images-unlinked" / "0007_orphan-shot-jpg.jpg").read_bytes() == b"orphan-bytes"
+
+
+def test_copy_images_skips_unlinked_folder_when_every_asset_is_linked(tmp_path):
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "a.jpg").write_bytes(b"x")
+    out = tmp_path / "out"
+
+    bundle = _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "a.jpg")])])
+    bundle.assets = [_ExportedAssetForOrphans(
+        asset_id=1, content_hash="h", media_kind="image", original_filename="a.jpg",
+        storage_path="a.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
+    )]
+
+    copy_images(bundle, asset_root=assets_dir, out_dir=out)
+
+    assert not (out / "images-unlinked").exists()
+
+
 import json
 
 from worker.export.collect import ExportedChannel, ExportedSend
@@ -241,6 +283,17 @@ def test_write_json_includes_sends_and_records_schema_version(tmp_path):
     assert data["format_version"] == 1
 
 
+def test_write_json_keeps_control_characters_unstripped(tmp_path):
+    # export.json is the full-fidelity artifact; only the workbook is sanitized.
+    post = _post(42, [])
+    post.caption = "Line one\x0bLine two\x0cLine three"
+    bundle = _bundle([post])
+
+    data = json.loads(write_json(bundle, tmp_path).read_text())
+
+    assert data["posts"][0]["caption"] == "Line one\x0bLine two\x0cLine three"
+
+
 from openpyxl import load_workbook
 
 from worker.export.collect import ExportedAsset, ExportedMetric
@@ -267,6 +320,43 @@ def test_write_workbook_writes_headers_even_for_an_empty_database(tmp_path):
 
     assert next(book["Posts"].values)[0] == "post_id"
     assert book["Posts"].max_row == 1
+
+
+def test_naked_utc_timestamp_headers_are_qualified_with_utc(tmp_path):
+    # Every timestamp is supposed to make its timezone explicit — Sends already
+    # does (scheduled_at_utc, published_at_utc). These three columns store raw
+    # UTC too, so their headers must say so instead of implying local time.
+    bundle = _bundle([])
+    bundle.metrics = [ExportedMetric(
+        publication_id=7, post_id=42, fetched_at="2026-07-24T00:00:00+00:00",
+        reach=1, impressions=None, likes=None, comments=None, saves=None,
+        shares=None, video_views=None, raw_json=None,
+    )]
+
+    book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))
+    posts_header = list(next(book["Posts"].values))
+    metrics_header = list(next(book["Metrics"].values))
+
+    assert "created_at_utc" in posts_header
+    assert "created_at" not in posts_header
+    assert "last_posted_at_utc" in posts_header
+    assert "last_posted_at" not in posts_header
+    assert "fetched_at_utc" in metrics_header
+    assert "fetched_at" not in metrics_header
+
+
+def test_workbook_strips_illegal_control_characters_from_string_cells(tmp_path):
+    # Captions pasted from Word/PDF, or a raw last_error string, routinely carry
+    # control characters that openpyxl refuses to write at all (IllegalCharacterError).
+    post = _post(42, [])
+    post.caption = "Line one\x0bLine two\x0cLine three"
+
+    book = load_workbook(write_workbook(_bundle([post]), tmp_path, missing_asset_ids=set()))
+    row = _rows(book["Posts"])[0]
+
+    assert "\x0b" not in row["caption"]
+    assert "\x0c" not in row["caption"]
+    assert row["caption"] == "Line oneLine twoLine three"
 
 
 def test_posts_tab_joins_multi_value_fields_with_commas(tmp_path):
@@ -313,6 +403,21 @@ def test_assets_tab_flags_files_that_were_missing_from_disk(tmp_path):
 
     assert row["exported_filename"] == "MISSING"
     assert row["used_by_posts"] == "42"
+
+
+def test_assets_tab_shows_unlinked_filename_with_empty_used_by_posts(tmp_path):
+    bundle = _bundle([_post(42, [])])  # no post references this asset
+    bundle.assets = [ExportedAsset(
+        asset_id=7, content_hash="h", media_kind="image", original_filename="Orphan Shot.jpg",
+        storage_path="orphan.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
+    )]
+
+    book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))
+    row = _rows(book["Assets"])[0]
+
+    assert row["exported_filename"] == "0007_orphan-shot-jpg.jpg"
+    assert row["used_by_posts"] in (None, "")
 
 
 def test_assets_tab_lists_every_post_that_uses_a_shared_asset(tmp_path):
@@ -501,6 +606,27 @@ def test_readme_reports_asset_count_and_problem_count_as_distinct_figures(tmp_pa
     # Both problem lines must be present (not just their asset IDs somewhere else)
     assert "asset 2: original not found at /x/gone1.jpg" in text
     assert "asset 2: original not found at /x/gone2.jpg" in text
+
+
+def test_readme_mentions_images_unlinked_only_when_there_are_orphaned_assets(tmp_path):
+    bundle_with = _bundle([_post(42, [])])
+    bundle_with.assets = [ExportedAsset(
+        asset_id=7, content_hash="h", media_kind="image", original_filename="orphan.jpg",
+        storage_path="orphan.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
+    )]
+    text_with = write_readme(bundle_with, tmp_path, CopyResult(copied=1)).read_text()
+    assert "images-unlinked" in text_with
+    assert "not attached to any post" in text_with.lower()
+
+    bundle_without = _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "a.jpg")])])
+    bundle_without.assets = [ExportedAsset(
+        asset_id=1, content_hash="h", media_kind="image", original_filename="a.jpg",
+        storage_path="a.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
+    )]
+    text_without = write_readme(bundle_without, tmp_path, CopyResult(copied=1)).read_text()
+    assert "images-unlinked" not in text_without
 
 
 def test_readme_truncates_a_long_problem_list(tmp_path):

@@ -50,8 +50,22 @@ def run_export(
 
     conn = open_readonly(config.database_path)
     try:
+        # Hold ONE read transaction across the whole collection. Python's sqlite3
+        # module does not open a transaction for plain reads, so without this each
+        # of collect_all's 6+ SELECTs would take its own independent WAL snapshot —
+        # if the worker daemon commits a publish in between two of them, the
+        # export could end up with a Sends row whose post doesn't exist, or
+        # rollups that disagree with the Sends tab in the same file. BEGIN here
+        # pins one snapshot for every read that follows, so the export is always
+        # a consistent point-in-time backup. query_only stays ON; a read
+        # transaction doesn't need write permission.
+        conn.execute("BEGIN")
         bundle = collect_all(conn, generated_at=now.isoformat())
     finally:
+        # Always end the transaction, even if collection raised, so the
+        # connection isn't left half-open when we close it below.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         conn.close()
 
     # Images first: the Assets tab reports which files were missing.
@@ -83,6 +97,14 @@ def main(argv: list[str] | None = None) -> int:
         # wrote to it, so the install's data is untouched — only the export failed.
         print(f"Could not read the database at {config.database_path}: {exc}")
         print("Your data was not modified. The database file may be corrupt.")
+        return 1
+    except Exception as exc:
+        # Catch-all: the export is read-only start to finish, so nothing was
+        # written to the database no matter where this came from. A person who
+        # double-clicked an icon must see a plain message, never a raw traceback.
+        print(f"Something went wrong while exporting: {exc}")
+        print("Your data was not modified. If this keeps happening, share this")
+        print("message with whoever set SocialScheduler up for you.")
         return 1
 
     print(f"Exported to: {out_dir}")

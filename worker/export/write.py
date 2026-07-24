@@ -12,13 +12,15 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
-from worker.export.collect import ExportBundle
+from worker.export.collect import ExportBundle, ExportedAsset, slugify
 
 IMAGES_DIR = "images"
 PUBLISHED_DIR = "images-published"
+UNLINKED_DIR = "images-unlinked"
 
 
 @dataclass
@@ -63,8 +65,19 @@ def _copy_one(
     return True
 
 
+def unlinked_filename(asset: ExportedAsset) -> str:
+    """Filename for an asset backed up because it belongs to no post.
+
+    Mirrors collect.py's `_images_for` naming: an id-prefixed, slugified name so
+    it sorts and reads the same way as post-linked images do.
+    """
+    ext = Path(asset.storage_path).suffix.lower() or ".bin"
+    return f"{asset.asset_id:04d}_{slugify(asset.original_filename)}{ext}"
+
+
 def copy_images(bundle: ExportBundle, asset_root: Path, out_dir: Path) -> CopyResult:
-    """Copy every post's images under their exported names.
+    """Copy every post's images under their exported names, plus any asset that
+    is not linked to a post at all.
 
     An asset shared by two posts is written once per post, under each post's own
     name — duplication on disk is cheaper than a filename that only makes sense
@@ -73,10 +86,17 @@ def copy_images(bundle: ExportBundle, asset_root: Path, out_dir: Path) -> CopyRe
     `missing_asset_ids` reflects only the ORIGINAL file (storage_path). A missing
     or unreadable CONFORMED copy (publish_path) is noted in `problems` but never
     added there — the irreplaceable source still exported fine.
+
+    Orphaned assets — rows in `assets` reached by no post, e.g. an abandoned
+    compose upload, or the leftover original of a post that was deleted (assets
+    is ON DELETE RESTRICT while post_assets cascades) — are backed up too, into
+    UNLINKED_DIR, so a backup never silently drops content.
     """
     result = CopyResult()
+    linked_asset_ids: set[int] = set()
     for post in bundle.posts:
         for image in post.images:
+            linked_asset_ids.add(image.asset_id)
             _copy_one(
                 _resolve(asset_root, image.storage_path),
                 out_dir / IMAGES_DIR,
@@ -94,6 +114,18 @@ def copy_images(bundle: ExportBundle, asset_root: Path, out_dir: Path) -> CopyRe
                     image.asset_id,
                     is_original=False,
                 )
+
+    for asset in bundle.assets:
+        if asset.asset_id in linked_asset_ids:
+            continue
+        _copy_one(
+            _resolve(asset_root, asset.storage_path),
+            out_dir / UNLINKED_DIR,
+            unlinked_filename(asset),
+            result,
+            asset.asset_id,
+            is_original=True,
+        )
     return result
 
 
@@ -133,6 +165,18 @@ def _join(values: list[str] | list[int]) -> str:
     return ", ".join(str(v) for v in values)
 
 
+def _sanitize_cell(value):
+    """Strip control characters openpyxl refuses to write (IllegalCharacterError).
+
+    Captions pasted from Word or a PDF, and API `last_error` strings, routinely
+    carry \\x0b/\\x0c and friends. Only strings are touched — export.json keeps the
+    original, unmodified text; this sanitization is workbook-only.
+    """
+    if isinstance(value, str):
+        return ILLEGAL_CHARACTERS_RE.sub("", value)
+    return value
+
+
 def _add_sheet(book: Workbook, title: str, headers: list[str], rows: list[list]) -> None:
     """One tab: a bold frozen header row, the data, and readable column widths."""
     sheet = book.create_sheet(title)
@@ -141,7 +185,7 @@ def _add_sheet(book: Workbook, title: str, headers: list[str], rows: list[list])
         cell.font = Font(bold=True)
     sheet.freeze_panes = "A2"
     for row in rows:
-        sheet.append(row)
+        sheet.append([_sanitize_cell(v) for v in row])
     for index, header in enumerate(headers, start=1):
         widths = [len(str(header))]
         widths += [
@@ -156,8 +200,8 @@ def _add_sheet(book: Workbook, title: str, headers: list[str], rows: list[list])
 POSTS_HEADERS = [
     "post_id", "caption", "first_comment", "post_type", "content_kind", "content_status",
     "status", "tags", "green_periods", "blackout_periods", "cooldown_days",
-    "target_channels", "image_files", "times_posted", "last_posted_at", "total_reach",
-    "total_likes", "created_by", "created_at",
+    "target_channels", "image_files", "times_posted", "last_posted_at_utc", "total_reach",
+    "total_likes", "created_by", "created_at_utc",
 ]
 
 SENDS_HEADERS = [
@@ -167,7 +211,7 @@ SENDS_HEADERS = [
 ]
 
 METRICS_HEADERS = [
-    "publication_id", "post_id", "fetched_at", "reach", "impressions", "likes",
+    "publication_id", "post_id", "fetched_at_utc", "reach", "impressions", "likes",
     "comments", "saves", "shares", "video_views",
 ]
 
@@ -253,10 +297,18 @@ def write_workbook(
             return ""
         return _join(entries)
 
+    def _exported_filename_cell(asset: ExportedAsset) -> str:
+        if asset.asset_id in missing_asset_ids:
+            return "MISSING"
+        if asset.asset_id in names:
+            return _join(names[asset.asset_id])
+        # Not linked to any post — the file backed up under UNLINKED_DIR.
+        return unlinked_filename(asset)
+
     _add_sheet(book, "Assets", ASSETS_HEADERS, [
         [
             a.asset_id,
-            "MISSING" if a.asset_id in missing_asset_ids else _join(names.get(a.asset_id, [])),
+            _exported_filename_cell(a),
             a.original_filename, a.media_kind, a.width, a.height, a.byte_size,
             a.conform_mode, a.needs_review, a.content_hash,
             _join(usage.get(a.asset_id, [])), _published_cell(a.asset_id),
@@ -288,6 +340,9 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
     with no idea what produced it."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    linked_asset_ids = {img.asset_id for post in bundle.posts for img in post.images}
+    has_unlinked_assets = any(a.asset_id not in linked_asset_ids for a in bundle.assets)
+
     lines = [
         "SocialScheduler — Content Export",
         "=" * 40,
@@ -311,6 +366,16 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         "                                actually sent to Instagram, where those",
         "                                differ from the original.",
         "",
+    ]
+    if has_unlinked_assets:
+        lines += [
+            f"  {UNLINKED_DIR}/               Images not attached to any post — for",
+            "                                example, left over from a deleted post or",
+            "                                an abandoned upload that was never finished.",
+            "                                They're included here so nothing is lost.",
+            "",
+        ]
+    lines += [
         "Image filenames are 'postID_caption_position', so you can match any image",
         "back to its row in the Posts tab.",
         "",
