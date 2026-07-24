@@ -75,9 +75,15 @@ def _record(conn, publication_id: int, fetched_at: str, insights: dict) -> None:
         "reach": None, "impressions": None, "likes": None, "comments": None,
         "saves": None, "shares": None, "video_views": None,
     }
+    # Several Meta metric names intentionally map to the same column (e.g. both
+    # post_total_media_view_unique and post_impressions_unique -> reach), so an operator
+    # may reasonably configure more than one. The FIRST mapped value wins per column —
+    # relying on `insights` iteration order to reflect the operator's configured
+    # preference (see _fetch_facebook) — rather than the last one Meta happened to
+    # return. `0` is a legitimate value, so only skip when the column is still unset.
     for name, value in insights.items():
         col = COLUMN_MAP.get(name)
-        if col:
+        if col and cols[col] is None and value is not None:
             cols[col] = value
     conn.execute(
         """INSERT INTO post_metrics
@@ -110,13 +116,25 @@ def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub
     insights: dict = {}
     if metrics:
         try:
-            insights = client.get_page_post_insights(remote_post_id, token, metrics)
+            fetched = client.get_page_post_insights(remote_post_id, token, metrics)
         except Exception as exc:  # noqa: BLE001 — best-effort by design
+            fetched = {}
             if logger:
                 logger.info(
-                    "[metrics pub %s] Facebook reach unavailable (%s): %s",
+                    "[metrics pub %s] Facebook insight metrics unavailable (%s): %s",
                     pub_id, ",".join(metrics), exc,
                 )
+        # Order the returned insights by the operator's configured preference, so that
+        # when multiple configured names map to the same post_metrics column (see
+        # COLUMN_MAP / _record), the first one the operator listed wins deterministically
+        # rather than whatever order Meta's response happened to use. Any names Meta
+        # returned that weren't configured are appended after, so raw_json stays complete.
+        for name in metrics:
+            if name in fetched:
+                insights[name] = fetched[name]
+        for name, value in fetched.items():
+            if name not in insights:
+                insights[name] = value
     return {**summary, **insights}
 
 

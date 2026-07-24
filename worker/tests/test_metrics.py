@@ -188,6 +188,40 @@ def test_manual_flag_overrides_age_window_and_is_cleared(conn, config, fake_clie
     assert flag is None  # cleared, so the UI won't read "Queued" forever
 
 
+def test_facebook_first_configured_reach_metric_wins_deterministically(
+    conn, config, make_publication
+):
+    """Two configured metrics both map to `reach` (post_total_media_view_unique and
+    post_impressions_unique). Meta returns both, with different values, in the OPPOSITE
+    order from how the operator configured them. The recorded `reach` must be the value
+    of the metric listed FIRST in fb_post_insight_metrics — never whichever key Meta's
+    response happened to put last. Against the old last-wins _record, this fails."""
+    import dataclasses
+
+    fb_config = dataclasses.replace(
+        config,
+        fb_post_insight_metrics="post_total_media_view_unique,post_impressions_unique",
+    )
+    now = datetime.now(timezone.utc)
+    pub = _posted_fb_pub(conn, make_publication, now)
+
+    client = FakeGraphClient(
+        page_insights={
+            # Meta's raw response order puts the *second*-configured metric last, so a
+            # naive "last key in the dict wins" reducer would pick post_impressions_unique
+            # (999) instead of the operator's preferred post_total_media_view_unique (40).
+            "post_total_media_view_unique": 40,
+            "post_impressions_unique": 999,
+        }
+    )
+
+    assert run_metrics(conn, fb_config, client, now) == 1
+    row = conn.execute(
+        "SELECT * FROM post_metrics WHERE publication_id = ?", (pub["id"],)
+    ).fetchone()
+    assert row["reach"] == 40  # the first-configured metric's value, not Meta's last key
+
+
 def _posted_fb_pub(conn, make_publication, now):
     """A Facebook publication already posted, due for a metrics fetch."""
     pub = make_publication(platform="facebook", now=now)
