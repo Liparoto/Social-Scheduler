@@ -164,6 +164,12 @@ export function PublicationQueue({
                           <span title="Reactions">♥ {p.m_likes ?? "—"}</span>
                           <span title="Comments">💬 {p.m_comments ?? "—"}</span>
                           <span title="Shares">↪ {p.m_shares ?? "—"}</span>
+                          {/* Reach is best-effort on Facebook (Meta keeps retiring the metric
+                              names), so show it only when we actually got a number — an empty
+                              slot would read as "broken" on every normal row. */}
+                          {p.m_reach != null ? (
+                            <span title="Reach">◎ {p.m_reach}</span>
+                          ) : null}
                         </p>
                       ) : (
                         <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">

@@ -162,10 +162,12 @@ carousel). Videos, Reels and Stories aren't supported yet. Images are conformed 
 Instagram's shape today (cropped/padded to the 4:5–1.91:1 range) even though Facebook itself
 accepts most aspect ratios — Facebook just gets the same derivative Instagram would use.
 
-**About the numbers.** Reactions, comments and shares are always available. Reach/views
-depends on a Facebook insights metric name that Meta deprecated a batch of in June 2026 and
-keeps changing — if it's unavailable, reach shows blank and everything else still works. You
-can point it at a different metric with `FB_POST_INSIGHT_METRICS` in `.env`.
+**About the numbers.** Reactions, comments and shares are always available, and those are what
+a Facebook row shows in the queue. Reach/views is different: it depends on a Facebook insights
+metric name, and Meta retired a batch of those in June 2026 and keeps changing them. When the
+metric works, reach appears alongside the other three; when it doesn't, reach is simply left
+out and everything else still works. You can point it at a different metric with
+`FB_POST_INSIGHT_METRICS` in `.env`.
 
 **Gotcha: a failed multi-image post can leave orphaned photos.** If photo 3 of 5 fails to
 upload, photos 1 and 2 are already sitting in the Page's media library as unpublished
