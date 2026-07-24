@@ -542,6 +542,12 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
     .all(limit) as PublicationRow[];
 }
 
+export function getPublication(id: number): Publication | undefined {
+  return getDb().prepare("SELECT * FROM publications WHERE id = ?").get(id) as
+    | Publication
+    | undefined;
+}
+
 /** Reset a failed publication so the worker retries it on the next poll. */
 export function retryPublication(id: number): boolean {
   const info = getDb()
