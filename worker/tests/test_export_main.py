@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import zipfile
 from datetime import datetime, timezone
 
 import pytest
 from openpyxl import load_workbook
 
-from worker.export.__main__ import open_readonly, run_export
+from worker.config import Config
+from worker.export.__main__ import main, open_readonly, run_export
 
 NOW = datetime(2026, 7, 24, 19, 30, tzinfo=timezone.utc)
 
@@ -30,8 +32,12 @@ def _seed_assets(config, conn):
 def test_open_readonly_rejects_writes(db_path):
     conn = open_readonly(db_path)
 
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(sqlite3.OperationalError) as excinfo:
         conn.execute("INSERT INTO tags (name) VALUES ('nope')")
+
+    # A missing table would raise the same exception type, so pin down the message
+    # too — this confirms query_only is what blocked it, not a schema mistake.
+    assert "readonly" in str(excinfo.value).lower()
 
     conn.close()
 
@@ -54,11 +60,44 @@ def test_export_writes_no_token_into_any_file(config, conn, make_publication, tm
 
     out_dir, _ = run_export(config, out_root=tmp_path / "out", now=NOW)
 
+    forbidden = (b"tok-123", b"access_token")
+
+    def _assert_clean(blob: bytes, where: str) -> None:
+        for needle in forbidden:
+            assert needle not in blob, f"token leaked into {where}"
+
     for path in out_dir.rglob("*"):
-        if path.is_file():
-            blob = path.read_bytes()
-            assert b"tok-123" not in blob, f"token leaked into {path.name}"
-            assert b"access_token" not in blob, f"token column leaked into {path.name}"
+        if not path.is_file():
+            continue
+        # openpyxl DEFLATE-compresses every member of an .xlsx (it's a ZIP archive),
+        # so a raw byte scan of the file never sees a token that IS present in a
+        # cell — it only sees compressed bytes. Scan each member's decompressed
+        # bytes instead for any zip archive; everything else gets the raw scan.
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as archive:
+                for member in archive.namelist():
+                    _assert_clean(archive.read(member), f"{path.name}!{member}")
+        else:
+            _assert_clean(path.read_bytes(), path.name)
+
+
+def test_main_reports_a_corrupt_database_instead_of_crashing(config, tmp_path, monkeypatch, capsys):
+    # A file that exists but is not a valid SQLite database — e.g. a truncated or
+    # otherwise corrupted DB file. sqlite3 raises DatabaseError for this, which does
+    # NOT subclass OSError, so it must be caught explicitly in main().
+    bad_db = tmp_path / "corrupt.db"
+    bad_db.write_bytes(b"this is not a database")
+    bad_config = Config(**{**config.__dict__, "database_path": bad_db})
+
+    monkeypatch.setattr(Config, "from_env", staticmethod(lambda: bad_config))
+    # Don't let a failed run scribble a folder into the real ~/Documents.
+    monkeypatch.setattr("worker.export.__main__.DEFAULT_OUT_ROOT", tmp_path / "out")
+
+    exit_code = main([])
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "not modified" in out.lower()
 
 
 def test_export_creates_the_expected_folder_layout(config, conn, make_publication, tmp_path):

@@ -78,6 +78,12 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"Could not write the export: {exc}")
         return 1
+    except sqlite3.Error as exc:
+        # Corrupt/not-a-database, etc. The connection is query_only and we never
+        # wrote to it, so the install's data is untouched — only the export failed.
+        print(f"Could not read the database at {config.database_path}: {exc}")
+        print("Your data was not modified. The database file may be corrupt.")
+        return 1
 
     print(f"Exported to: {out_dir}")
     print(f"  {copy_result.copied} image file(s) copied")
@@ -87,7 +93,9 @@ def main(argv: list[str] | None = None) -> int:
             f"  {len(copy_result.missing_asset_ids)} image file(s) were missing from disk"
             " (see README.txt)"
         )
-    print(str(out_dir))  # last line: the wrapper reads this to open Finder
+    # Last line: the wrapper (next task) reads this line to open Finder.
+    # Nothing may be printed after this — keep it the final output of main().
+    print(str(out_dir))
     return 0
 
 
