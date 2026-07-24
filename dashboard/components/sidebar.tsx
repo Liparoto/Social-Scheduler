@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeControls } from "@/components/theme-controls";
+import { UpdateBanner } from "@/components/update-banner";
 
 const NAV = [
   { href: "/", label: "Overview", hint: "Queue & status" },
@@ -64,6 +65,7 @@ export function Sidebar() {
       </nav>
 
       <div className="p-3 border-t border-border space-y-3">
+        <UpdateBanner />
         <ThemeControls />
         <p className="px-3 text-[11px] leading-relaxed text-faint">
           Worker runs separately.

@@ -385,6 +385,13 @@ without ever risking her `.env` (secrets) or `/data` (DB + assets) — both giti
       DRY_RUN=0 Enter→fallback / YES→worker; missing-Node and missing-Python messages; Update
       not-a-checkout + dirty-tracked stops; ff-only fast-forwards when behind and **refuses when
       diverged**. README quick-start updated.
+- [x] **In-dashboard "check for updates"** (read-only). `GET /api/update-check` does a read-only
+      `git fetch` + `rev-list --count HEAD..@{u}` (5-min cache, `?force=1` bypass, platform-aware),
+      never pulls. Sidebar footer `UpdateBanner`: silent muted "Check for updates"/"Up to date"
+      when current/unknown; amber "Update available — you're N behind, close the app + double-click
+      Update-Mac/Windows" when behind (dismissible). Applying stays in the Update script — a running
+      server can't cleanly replace its own code + restart. Verified all 3 states end-to-end
+      (current/behind via a throwaway local upstream, reverted), dismiss, no console errors, tsc clean.
 
 ---
 
