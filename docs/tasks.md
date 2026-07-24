@@ -334,6 +334,33 @@ per-asset (so evergreen auto-fill reuses it).
 
 ---
 
+## Queue control — manage sends before they post  `[x] done`
+Design: `docs/design-queue-control.md` · Plan: `docs/superpowers/plans/2026-07-23-queue-control.md`
+Between "scheduled" and "posted" the owner can now fully manage a send. Guiding safety rule:
+**never destroy the record of anything already posted to Instagram** (deletes are local-only and
+blocked on posted/publishing content). The worker fires sends at their time whenever it's running
+(no Meta-side scheduling), so these controls act on the local queue it polls.
+- [x] **Cancel** (shipped first, `dc5dd40`): two-click Cancel on scheduled/pending sends → the
+      `canceled` status that was in the schema but unreachable; drops out of the worker's queue.
+- [x] Migration `0007`: `publications.is_held` (additive). Worker `fetch_due_publications` gains
+      `AND is_held = 0` — a held send is simply never picked up (like canceled). +worker test.
+- [x] Query layer: `deletePublication` / `reschedulePublication` / `holdPublication` /
+      `resumePublication` / `deletePost` (3-state, blocked on live) / `getPostPublications`; all
+      guarded (`WHERE … AND status IN (…)`) so they're atomic vs the worker (409, never a race).
+- [x] Publication routes: `hold` · `resume` · `reschedule` ({date,time} → the send's own channel
+      tz → UTC via `intervalSlots`) · `DELETE` (delete send). Guarded post-delete route (404/409/200).
+- [x] **Overview** per-send controls: Hold/Resume + Cancel inline, Reschedule + Delete under a
+      "More" toggle, a **Held** chip. **Post editor** "Scheduled sends" panel: list + per-send
+      reschedule/hold/remove + **Add a send** (retarget, reuses `POST /api/posts/[id]/schedule`) +
+      guarded **Delete post**.
+- [x] Verified: 83 worker tests; dashboard `tsc` clean; each task TDD/curl + reviewed; the whole
+      flow browser-verified (hold→chip, reschedule DST-correct 10:30 EDT→14:30 UTC, delete-send,
+      add-send, delete-post blocked-when-live vs succeeds+redirects; DB baseline + FK intact).
+- Deferred: bulk queue ops; a "hold" is a modifier not a new status; Facebook (native scheduling)
+  revisited in Phase 6.
+
+---
+
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 - [ ] Facebook Pages publish + metrics adapter.
