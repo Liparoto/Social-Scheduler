@@ -531,6 +531,24 @@ export function approvePublication(id: number): boolean {
   return info.changes > 0;
 }
 
+/**
+ * Cancel a send that hasn't gone out yet. Only 'scheduled' or 'pending_approval'
+ * publications are cancelable — the `WHERE status IN (...)` guard makes this atomic
+ * against the worker: if it already flipped the row to 'publishing', 0 rows change
+ * and we report the conflict rather than canceling an in-flight (or posted) send.
+ * Canceling clears any retry state so the row rests cleanly in 'canceled'.
+ */
+export function cancelPublication(id: number): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE publications
+       SET status = 'canceled', next_retry_at = NULL, updated_at = @now
+       WHERE id = @id AND status IN ('scheduled', 'pending_approval')`
+    )
+    .run({ id, now: nowIso() });
+  return info.changes > 0;
+}
+
 /** Flag a posted, non-dry-run publication for an on-demand metrics fetch. */
 export function requestMetricsRefresh(
   publicationId: number
