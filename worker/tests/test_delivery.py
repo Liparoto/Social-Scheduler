@@ -103,8 +103,8 @@ def test_tunnel_missing_binary_raises_with_guidance(config):
 
 
 # ---- publisher: URL resolution precedence -------------------------------------------
-def _asset(public_url=None, storage_path="assets/x.jpg"):
-    return {"public_url": public_url, "storage_path": storage_path, "id": 1}
+def _asset(public_url=None, storage_path="assets/x.jpg", **extra):
+    return {"public_url": public_url, "storage_path": storage_path, "id": 1, **extra}
 
 
 def test_resolve_url_prefers_external_then_tunnel_then_none():
@@ -116,6 +116,27 @@ def test_resolve_url_prefers_external_then_tunnel_then_none():
         "https://t.trycloudflare.com/assets/hash.jpg"
 
     assert _resolve_url(local, None) is None  # no external url, no tunnel
+
+
+def test_resolve_url_prefers_publish_path_over_storage_path():
+    asset = _asset(public_url=None, storage_path="abc.png", publish_path="pub/abc.jpg")
+    assert _resolve_url(asset, "https://t.example") == "https://t.example/pub/abc.jpg"
+
+
+def test_resolve_url_falls_back_to_storage_path_when_no_publish_path():
+    asset = _asset(public_url=None, storage_path="abc.png", publish_path=None)
+    assert _resolve_url(asset, "https://t.example") == "https://t.example/abc.png"
+
+
+def test_resolve_url_legacy_row_without_publish_path_key_falls_back():
+    # Legacy rows / older fixtures may not carry the publish_path key at all.
+    asset = {"public_url": None, "storage_path": "abc.png", "id": 1}
+    assert _resolve_url(asset, "https://t.example") == "https://t.example/abc.png"
+
+
+def test_resolve_url_external_public_url_still_wins_over_publish_path():
+    asset = _asset(public_url="https://cdn.example/real.jpg", publish_path="pub/abc.jpg")
+    assert _resolve_url(asset, "https://t.example") == "https://cdn.example/real.jpg"
 
 
 def test_build_plan_uses_tunnel_urls():

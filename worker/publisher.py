@@ -77,14 +77,22 @@ def _resolve_url(asset, asset_base_url: str | None) -> str | None:
     """The public URL Meta will download from.
 
     Precedence: an explicit external public_url (the manual/paste escape hatch) wins;
-    otherwise build one from the live tunnel base + the asset's storage_path (content
-    hash). None means the asset can't currently be served publicly.
+    otherwise prefer the Meta-conformed derivative at publish_path if present; otherwise
+    fall back to the original storage_path (content hash). None means the asset can't
+    currently be served publicly.
     """
     external = asset["public_url"]
     if external:
         return external
-    if asset_base_url and asset["storage_path"]:
-        return f"{asset_base_url.rstrip('/')}/{asset['storage_path']}"
+    if asset_base_url:
+        rel = None
+        # keys() guard: legacy rows / some test fixtures may not carry publish_path.
+        if "publish_path" in asset.keys() and asset["publish_path"]:
+            rel = asset["publish_path"]
+        elif asset["storage_path"]:
+            rel = asset["storage_path"]
+        if rel:
+            return f"{asset_base_url.rstrip('/')}/{rel}"
     return None
 
 
