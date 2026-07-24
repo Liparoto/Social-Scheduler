@@ -176,6 +176,8 @@ export function PublicationActions({
       onClick={() => {
         setShowMore((v) => !v);
         setShowReschedule(false);
+        setConfirmDelete(false);
+        setConfirmCancel(false);
       }}
       className="rounded-md px-1.5 py-1 text-xs font-medium text-faint hover:text-ink-soft"
       title="More actions"
@@ -211,7 +213,7 @@ export function PublicationActions({
           disabled={pending}
           className="rounded-md px-2 py-1 text-xs font-medium text-muted hover:text-ink disabled:opacity-50"
         >
-          Cancel
+          Discard
         </button>
       </div>
       {isPastInTz(date, time, channelTimezone) ? (
