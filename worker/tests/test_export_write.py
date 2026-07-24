@@ -239,3 +239,113 @@ def test_write_json_includes_sends_and_records_schema_version(tmp_path):
 
     assert data["sends"][0]["publication_id"] == 7
     assert data["format_version"] == 1
+
+
+from openpyxl import load_workbook
+
+from worker.export.collect import ExportedAsset, ExportedMetric
+from worker.export.write import write_workbook
+
+
+def _rows(sheet):
+    """Sheet contents as a list of dicts keyed by the header row."""
+    values = list(sheet.values)
+    header = values[0]
+    return [dict(zip(header, row)) for row in values[1:]]
+
+
+def test_write_workbook_creates_all_five_tabs(tmp_path):
+    path = write_workbook(_bundle([]), tmp_path, missing_asset_ids=set())
+    book = load_workbook(path)
+
+    assert path.name == "SocialScheduler-Export.xlsx"
+    assert book.sheetnames == ["Posts", "Sends", "Metrics", "Assets", "Channels"]
+
+
+def test_write_workbook_writes_headers_even_for_an_empty_database(tmp_path):
+    book = load_workbook(write_workbook(_bundle([]), tmp_path, missing_asset_ids=set()))
+
+    assert next(book["Posts"].values)[0] == "post_id"
+    assert book["Posts"].max_row == 1
+
+
+def test_posts_tab_joins_multi_value_fields_with_commas(tmp_path):
+    post = _post(42, [
+        _image(1, "0042_test-post_1.jpg", "assets/a.jpg"),
+        _image(2, "0042_test-post_2.jpg", "assets/b.jpg"),
+    ])
+    post.tags = ["mobility", "balance"]
+    post.target_channels = ["Test IG"]
+    post.times_posted = 3
+    post.total_reach = 900
+
+    book = load_workbook(write_workbook(_bundle([post]), tmp_path, missing_asset_ids=set()))
+    row = _rows(book["Posts"])[0]
+
+    assert row["tags"] == "mobility, balance"
+    assert row["image_files"] == "0042_test-post_1.jpg, 0042_test-post_2.jpg"
+    assert row["times_posted"] == 3
+    assert row["total_reach"] == 900
+
+
+def test_channels_tab_has_no_token_column(tmp_path):
+    bundle = _bundle([])
+    bundle.channels = [_channel()]
+
+    book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))
+    header = next(book["Channels"].values)
+
+    assert "access_token" not in header
+    assert "token_expires_at" not in header
+    assert "account_name" in header
+
+
+def test_assets_tab_flags_files_that_were_missing_from_disk(tmp_path):
+    bundle = _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "assets/gone.jpg")])])
+    bundle.assets = [ExportedAsset(
+        asset_id=1, content_hash="h", media_kind="image", original_filename="gone.jpg",
+        storage_path="assets/gone.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=1080, height=1080, byte_size=None,
+    )]
+
+    book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids={1}))
+    row = _rows(book["Assets"])[0]
+
+    assert row["exported_filename"] == "MISSING"
+    assert row["used_by_posts"] == "42"
+
+
+def test_assets_tab_lists_every_post_that_uses_a_shared_asset(tmp_path):
+    bundle = _bundle([
+        _post(42, [_image(1, "0042_test-post_1.jpg", "assets/s.jpg")]),
+        _post(51, [_image(1, "0051_test-post_1.jpg", "assets/s.jpg")]),
+    ])
+    bundle.assets = [ExportedAsset(
+        asset_id=1, content_hash="h", media_kind="image", original_filename="s.jpg",
+        storage_path="assets/s.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=1080, height=1080, byte_size=10,
+    )]
+
+    row = _rows(load_workbook(
+        write_workbook(bundle, tmp_path, missing_asset_ids=set())
+    )["Assets"])[0]
+
+    assert row["used_by_posts"] == "42, 51"
+    assert row["exported_filename"] == "0042_test-post_1.jpg, 0051_test-post_1.jpg"
+
+
+def test_metrics_tab_omits_raw_json_but_keeps_every_snapshot(tmp_path):
+    bundle = _bundle([])
+    bundle.metrics = [
+        ExportedMetric(
+            publication_id=7, post_id=42, fetched_at=f"2026-07-0{n}T00:00:00+00:00",
+            reach=n * 100, impressions=None, likes=n, comments=None, saves=None,
+            shares=None, video_views=None, raw_json='{"big":"payload"}',
+        )
+        for n in (1, 5)
+    ]
+
+    sheet = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))["Metrics"]
+
+    assert "raw_json" not in next(sheet.values)
+    assert len(_rows(sheet)) == 2

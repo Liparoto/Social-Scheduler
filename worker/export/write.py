@@ -11,6 +11,10 @@ import shutil
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
+
 from worker.export.collect import ExportBundle
 
 IMAGES_DIR = "images"
@@ -117,4 +121,144 @@ def write_json(bundle: ExportBundle, out_dir: Path) -> Path:
     path = out_dir / "export.json"
     # ensure_ascii=False keeps captions readable if someone opens this in a text editor.
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+WORKBOOK_NAME = "SocialScheduler-Export.xlsx"
+MAX_COLUMN_WIDTH = 60
+
+
+def _join(values: list[str] | list[int]) -> str:
+    return ", ".join(str(v) for v in values)
+
+
+def _add_sheet(book: Workbook, title: str, headers: list[str], rows: list[list]) -> None:
+    """One tab: a bold frozen header row, the data, and readable column widths."""
+    sheet = book.create_sheet(title)
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    sheet.freeze_panes = "A2"
+    for row in rows:
+        sheet.append(row)
+    for index, header in enumerate(headers, start=1):
+        widths = [len(str(header))]
+        widths += [
+            len(str(row[index - 1])) for row in rows if row[index - 1] is not None
+        ]
+        sheet.column_dimensions[get_column_letter(index)].width = min(
+            max(widths) + 2, MAX_COLUMN_WIDTH
+        )
+    sheet.auto_filter.ref = sheet.dimensions
+
+
+POSTS_HEADERS = [
+    "post_id", "caption", "first_comment", "post_type", "content_kind", "content_status",
+    "status", "tags", "green_periods", "blackout_periods", "cooldown_days",
+    "target_channels", "image_files", "times_posted", "last_posted_at", "total_reach",
+    "total_likes", "created_by", "created_at",
+]
+
+SENDS_HEADERS = [
+    "publication_id", "post_id", "caption_preview", "channel", "scheduled_at_local",
+    "scheduled_at_utc", "published_at_local", "status", "is_held", "is_dry_run",
+    "attempt_count", "last_error", "remote_post_id",
+]
+
+METRICS_HEADERS = [
+    "publication_id", "post_id", "fetched_at", "reach", "impressions", "likes",
+    "comments", "saves", "shares", "video_views",
+]
+
+ASSETS_HEADERS = [
+    "asset_id", "exported_filename", "original_filename", "media_kind", "width", "height",
+    "byte_size", "conform_mode", "needs_review", "content_hash", "used_by_posts",
+    "published_copy_filename",
+]
+
+CHANNELS_HEADERS = [
+    "channel_id", "platform", "account_name", "business_label", "timezone", "is_active",
+    "requires_approval", "autofill_enabled", "cadence_config", "min_queue_depth",
+    "target_queue_depth", "reuse_min_age_days", "remote_account_id", "linked_page_id",
+]
+
+
+def write_workbook(
+    bundle: ExportBundle, out_dir: Path, missing_asset_ids: set[int]
+) -> Path:
+    """The human artifact: five tabs, each with one clear grain.
+
+    Written after the images are copied, because the Assets tab reports which files
+    were missing from disk.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    book = Workbook()
+    book.remove(book.active)  # drop openpyxl's default empty sheet
+
+    _add_sheet(book, "Posts", POSTS_HEADERS, [
+        [
+            p.post_id, p.caption, p.first_comment, p.post_type, p.content_kind,
+            p.content_status, p.status, _join(p.tags), _join(p.green_periods),
+            _join(p.blackout_periods), p.cooldown_days, _join(p.target_channels),
+            _join([i.export_filename for i in p.images]), p.times_posted,
+            p.last_posted_at, p.total_reach, p.total_likes, p.created_by, p.created_at,
+        ]
+        for p in bundle.posts
+    ])
+
+    _add_sheet(book, "Sends", SENDS_HEADERS, [
+        [
+            s.publication_id, s.post_id, s.caption_preview, s.channel_label,
+            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local, s.status,
+            s.is_held, s.is_dry_run, s.attempt_count, s.last_error, s.remote_post_id,
+        ]
+        for s in bundle.sends
+    ])
+
+    _add_sheet(book, "Metrics", METRICS_HEADERS, [
+        [
+            m.publication_id, m.post_id, m.fetched_at, m.reach, m.impressions, m.likes,
+            m.comments, m.saves, m.shares, m.video_views,
+        ]
+        for m in bundle.metrics
+    ])
+
+    # An asset can appear in several posts under a different name in each.
+    usage: dict[int, list[int]] = {}
+    names: dict[int, list[str]] = {}
+    published: dict[int, list[str]] = {}
+    for post in bundle.posts:
+        for image in post.images:
+            usage.setdefault(image.asset_id, []).append(post.post_id)
+            names.setdefault(image.asset_id, []).append(image.export_filename)
+            if image.published_filename:
+                published.setdefault(image.asset_id, []).append(image.published_filename)
+
+    _add_sheet(book, "Assets", ASSETS_HEADERS, [
+        [
+            a.asset_id,
+            "MISSING" if a.asset_id in missing_asset_ids else _join(names.get(a.asset_id, [])),
+            a.original_filename, a.media_kind, a.width, a.height, a.byte_size,
+            a.conform_mode, a.needs_review, a.content_hash,
+            _join(usage.get(a.asset_id, [])), _join(published.get(a.asset_id, [])),
+        ]
+        for a in bundle.assets
+    ])
+
+    _add_sheet(book, "Channels", CHANNELS_HEADERS, [
+        [
+            c.channel_id, c.platform, c.account_name, c.business_label, c.timezone,
+            c.is_active, c.requires_approval, c.autofill_enabled, c.cadence_config,
+            c.min_queue_depth, c.target_queue_depth, c.reuse_min_age_days,
+            c.remote_account_id, c.linked_page_id,
+        ]
+        for c in bundle.channels
+    ])
+
+    # Captions are long; wrapping keeps the Posts tab scannable.
+    for cell in book["Posts"]["B"]:
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    path = out_dir / WORKBOOK_NAME
+    book.save(path)
     return path
