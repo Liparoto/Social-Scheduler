@@ -431,8 +431,24 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       `reach + saves`, both of which Facebook rarely/never provides, so it scores every FB
       post as 0 and recycling falls back to age/staleness order for FB until the planned
       best-performing-post work (see Phase 6+ backlog below) revisits the ranking formula.
-- [ ] Real-post verification (owner): add a test Page + long-lived Page token per
-      `docs/meta-setup.md`, then one real photo + one real multi-photo post.
+- [~] Real-post verification (owner) — **PARKED 2026-07-24**, to resume alongside other
+      platform connections. Code is done, reviewed, merged and dry-run verified; what remains is
+      Meta-side account plumbing only. State when parked:
+      - **Blocker:** the Meta app (`Liparoto Social Scheduler`) does not offer
+        `pages_manage_posts`. It only has the Instagram use case, so its permission list has the
+        two read-only Page perms (`pages_show_list`, `pages_read_engagement`) plus
+        `business_management`. **Fix:** App Dashboard → Dashboard → add/customize the
+        **"Manage everything on your Page"** use case → Add `pages_manage_posts`. No App Review
+        needed for one's own Page with the app in Development mode + admin role.
+      - **Page available:** "Lectin Free Kitchen", id `369360343622084`, tasks include
+        `CREATE_CONTENT` + `MANAGE` (full admin) — technically ready once the perm exists.
+      - `me/accounts` returned only that one Page of ~9; re-grant with all Pages selected, or the
+        rest are Business-portfolio-owned (different endpoint).
+      - **Settled:** the Graph API cannot publish to a personal profile (hard platform limit
+        since 2018 — `publish_actions`). Instagram's "also share to Facebook" crossposting is a
+        first-party Accounts Center feature and does NOT imply API access to a profile. A Page is
+        the only route; a Page need not be a business (Digital Creator etc. is fine).
+      - Undecided: which Page the first real post targets.
 - [ ] Reels/video (async container, status polling, `video_url`).
 - [ ] Stories.
 - [ ] First-comment automation (post-publish comment endpoint).

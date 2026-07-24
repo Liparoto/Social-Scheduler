@@ -139,22 +139,49 @@ as long as you're an **admin** on both the app and the Page. Same arrangement as
    leave `META_GRAPH_BASE` exactly as it is. (This matters if your Instagram channel is on
    the Instagram-Login path — `META_GRAPH_BASE=https://graph.instagram.com` — because
    changing that setting for Facebook's sake would break every Instagram publish.)
-2. **Give your app the permissions.** In the Graph API Explorer, pick your app and request
-   `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`.
-3. **Get your Page id and a Page access token.** Call `GET /me/accounts` in the Explorer.
-   Each entry has the Page's `id` and an `access_token` — that token is the *Page* token,
-   which is what SocialScheduler needs (a personal user token will not publish).
-4. **Make the token long-lived.** Short-lived Page tokens expire in about an hour. Exchange
-   yours for a long-lived one, then re-run step 3 to get a Page token derived from it:
-   `GET /oauth/access_token?grant_type=fb_exchange_token&client_id=<APP_ID>&client_secret=<APP_SECRET>&fb_exchange_token=<SHORT_TOKEN>`
-5. **Add the channel.** In the dashboard: **Channels → Add channel**, platform
-   **Facebook Page**, put the Page id in the id field and the long-lived Page token in the
-   token field.
-6. **Verify without posting.** Run `python3 -m worker.preflight` — it checks credentials and
+2. **Tell your app it manages Pages — do this BEFORE the Explorer.** Meta scopes an app's
+   available permissions to its *use cases*, so `pages_manage_posts` (the one that actually
+   publishes) is hidden until you add the Page use case. In the App Dashboard:
+   **developers.facebook.com/apps** → your app → **Dashboard** → add/customize the
+   **"Manage everything on your Page"** use case → click **Add** next to `pages_manage_posts`.
+   Skip this and step 3's permission list will offer only the read-only Page permissions.
+   (Adding a use case doesn't remove existing ones — an app set up for Instagram keeps working,
+   and any already-issued Instagram token is unaffected.)
+   Ignore "Advanced Access / requires review" labels: for **your own** Page, with the app in
+   **Development mode** and you an admin of both app and Page, Standard Access is enough.
+3. **Give your app the permissions.** In the Graph API Explorer, pick your app and request
+   `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`. When the approval popup
+   asks which Pages to allow, **select every Page you want to manage** — Pages you leave
+   unticked simply won't appear later.
+4. **Get your Page id.** Run `me/accounts` in the Explorer. Each entry is a Page you administer,
+   with its `id`, `name`, and a Page `access_token`. Note the `id` of the Page you want.
+   An empty `{"data": []}` means you administer no Pages — create one first (see the note below).
+   Check `tasks` includes `CREATE_CONTENT` and `MANAGE`; that's what proves you can publish.
+5. **Make the token permanent.** The Page token from step 4 expires in about an hour, because it
+   inherits the lifetime of the short-lived user token behind it. To get one that doesn't expire:
+   - Copy the token, open **developers.facebook.com/tools/debug/accesstoken/**, paste, **Debug**
+   - Click **Extend Access Token** → this returns a long-lived *user* token
+   - Put that extended token in the Explorer and run `me/accounts` **again**
+
+   The Page `access_token` in *this* result is permanent. (This route avoids ever putting your
+   app secret in a browser URL, which the `fb_exchange_token` method requires.)
+6. **Add the channel.** In the dashboard: **Channels → Add channel**, platform
+   **Facebook Page**, put the Page id in the id field and the permanent Page token in the
+   token field. Paste the token straight into the dashboard — it's stored only in this install's
+   local database.
+7. **Verify without posting.** Run `python3 -m worker.preflight` — it checks credentials and
    publishes nothing. For a Facebook channel this is a plain Page read (Pages have no
    publish-quota endpoint like Instagram's), so a `✓` here means the token and Page id work.
    Then schedule a post with `DRY_RUN=1` and confirm the worker logs the plan. Only then set
    `DRY_RUN=0` for a real post.
+
+**A Page is the only option — and it doesn't have to be a business.** Facebook has allowed no
+API publishing to a personal **profile** since 2018 (`publish_actions`), and there is no
+replacement and no permission that unlocks it. Instagram's own "also share to Facebook" toggle
+*can* post to your profile, but that's a first-party Accounts Center feature and grants outside
+tools nothing — don't take it as a sign the API can do the same. If you don't have a Page, make
+one at **facebook.com/pages/create**; a category like *Digital Creator* is fine, it takes about
+two minutes, and it doesn't alter your personal profile in any way.
 
 **What gets published.** A single-image post goes up in one call. A multi-image post uploads
 each photo unpublished, then attaches them to one feed post (Facebook's equivalent of a
