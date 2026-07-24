@@ -416,12 +416,19 @@ without touching the database directly.
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 Done one sub-project at a time (own spec → plan → build), not all at once.
-- [~] **Facebook Pages publish + metrics adapter** — spec'd
-      (`docs/superpowers/specs/2026-07-23-facebook-pages-adapter-design.md`). Single image +
-      multi-photo; mirrors the IG lifecycle (queue controls work unchanged); per-platform Graph
-      client (FB → graph.facebook.com); **fail-soft metrics** (stable reactions/comments/shares +
-      best-effort reach/views, since Meta deprecated many post insights 2026-06-15). No schema
-      change — schema/config/dashboard already FB-ready. Work is in 3 worker files + tests.
+- [x] **Facebook Pages publish + metrics adapter** — spec
+      `docs/superpowers/specs/2026-07-23-facebook-pages-adapter-design.md`, plan
+      `docs/superpowers/plans/2026-07-23-facebook-pages-adapter.md`. Single image
+      (`/{page}/photos`, one call, stores the feed `post_id`) + multi-photo (unpublished
+      uploads → `attached_media` feed post). No schema change. New `worker/clients.py`
+      picks the Graph host per platform (FB pinned to graph.facebook.com, IG keeps
+      `META_GRAPH_BASE`) so one install can mix IG + FB. IG quota gate skipped for FB
+      (Pages have no `content_publishing_limit`). Metrics: stable reactions/comments/shares
+      + best-effort reach via `FB_POST_INSIGHT_METRICS` (null, never fatal, when Meta
+      rejects the name — a batch was deprecated 2026-06-15). Queue controls, captions,
+      fan-out and dry-run all work unchanged.
+- [ ] Real-post verification (owner): add a test Page + long-lived Page token per
+      `docs/meta-setup.md`, then one real photo + one real multi-photo post.
 - [ ] Reels/video (async container, status polling, `video_url`).
 - [ ] Stories.
 - [ ] First-comment automation (post-publish comment endpoint).

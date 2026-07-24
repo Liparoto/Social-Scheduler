@@ -125,3 +125,38 @@ If it fails, the publication shows **Failed** with the exact Graph API error —
   worker paces itself; you don't set a number.
 - Our uploader currently accepts JPEG/PNG/WebP, but **Meta only accepts JPEG for image posts** —
   use JPEG for anything you'll actually publish. (A validation tightening we can add.)
+
+---
+
+## Adding a Facebook Page
+
+Publishing to your own Page works with your app in **Development mode** — no App Review —
+as long as you're an **admin** on both the app and the Page. Same arrangement as Instagram.
+
+1. **Set the API host.** In `.env`, make sure `META_GRAPH_BASE=https://graph.facebook.com`.
+   (Facebook Pages always use this host. If your Instagram channel is on the
+   Instagram-Login path, leave your IG setting alone — the worker picks the right host
+   per channel automatically.)
+2. **Give your app the permissions.** In the Graph API Explorer, pick your app and request
+   `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`.
+3. **Get your Page id and a Page access token.** Call `GET /me/accounts` in the Explorer.
+   Each entry has the Page's `id` and an `access_token` — that token is the *Page* token,
+   which is what SocialScheduler needs (a personal user token will not publish).
+4. **Make the token long-lived.** Short-lived Page tokens expire in about an hour. Exchange
+   yours for a long-lived one, then re-run step 3 to get a Page token derived from it:
+   `GET /oauth/access_token?grant_type=fb_exchange_token&client_id=<APP_ID>&client_secret=<APP_SECRET>&fb_exchange_token=<SHORT_TOKEN>`
+5. **Add the channel.** In the dashboard: **Channels → Add channel**, platform
+   **Facebook Page**, put the Page id in the id field and the long-lived Page token in the
+   token field.
+6. **Verify without posting.** Run `python3 -m worker.preflight` — it checks credentials and
+   publishes nothing. Then schedule a post with `DRY_RUN=1` and confirm the worker logs the
+   plan. Only then set `DRY_RUN=0` for a real post.
+
+**What gets published.** A single-image post goes up in one call. A multi-image post uploads
+each photo unpublished, then attaches them to one feed post (Facebook's equivalent of a
+carousel). Videos, Reels and Stories aren't supported yet.
+
+**About the numbers.** Reactions, comments and shares are always available. Reach/views
+depends on a Facebook insights metric name that Meta deprecated a batch of in June 2026 and
+keeps changing — if it's unavailable, reach shows blank and everything else still works. You
+can point it at a different metric with `FB_POST_INSIGHT_METRICS` in `.env`.
