@@ -930,15 +930,22 @@ def add_rollups(conn: sqlite3.Connection, posts: list[ExportedPost]) -> None:
         )
     }
     # Only the newest snapshot per publication, so repeated refreshes don't multiply.
+    # ROW_NUMBER rather than a MAX(fetched_at) re-join: nothing constrains
+    # (publication_id, fetched_at) to be unique, and a re-join would sum BOTH rows
+    # on a tie. id DESC makes the pick deterministic when timestamps collide.
     totals: dict[int, tuple[int, int]] = {}
     latest = conn.execute(
-        "SELECT pub.post_id, m.reach, m.likes"
-        "  FROM post_metrics m"
-        "  JOIN publications pub ON pub.id = m.publication_id"
-        "  JOIN (SELECT publication_id, MAX(fetched_at) AS newest"
-        "          FROM post_metrics GROUP BY publication_id) top"
-        "    ON top.publication_id = m.publication_id AND top.newest = m.fetched_at"
-        " WHERE pub.is_dry_run = 0"
+        "SELECT post_id, reach, likes FROM ("
+        "  SELECT pub.post_id AS post_id, m.reach AS reach, m.likes AS likes,"
+        "         ROW_NUMBER() OVER ("
+        "           PARTITION BY m.publication_id"
+        "           ORDER BY m.fetched_at DESC, m.id DESC"
+        "         ) AS rn"
+        "    FROM post_metrics m"
+        "    JOIN publications pub ON pub.id = m.publication_id"
+        "   WHERE pub.is_dry_run = 0"
+        ") ranked"
+        " WHERE rn = 1"
     )
     for row in latest:
         reach, likes = totals.get(row["post_id"], (0, 0))
