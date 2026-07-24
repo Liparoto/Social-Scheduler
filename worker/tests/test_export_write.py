@@ -349,3 +349,76 @@ def test_metrics_tab_omits_raw_json_but_keeps_every_snapshot(tmp_path):
 
     assert "raw_json" not in next(sheet.values)
     assert len(_rows(sheet)) == 2
+
+
+def test_assets_tab_keeps_published_copy_filename_index_aligned_with_used_by_posts(tmp_path):
+    # Asset used by three posts; only the 2nd and 3rd were conformed. Without
+    # index-alignment, published_copy_filename would only have two entries and
+    # a reader would misread post 42 as having produced the first conformed file.
+    bundle = _bundle([
+        _post(42, [_image(1, "0042_test-post_1.jpg", "assets/s.jpg")]),
+        _post(51, [_image(
+            1, "0051_test-post_1.jpg", "assets/s.jpg",
+            publish_path="assets/s-pub-51.jpg", published_name="0051_test-post_1.jpg",
+        )]),
+        _post(60, [_image(
+            1, "0060_test-post_1.jpg", "assets/s.jpg",
+            publish_path="assets/s-pub-60.jpg", published_name="0060_test-post_1.jpg",
+        )]),
+    ])
+    bundle.assets = [ExportedAsset(
+        asset_id=1, content_hash="h", media_kind="image", original_filename="s.jpg",
+        storage_path="assets/s.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=1080, height=1080, byte_size=10,
+    )]
+
+    row = _rows(load_workbook(
+        write_workbook(bundle, tmp_path, missing_asset_ids=set())
+    )["Assets"])[0]
+
+    used_by = row["used_by_posts"].split(", ")
+    published = row["published_copy_filename"].split(", ")
+
+    assert used_by == ["42", "51", "60"]
+    assert len(published) == len(used_by)
+    assert published[0] == "-"
+    assert published[1] == "0051_test-post_1.jpg"
+    assert published[2] == "0060_test-post_1.jpg"
+
+
+def test_assets_tab_published_copy_filename_is_empty_when_nothing_was_conformed(tmp_path):
+    bundle = _bundle([
+        _post(42, [_image(1, "0042_test-post_1.jpg", "assets/s.jpg")]),
+        _post(51, [_image(1, "0051_test-post_1.jpg", "assets/s.jpg")]),
+    ])
+    bundle.assets = [ExportedAsset(
+        asset_id=1, content_hash="h", media_kind="image", original_filename="s.jpg",
+        storage_path="assets/s.jpg", publish_path=None, conform_mode="none",
+        needs_review=False, mime_type="image/jpeg", width=1080, height=1080, byte_size=10,
+    )]
+
+    row = _rows(load_workbook(
+        write_workbook(bundle, tmp_path, missing_asset_ids=set())
+    )["Assets"])[0]
+
+    assert row["published_copy_filename"] in (None, "")
+
+
+def test_sends_tab_has_published_at_utc_adjacent_to_published_at_local(tmp_path):
+    bundle = _bundle([])
+    bundle.sends = [ExportedSend(
+        publication_id=7, post_id=42, caption_preview="hello", channel_label="Test IG (instagram)",
+        scheduled_at_utc="2026-07-24T18:00:00+00:00", scheduled_at_local="2026-07-24 18:00",
+        published_at_utc="2026-07-24T18:05:00+00:00", published_at_local="2026-07-24 18:05",
+        status="published", is_held=False, is_dry_run=False, attempt_count=1,
+        last_error=None, remote_post_id="123456",
+    )]
+
+    book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))
+    header = list(next(book["Sends"].values))
+
+    local_idx = header.index("published_at_local")
+    assert header[local_idx + 1] == "published_at_utc"
+
+    row = _rows(book["Sends"])[0]
+    assert row["published_at_utc"] == "2026-07-24T18:05:00+00:00"

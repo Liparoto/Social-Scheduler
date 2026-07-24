@@ -161,8 +161,8 @@ POSTS_HEADERS = [
 
 SENDS_HEADERS = [
     "publication_id", "post_id", "caption_preview", "channel", "scheduled_at_local",
-    "scheduled_at_utc", "published_at_local", "status", "is_held", "is_dry_run",
-    "attempt_count", "last_error", "remote_post_id",
+    "scheduled_at_utc", "published_at_local", "published_at_utc", "status", "is_held",
+    "is_dry_run", "attempt_count", "last_error", "remote_post_id",
 ]
 
 METRICS_HEADERS = [
@@ -209,8 +209,9 @@ def write_workbook(
     _add_sheet(book, "Sends", SENDS_HEADERS, [
         [
             s.publication_id, s.post_id, s.caption_preview, s.channel_label,
-            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local, s.status,
-            s.is_held, s.is_dry_run, s.attempt_count, s.last_error, s.remote_post_id,
+            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local,
+            s.published_at_utc, s.status, s.is_held, s.is_dry_run, s.attempt_count,
+            s.last_error, s.remote_post_id,
         ]
         for s in bundle.sends
     ])
@@ -224,6 +225,10 @@ def write_workbook(
     ])
 
     # An asset can appear in several posts under a different name in each.
+    # `published` is index-aligned with `usage`/`names` (one entry per post, in the
+    # same order) rather than a compacted list of just the conformed ones — otherwise
+    # a reader lining these columns up positionally would pair the wrong post with
+    # the wrong conformed file whenever only some of an asset's posts were conformed.
     usage: dict[int, list[int]] = {}
     names: dict[int, list[str]] = {}
     published: dict[int, list[str]] = {}
@@ -231,8 +236,21 @@ def write_workbook(
         for image in post.images:
             usage.setdefault(image.asset_id, []).append(post.post_id)
             names.setdefault(image.asset_id, []).append(image.export_filename)
-            if image.published_filename:
-                published.setdefault(image.asset_id, []).append(image.published_filename)
+            # Placeholder "-" holds this post's slot so the list stays index-aligned
+            # with used_by_posts even when this particular image wasn't conformed.
+            # Do NOT drop entries here to "clean up" the column — that's what
+            # caused the misalignment bug this comment is guarding against.
+            published.setdefault(image.asset_id, []).append(
+                image.published_filename or "-"
+            )
+
+    def _published_cell(asset_id: int) -> str:
+        entries = published.get(asset_id, [])
+        # Nothing was conformed for this asset anywhere — an all-placeholder row
+        # ("-, -, -") is just noise, so leave the cell empty instead.
+        if not any(entry != "-" for entry in entries):
+            return ""
+        return _join(entries)
 
     _add_sheet(book, "Assets", ASSETS_HEADERS, [
         [
@@ -240,7 +258,7 @@ def write_workbook(
             "MISSING" if a.asset_id in missing_asset_ids else _join(names.get(a.asset_id, [])),
             a.original_filename, a.media_kind, a.width, a.height, a.byte_size,
             a.conform_mode, a.needs_review, a.content_hash,
-            _join(usage.get(a.asset_id, [])), _join(published.get(a.asset_id, [])),
+            _join(usage.get(a.asset_id, [])), _published_cell(a.asset_id),
         ]
         for a in bundle.assets
     ])
