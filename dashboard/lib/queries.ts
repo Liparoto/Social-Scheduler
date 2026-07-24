@@ -147,6 +147,23 @@ export function upsertAssetByHash(input: InsertAssetInput): { asset: Asset; dedu
   };
 }
 
+/** Dynamic SET, same pattern as updateChannel. Assets have no updated_at column. */
+export function updateAssetConform(
+  id: number,
+  fields: Partial<{
+    publish_path: string | null;
+    conform_mode: "none" | "crop" | "pad";
+    needs_review: number;
+  }>
+): void {
+  const keys = Object.keys(fields);
+  if (keys.length === 0) return;
+  const setClause = keys.map((k) => `${k} = @${k}`).join(", ");
+  getDb()
+    .prepare(`UPDATE assets SET ${setClause} WHERE id = @id`)
+    .run({ ...fields, id });
+}
+
 export function recentAssets(limit = 60): Asset[] {
   return getDb()
     .prepare("SELECT * FROM assets ORDER BY created_at DESC, id DESC LIMIT ?")
