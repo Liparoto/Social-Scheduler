@@ -151,8 +151,8 @@ not every snapshot, which would multiply-count.
 ### `Sends` — one row per publication
 
 `publication_id` · `post_id` · `caption_preview` · `channel` · `scheduled_at_local` ·
-`scheduled_at_utc` · `published_at_local` · `status` · `is_held` · `is_dry_run` ·
-`attempt_count` · `last_error` · `remote_post_id`
+`scheduled_at_utc` · `published_at_local` · `published_at_utc` · `status` · `is_held` ·
+`is_dry_run` · `attempt_count` · `last_error` · `remote_post_id`
 
 Complete send history including failures, per the project rule that failed publishes
 are visible and never silent. `caption_preview` is the first 60 characters, for
@@ -180,7 +180,9 @@ but is preserved in `export.json`.
 
 Because an asset shared by two posts is written to disk once under each post's name,
 `exported_filename` and `published_copy_filename` are comma-joined lists, ordered to
-match `used_by_posts`.
+match `used_by_posts`. Where a post's copy of a shared asset was not conformed, its
+slot in `published_copy_filename` holds `-` so the columns stay index-aligned; when no
+post conformed the asset at all, the cell is simply empty.
 
 ### `Channels` — configuration only
 

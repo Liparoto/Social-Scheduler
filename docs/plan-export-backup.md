@@ -1564,8 +1564,8 @@ POSTS_HEADERS = [
 
 SENDS_HEADERS = [
     "publication_id", "post_id", "caption_preview", "channel", "scheduled_at_local",
-    "scheduled_at_utc", "published_at_local", "status", "is_held", "is_dry_run",
-    "attempt_count", "last_error", "remote_post_id",
+    "scheduled_at_utc", "published_at_local", "published_at_utc", "status", "is_held",
+    "is_dry_run", "attempt_count", "last_error", "remote_post_id",
 ]
 
 METRICS_HEADERS = [
@@ -1612,8 +1612,9 @@ def write_workbook(
     _add_sheet(book, "Sends", SENDS_HEADERS, [
         [
             s.publication_id, s.post_id, s.caption_preview, s.channel_label,
-            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local, s.status,
-            s.is_held, s.is_dry_run, s.attempt_count, s.last_error, s.remote_post_id,
+            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local,
+            s.published_at_utc, s.status, s.is_held, s.is_dry_run, s.attempt_count,
+            s.last_error, s.remote_post_id,
         ]
         for s in bundle.sends
     ])
@@ -1634,8 +1635,14 @@ def write_workbook(
         for image in post.images:
             usage.setdefault(image.asset_id, []).append(post.post_id)
             names.setdefault(image.asset_id, []).append(image.export_filename)
-            if image.published_filename:
-                published.setdefault(image.asset_id, []).append(image.published_filename)
+            # AS SHIPPED (review fix): one entry PER POST, using "-" where that post's
+            # copy was not conformed, so this column stays index-aligned with
+            # used_by_posts. Appending only real filenames silently paired a post with
+            # another post's file. An asset conformed nowhere renders as an empty cell
+            # rather than "-, -, -". See worker/export/write.py.
+            published.setdefault(image.asset_id, []).append(
+                image.published_filename or "-"
+            )
 
     _add_sheet(book, "Assets", ASSETS_HEADERS, [
         [
