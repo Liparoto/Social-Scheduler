@@ -1169,6 +1169,11 @@ PUBLISHED_DIR = "images-published"
 @dataclass
 class CopyResult:
     copied: int = 0
+    # AS SHIPPED (review fix): missing_asset_ids means the asset's ORIGINAL could not
+    # be exported — that is the only thing the Assets tab should mark MISSING. A
+    # missing CONFORMED copy is recorded in `problems` only, because the original is
+    # still sitting in images/ and calling it missing would be a false alarm about
+    # irreplaceable data. See worker/export/write.py for the shipped wording.
     missing_asset_ids: set[int] = field(default_factory=set)
     problems: list[str] = field(default_factory=list)
 
