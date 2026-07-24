@@ -60,6 +60,11 @@ It pulls the newest code (fast-forward only), applies any new database changes, 
 dependencies. Your `.env` and `/data` are never touched. If you have local code edits, no network,
 or it isn't a git checkout, it stops with a plain explanation and changes nothing.
 
+**Back up your content:**
+- **macOS:** double-click **`Export-Mac.command`** — saves every post, image, and stat into a
+  dated folder in `~/Documents/SocialScheduler Exports/`, ready to drag into Google Drive.
+  Read-only: it never changes or posts anything.
+
 **Manual (for developers):**
 1. Copy `.env.example` → `.env` and fill in your own Meta app + per-channel credentials.
 2. `python3 migrate.py` to build/update the local database.

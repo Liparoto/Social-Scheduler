@@ -203,6 +203,25 @@ def test_channel_allow_list_excludes_every_secret():
     assert "token_expires_at" not in CHANNEL_COLUMNS
 
 
+def test_channel_allow_list_rejects_any_secret_shaped_column_name():
+    # Name-specific checks (above) only catch secrets we already know about. This
+    # one is structural: it fails the moment ANYONE adds a future credential column
+    # (refresh_token, client_secret, webhook_signing_key, api_key, ...) to the
+    # allow-list, without needing to know its exact name in advance.
+    secret_substrings = ("token", "secret", "password", "key", "credential")
+    for column in CHANNEL_COLUMNS:
+        lowered = column.lower()
+        hits = [s for s in secret_substrings if s in lowered]
+        assert not hits, (
+            f"CHANNEL_COLUMNS contains {column!r}, which looks like a credential "
+            f"(matches {hits}). This allow-list controls what the export is allowed "
+            "to read from `channels` and ends up in files people drag into Google "
+            "Drive — secret-shaped columns must never be added to it. If this is a "
+            "genuine non-secret column, rename it to avoid the substring or update "
+            "this test's rationale."
+        )
+
+
 def test_channel_allow_list_only_names_real_columns(conn):
     actual = {r[1] for r in conn.execute("PRAGMA table_info(channels)")}
     assert set(CHANNEL_COLUMNS) <= actual
