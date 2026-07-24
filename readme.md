@@ -33,18 +33,34 @@ kill switch · visible (never silent) publish failures.
 Early build. See `docs/plan.md` for the plan and `docs/tasks.md` for phased progress.
 `CLAUDE.md`, `context.md`, and `reference.md` are the source-of-truth context docs.
 
-## Quick start — the dashboard
+## Quick start — start & update by double-click
 
-**Easiest (double-click):**
-- **macOS:** double-click **`Start-Dashboard-Mac.command`**. (First time, if macOS blocks it:
-  right-click → Open.)
-- **Windows:** double-click **`Start-Dashboard-Windows.bat`**.
+**Start it:**
+- **macOS:** double-click **`Start-SocialScheduler-Mac.command`**. (First time, if macOS blocks
+  it: right-click → Open.)
+- **Windows:** double-click **`Start-SocialScheduler-Windows.bat`**.
 
-Either one creates your `.env` from the template, prepares the database, installs
-dependencies on first run, starts the dashboard, and opens `http://localhost:3939`.
-Requires **Node.js** (nodejs.org) and **Python 3** installed. Close the window to stop.
+On first run it creates your `.env` from the template, prepares the database, and installs
+everything (dashboard deps **and** the worker's Python environment). Every run it re-checks the
+database so new updates apply automatically. Then it asks what you want to do:
 
-**Manual:**
+- **1) Compose only** — opens the dashboard at `http://localhost:3939`; the worker never runs, so
+  **nothing can post**. This is the default and is always safe.
+- **2) Go live** — opens the dashboard **and** starts the worker that publishes due posts. While
+  `DRY_RUN=1` (the shipped default) the worker only *logs* what it would post. If you've set
+  `DRY_RUN=0`, it asks you to type **YES** first — otherwise it quietly stays in Compose only.
+
+**Close the window to stop everything** — the worker shuts down cleanly. Requires **Node.js**
+(nodejs.org) and **Python 3** (python.org); the launcher tells you if either is missing.
+
+**Update to the latest code (keeps all your data):**
+- **macOS:** double-click **`Update-Mac.command`** · **Windows:** **`Update-Windows.bat`**.
+
+It pulls the newest code (fast-forward only), applies any new database changes, and refreshes
+dependencies. Your `.env` and `/data` are never touched. If you have local code edits, no network,
+or it isn't a git checkout, it stops with a plain explanation and changes nothing.
+
+**Manual (for developers):**
 1. Copy `.env.example` → `.env` and fill in your own Meta app + per-channel credentials.
 2. `python3 migrate.py` to build/update the local database.
 3. `cd dashboard && npm install && npm run dev` for the dashboard.

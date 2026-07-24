@@ -361,6 +361,33 @@ blocked on posted/publishing content). The worker fires sends at their time when
 
 ---
 
+## Friendly launcher + update (hand-off to a non-technical teammate)  `[x]`
+Spec: `docs/superpowers/specs/2026-07-23-launcher-and-update-design.md`. Goal: someone who won't
+touch a terminal can start everything with one double-click and update with one double-click,
+without ever risking her `.env` (secrets) or `/data` (DB + assets) — both gitignored.
+- [x] Replaced the two `Start-Dashboard-*` files with **one launcher per platform**
+      (`Start-SocialScheduler-Mac.command` / `-Windows.bat`). Preflight (Node + Python 3, friendly
+      guidance if missing) → idempotent setup every launch (create `.env`, always run `migrate.py`,
+      install dashboard deps + create the worker `.venv`) → a 2-item menu.
+- [x] **Compose only** (default): dashboard only, worker never runs → nothing can post.
+      **Go live**: starts the worker in the background **and** the dashboard; on window close the
+      worker is stopped cleanly (Mac `trap … EXIT INT TERM HUP` → SIGTERM; Windows titled worker
+      window + `taskkill`).
+- [x] **Real-post guard**: Go live reads `DRY_RUN` from `.env` live. `DRY_RUN=1` → worker runs in
+      dry-run with a clear note. `DRY_RUN=0` → "type YES to post for REAL" or fall back to Compose
+      only. Warns (non-fatal) if `cloudflared` is missing; notes `KILL_SWITCH=1` idles the worker.
+- [x] **Update scripts** (`Update-Mac.command` / `-Windows.bat`): not-a-checkout / no-network /
+      local tracked-code edits each stop with a plain message and change nothing; otherwise
+      `git pull --ff-only` → `migrate.py` → refresh deps → success. Never stash/discard/force;
+      untracked stray files are ignored (ff-only still refuses a real collision).
+- [x] Verified on this Mac: Compose starts no worker; Go-live(dry-run) starts the worker + it
+      writes a fresh heartbeat; SIGTERM → clean "Worker stopped."; trap leaves no orphan;
+      DRY_RUN=0 Enter→fallback / YES→worker; missing-Node and missing-Python messages; Update
+      not-a-checkout + dirty-tracked stops; ff-only fast-forwards when behind and **refuses when
+      diverged**. README quick-start updated.
+
+---
+
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 - [ ] Facebook Pages publish + metrics adapter.
