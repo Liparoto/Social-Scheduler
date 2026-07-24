@@ -1801,6 +1801,13 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         "",
     ]
 
+    # AS SHIPPED (review fix): this section is gated on `problems`, NOT on
+    # missing_asset_ids. A conformed-copy failure never enters missing_asset_ids, so
+    # the original branching printed "No problems. Everything exported." and dropped
+    # the failure entirely — silent, which this project forbids. The shipped version
+    # also states the image count and the problem count as two clearly different
+    # figures (one asset can fail in several posts) and caps the listing at
+    # MAX_PROBLEM_LINES. See worker/export/write.py for the shipped text.
     if copy_result.missing_asset_ids:
         lines += [
             "PROBLEMS",
