@@ -3,12 +3,22 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import type { Channel, ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
+import type { ConformMode } from "@/lib/conform";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
+import { ConformControl } from "./conform-control";
 
 // `uid` is a per-tile client id: two tiles can share an assetId (re-importing a
 // deduped image), so React keys must not be the assetId.
-type Item = { uid: string; assetId: number; name: string; caption: string; deduped: boolean };
+type Item = {
+  uid: string;
+  assetId: number;
+  name: string;
+  caption: string;
+  deduped: boolean;
+  conformMode: ConformMode;
+  needsReview: number;
+};
 
 const card = "rounded-card border border-border bg-surface p-5";
 const segBtn = (active: boolean) =>
@@ -60,7 +70,15 @@ export function BulkImport({
       const uid = `${body.asset.id}-${uidRef.current++}`;
       setItems((prev) => [
         ...prev,
-        { uid, assetId: body.asset.id, name: file.name, caption: "", deduped: body.deduped },
+        {
+          uid,
+          assetId: body.asset.id,
+          name: file.name,
+          caption: "",
+          deduped: body.deduped,
+          conformMode: body.asset.conform_mode,
+          needsReview: body.asset.needs_review,
+        },
       ]);
     }
     if (dedup > 0) setNotice(`${dedup} image(s) already existed (matched by content) — reused.`);
@@ -137,12 +155,21 @@ export function BulkImport({
           <div className="grid gap-4 sm:grid-cols-2">
             {items.map((it, i) => (
               <div key={it.uid} className="flex gap-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`/api/media/${it.assetId}?variant=thumb`}
-                  alt=""
-                  className="h-20 w-20 shrink-0 rounded-lg object-cover"
-                />
+                <div className="shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/media/${it.assetId}?variant=thumb`}
+                    alt=""
+                    className="h-20 w-20 rounded-lg object-cover"
+                  />
+                  {it.needsReview ? (
+                    <ConformControl
+                      assetId={it.assetId}
+                      conformMode={it.conformMode}
+                      needsReview={it.needsReview}
+                    />
+                  ) : null}
+                </div>
                 <div className="flex-1">
                   <textarea
                     className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand"

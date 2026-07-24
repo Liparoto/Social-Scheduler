@@ -16,6 +16,7 @@ import { channelColor } from "@/lib/format";
 import { CaptionVariantsEditor } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
+import { ConformControl } from "./conform-control";
 
 const card = "rounded-card border border-border bg-surface p-5";
 const segBtn = (active: boolean) =>
@@ -108,13 +109,21 @@ export function PostEditor({
           <div className="flex gap-2">
             {assets.length ? (
               assets.slice(0, 4).map((a) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={a.id}
-                  src={`/api/media/${a.id}?variant=thumb`}
-                  alt=""
-                  className="h-16 w-16 rounded-lg object-cover"
-                />
+                <div key={a.id}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/media/${a.id}?variant=thumb`}
+                    alt=""
+                    className="h-16 w-16 rounded-lg object-cover"
+                  />
+                  {a.needs_review ? (
+                    <ConformControl
+                      assetId={a.id}
+                      conformMode={a.conform_mode}
+                      needsReview={a.needs_review}
+                    />
+                  ) : null}
+                </div>
               ))
             ) : (
               <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-xs text-faint">

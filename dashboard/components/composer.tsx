@@ -4,9 +4,11 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
 import type { Period, PeriodMode, Tag } from "@/lib/types";
+import type { ConformMode } from "@/lib/conform";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
+import { ConformControl } from "@/components/conform-control";
 
 interface ChannelLite {
   id: number;
@@ -19,6 +21,8 @@ interface UploadedAsset {
   id: number;
   name: string;
   deduped: boolean;
+  conformMode: ConformMode;
+  needsReview: number;
 }
 
 export function Composer({
@@ -87,7 +91,16 @@ export function Composer({
       setAssets((prev) =>
         prev.some((a) => a.id === body.asset.id)
           ? prev
-          : [...prev, { id: body.asset.id, name: file.name, deduped: body.deduped }]
+          : [
+              ...prev,
+              {
+                id: body.asset.id,
+                name: file.name,
+                deduped: body.deduped,
+                conformMode: body.asset.conform_mode,
+                needsReview: body.asset.needs_review,
+              },
+            ]
       );
     }
     if (dedupCount > 0) {
@@ -264,6 +277,13 @@ export function Composer({
                       alt={a.name}
                       className="h-24 w-24 cursor-grab rounded-lg border border-border object-cover active:cursor-grabbing"
                     />
+                    {a.needsReview ? (
+                      <ConformControl
+                        assetId={a.id}
+                        conformMode={a.conformMode}
+                        needsReview={a.needsReview}
+                      />
+                    ) : null}
                     <div className="mt-1 flex justify-center gap-1">
                       <button
                         onClick={() => move(i, i - 1)}

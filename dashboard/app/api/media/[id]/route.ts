@@ -23,8 +23,13 @@ export async function GET(
   if (!asset) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
-  const wantThumb = req.nextUrl.searchParams.get("variant") === "thumb";
-  const rel = wantThumb && asset.thumbnail_path ? asset.thumbnail_path : asset.storage_path;
+  const variant = req.nextUrl.searchParams.get("variant");
+  const rel =
+    variant === "thumb" && asset.thumbnail_path
+      ? asset.thumbnail_path
+      : variant === "publish"
+        ? (asset.publish_path ?? asset.storage_path)
+        : asset.storage_path;
 
   const base = path.resolve(config.assetStorageDir);
   const abs = path.resolve(base, rel);
