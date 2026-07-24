@@ -462,3 +462,50 @@ def test_readme_never_mentions_tokens(tmp_path):
     text = write_readme(bundle, tmp_path, CopyResult()).read_text()
 
     assert "access_token" not in text
+
+
+def test_readme_surfaces_conformed_copy_only_failures(tmp_path):
+    # No missing originals, but a conformed copy failed. This must NOT be
+    # reported as "No problems" — that would silently drop a real failure.
+    result = CopyResult(
+        copied=1, missing_asset_ids=set(),
+        problems=["asset 7: conformed copy not found at /x/c.jpg"],
+    )
+
+    text = write_readme(_bundle([]), tmp_path, result).read_text()
+
+    assert "No problems" not in text
+    assert "asset 7: conformed copy not found at /x/c.jpg" in text
+    # Reassure the reader the irreplaceable originals are all safe.
+    assert "original" in text.lower()
+
+
+def test_readme_reports_asset_count_and_problem_count_as_distinct_figures(tmp_path):
+    # One missing asset shared by two posts produces two problem lines — the
+    # asset count and the problem-line count must both be shown, and both
+    # problem lines must be present.
+    result = CopyResult(
+        copied=0, missing_asset_ids={2},
+        problems=[
+            "asset 2: original not found at /x/gone1.jpg",
+            "asset 2: original not found at /x/gone2.jpg",
+        ],
+    )
+
+    text = write_readme(_bundle([]), tmp_path, result).read_text()
+
+    assert "1 image file(s) could not be found" in text
+    assert "2" in text  # the problem count, distinct from the "1" image count
+    assert "asset 2: original not found at /x/gone1.jpg" in text
+    assert "asset 2: original not found at /x/gone2.jpg" in text
+
+
+def test_readme_truncates_a_long_problem_list(tmp_path):
+    problems = [f"asset {n}: original not found at /x/gone{n}.jpg" for n in range(25)]
+    result = CopyResult(copied=0, missing_asset_ids=set(range(25)), problems=problems)
+
+    text = write_readme(_bundle([]), tmp_path, result).read_text()
+
+    printed = [p for p in problems if p in text]
+    assert len(printed) == 20
+    assert "5 more" in text or "5 further" in text

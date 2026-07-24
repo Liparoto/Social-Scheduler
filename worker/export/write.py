@@ -126,6 +126,7 @@ def write_json(bundle: ExportBundle, out_dir: Path) -> Path:
 
 WORKBOOK_NAME = "SocialScheduler-Export.xlsx"
 MAX_COLUMN_WIDTH = 60
+MAX_PROBLEM_LINES = 20
 
 
 def _join(values: list[str] | list[int]) -> str:
@@ -330,19 +331,35 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         "",
     ]
 
-    if copy_result.missing_asset_ids:
+    if not copy_result.problems:
+        lines += ["PROBLEMS", "", "  No problems. Everything exported.", ""]
+    else:
+        lines += ["PROBLEMS", ""]
+        if copy_result.missing_asset_ids:
+            lines += [
+                f"  {len(copy_result.missing_asset_ids)} image file(s) could not be found on",
+                "  disk. Their rows are marked MISSING in the Assets tab.",
+                "",
+            ]
+        else:
+            lines += [
+                "  Every original image exported successfully — nothing irreplaceable",
+                "  was lost.",
+                "",
+            ]
         lines += [
-            "PROBLEMS",
-            "",
-            f"  {len(copy_result.missing_asset_ids)} image file(s) could not be found on",
-            "  disk. Their rows are marked MISSING in the Assets tab. Everything else",
-            "  exported normally.",
+            f"  {len(copy_result.problems)} problem(s) were recorded during export (this is",
+            "  a count of failed copy operations, not images — one image used in",
+            "  several posts can fail more than once, so this number may be larger",
+            "  than the image count above).",
             "",
         ]
-        lines += [f"    - {p}" for p in copy_result.problems]
+        shown = copy_result.problems[:MAX_PROBLEM_LINES]
+        lines += [f"    - {p}" for p in shown]
+        omitted = len(copy_result.problems) - len(shown)
+        if omitted > 0:
+            lines.append(f"    ... and {omitted} more problem(s) not shown here.")
         lines.append("")
-    else:
-        lines += ["PROBLEMS", "", "  No problems. Everything exported.", ""]
 
     path = out_dir / "README.txt"
     path.write_text("\n".join(lines), encoding="utf-8")
