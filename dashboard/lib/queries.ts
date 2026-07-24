@@ -398,12 +398,19 @@ export function deletePost(id: number): "ok" | "not_found" | "has_live" {
   const db = getDb();
   const post = db.prepare("SELECT id FROM posts WHERE id = ?").get(id);
   if (!post) return "not_found";
-  const live = db
-    .prepare("SELECT 1 FROM publications WHERE post_id = ? AND status IN ('posted','publishing') LIMIT 1")
-    .get(id);
-  if (live) return "has_live";
-  db.prepare("DELETE FROM posts WHERE id = ?").run(id);
-  return "ok";
+  // Guard lives ON the DELETE so it can't race the worker: if any send went live
+  // between here and now, NOT EXISTS fails and the DELETE no-ops (0 rows).
+  const info = db
+    .prepare(
+      `DELETE FROM posts
+       WHERE id = @id
+         AND NOT EXISTS (
+           SELECT 1 FROM publications
+           WHERE post_id = @id AND status IN ('posted','publishing')
+         )`
+    )
+    .run({ id });
+  return info.changes > 0 ? "ok" : "has_live";
 }
 
 /** A post's publications joined with their channel, for the edit screen's per-channel queue view. */
