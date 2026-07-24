@@ -142,7 +142,8 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     return {
         "platform": channel["platform"],
         "account": channel["account_name"],
-        "ig_user_id": channel["remote_account_id"],
+        # IG user id, or FB Page id — whichever this channel's platform uses.
+        "account_id": channel["remote_account_id"],
         "post_type": post["post_type"],
         "caption": caption,
         "first_comment": post["first_comment"],
@@ -165,7 +166,7 @@ def _poll_until_finished(client, container_id, token, config, sleep_fn) -> None:
 
 
 def _publish_single(client, plan, token, config, sleep_fn) -> str:
-    ig = plan["ig_user_id"]
+    ig = plan["account_id"]
     container = client.create_image_container(
         ig, plan["asset_urls"][0], token, caption=plan["caption"]
     )
@@ -174,7 +175,7 @@ def _publish_single(client, plan, token, config, sleep_fn) -> str:
 
 
 def _publish_carousel(client, plan, token, config, sleep_fn) -> str:
-    ig = plan["ig_user_id"]
+    ig = plan["account_id"]
     children = []
     for url in plan["asset_urls"]:
         child = client.create_image_container(ig, url, token, is_carousel_item=True)
@@ -185,6 +186,28 @@ def _publish_carousel(client, plan, token, config, sleep_fn) -> str:
     )
     _poll_until_finished(client, parent, token, config, sleep_fn)
     return client.publish_container(ig, parent, token)
+
+
+def _publish_fb_single(client, plan, token) -> str:
+    """One call, no container polling. Returns the FEED POST id (what insights use)."""
+    res = client.create_page_photo(
+        plan["account_id"], plan["asset_urls"][0], token, caption=plan["caption"]
+    )
+    # Prefer post_id (the feed post). Fall back to the photo id so a response missing
+    # post_id still records something we can look up, rather than crashing.
+    return res.get("post_id") or res["id"]
+
+
+def _publish_fb_multi(client, plan, token) -> str:
+    """Upload each photo unpublished, then attach them all to one feed post."""
+    page = plan["account_id"]
+    media_fbids = []
+    for url in plan["asset_urls"]:
+        res = client.create_page_photo(page, url, token, published=False)
+        media_fbids.append(res["id"])
+    return client.create_page_feed_post(
+        page, token, message=plan["caption"], attached_media=media_fbids
+    )
 
 
 def _mark_failure(conn, pub, config, now, error: str, terminal: bool) -> PublishOutcome:
@@ -250,29 +273,37 @@ def publish_one(
         return PublishOutcome("dry_run", "dry-run: nothing published", plan)
 
     token = channel["access_token"]
-    ig = plan["ig_user_id"]
+    ig = plan["account_id"]
 
     # 3. Rate-limit gate: read Meta's REAL quota, cache it, refuse if exhausted.
-    try:
-        usage, total, duration = client.get_content_publishing_limit(ig, token)
-        db.record_publish_limit(conn, channel["id"], usage, total, duration, _iso(now))
-        if usage is not None and total is not None and usage >= total:
-            retry_at = _iso(now + timedelta(seconds=config.rate_limit_backoff_seconds))
-            db.update_publication(
-                conn, pub["id"],
-                status="scheduled", next_retry_at=retry_at,
-                last_error=f"rate limit reached ({usage}/{total})", updated_at=_iso(now),
-            )
-            log(f"rate limit reached {usage}/{total}; deferring to {retry_at}")
-            return PublishOutcome("rate_limited", f"quota {usage}/{total}")
-    except Exception as exc:  # noqa: BLE001 — a quota-check failure is retryable
-        log(f"quota check failed: {exc}")
-        return _mark_failure(conn, pub, config, now, f"quota check: {exc}", terminal=False)
+    #    Instagram only — Facebook Pages expose no content_publishing_limit endpoint,
+    #    and inventing a hardcoded number here would be worse than not gating.
+    if plan["platform"] == "instagram":
+        try:
+            usage, total, duration = client.get_content_publishing_limit(ig, token)
+            db.record_publish_limit(conn, channel["id"], usage, total, duration, _iso(now))
+            if usage is not None and total is not None and usage >= total:
+                retry_at = _iso(now + timedelta(seconds=config.rate_limit_backoff_seconds))
+                db.update_publication(
+                    conn, pub["id"],
+                    status="scheduled", next_retry_at=retry_at,
+                    last_error=f"rate limit reached ({usage}/{total})", updated_at=_iso(now),
+                )
+                log(f"rate limit reached {usage}/{total}; deferring to {retry_at}")
+                return PublishOutcome("rate_limited", f"quota {usage}/{total}")
+        except Exception as exc:  # noqa: BLE001 — a quota-check failure is retryable
+            log(f"quota check failed: {exc}")
+            return _mark_failure(conn, pub, config, now, f"quota check: {exc}", terminal=False)
 
     # 4. Publish for real.
     db.update_publication(conn, pub["id"], status="publishing", updated_at=_iso(now))
     try:
-        if plan["post_type"] == "single":
+        if plan["platform"] == "facebook":
+            if plan["post_type"] == "single":
+                media_id = _publish_fb_single(client, plan, token)
+            else:
+                media_id = _publish_fb_multi(client, plan, token)
+        elif plan["post_type"] == "single":
             media_id = _publish_single(client, plan, token, config, sleep_fn)
         else:
             media_id = _publish_carousel(client, plan, token, config, sleep_fn)
