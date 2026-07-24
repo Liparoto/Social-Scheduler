@@ -116,6 +116,9 @@ export interface InsertAssetInput {
   width: number | null;
   height: number | null;
   byte_size: number | null;
+  publish_path?: string | null;
+  conform_mode?: "none" | "crop" | "pad";
+  needs_review?: number;
 }
 
 /** Insert an asset, or return the existing one if the content hash already exists (dedup). */
@@ -126,11 +129,18 @@ export function upsertAssetByHash(input: InsertAssetInput): { asset: Asset; dedu
     .prepare(
       `INSERT INTO assets
         (content_hash, media_kind, original_filename, storage_path, public_url,
-         thumbnail_path, mime_type, width, height, byte_size)
+         thumbnail_path, mime_type, width, height, byte_size,
+         publish_path, conform_mode, needs_review)
        VALUES (@content_hash, @media_kind, @original_filename, @storage_path, @public_url,
-         @thumbnail_path, @mime_type, @width, @height, @byte_size)`
+         @thumbnail_path, @mime_type, @width, @height, @byte_size,
+         @publish_path, @conform_mode, @needs_review)`
     )
-    .run(input);
+    .run({
+      ...input,
+      publish_path: input.publish_path ?? null,
+      conform_mode: input.conform_mode ?? "none",
+      needs_review: input.needs_review ?? 0,
+    });
   return {
     asset: getAsset(Number(info.lastInsertRowid))!,
     deduped: false,

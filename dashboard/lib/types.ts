@@ -58,6 +58,9 @@ export interface Asset {
   width: number | null;
   height: number | null;
   byte_size: number | null;
+  publish_path: string | null;
+  conform_mode: "none" | "crop" | "pad";
+  needs_review: number;
   created_at: string;
 }
 
