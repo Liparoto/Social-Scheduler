@@ -1,6 +1,6 @@
 # Design — Export & Backup
 
-**Status:** approved, not yet implemented
+**Status:** implemented and verified against the live database
 **Date:** 2026-07-24
 
 ## Problem
@@ -129,7 +129,9 @@ detached from the app and sitting in Drive.
 
 Slugs are ASCII-only, lowercased, non-alphanumerics collapsed to `-`, and truncated to
 40 characters. A caption that slugs to an empty string (pure emoji, or no caption)
-falls back to `untitled`. Collisions get a numeric suffix.
+falls back to `untitled`. Collisions cannot occur: a filename embeds the post id and
+the carousel position, and `post_assets` has a `UNIQUE (post_id, sort_order)`
+constraint, so no suffix logic is needed.
 
 An asset used by more than one post is exported once per post that uses it, under each
 post's name. Duplication on disk is cheaper than a filename that only makes sense with
@@ -140,9 +142,11 @@ the workbook open.
 The `Sends` tab renders each timestamp in the relevant channel's IANA timezone with the
 raw UTC value in an adjacent column. Columns elsewhere that carry a bare stored value are
 named with a `_utc` suffix (`created_at_utc`, `last_posted_at_utc`, `fetched_at_utc`) so
-the reader is never left guessing which zone a cell is in. The database stores UTC; a spreadsheet that silently
-displayed UTC would cause every send time to be misread. Where no channel applies
-(post `created_at`), the local system timezone is used.
+the reader is never left guessing which zone a cell is in.
+
+The database stores UTC throughout. A spreadsheet that silently displayed UTC under a
+bare `scheduled_at` header would cause every send time to be misread, which is the whole
+reason for the dual columns on `Sends` and the `_utc` suffixes elsewhere.
 
 ## Workbook tabs
 
@@ -158,7 +162,7 @@ The primary tab, designed to be useful alone. Multi-value fields (`tags`,
 `post_assets.sort_order`.
 
 Rollups are computed from publications that are `posted` and not dry runs.
-`times_posted` counts them; `last_posted_at` is the most recent `published_at`;
+`times_posted` counts them; `last_posted_at_utc` is the most recent `published_at`;
 `total_reach` and `total_likes` sum the **latest** metric snapshot per publication —
 not every snapshot, which would multiply-count.
 
