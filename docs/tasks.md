@@ -397,7 +397,13 @@ without ever risking her `.env` (secrets) or `/data` (DB + assets) — both giti
 
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
-- [ ] Facebook Pages publish + metrics adapter.
+Done one sub-project at a time (own spec → plan → build), not all at once.
+- [~] **Facebook Pages publish + metrics adapter** — spec'd
+      (`docs/superpowers/specs/2026-07-23-facebook-pages-adapter-design.md`). Single image +
+      multi-photo; mirrors the IG lifecycle (queue controls work unchanged); per-platform Graph
+      client (FB → graph.facebook.com); **fail-soft metrics** (stable reactions/comments/shares +
+      best-effort reach/views, since Meta deprecated many post insights 2026-06-15). No schema
+      change — schema/config/dashboard already FB-ready. Work is in 3 worker files + tests.
 - [ ] Reels/video (async container, status polling, `video_url`).
 - [ ] Stories.
 - [ ] First-comment automation (post-publish comment endpoint).
@@ -405,3 +411,14 @@ Built only after 1–5 are solid. **Re-verify live Meta docs** for each before b
 
 ### Verification
 - [ ] Each adapter dry-run first, then one real post to a test account, before automation.
+
+## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
+- [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
+      Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing
+      (IG done; FB from the adapter above). Design after the FB adapter lands.
+- [ ] **"Fire with the Mac off" scheduling — simple, free, self-serviceable.** For FB, Meta's
+      native scheduling is essentially free (the deferred "Option B"). For IG there's no
+      Meta-side scheduling → needs an always-on host; explore simple/free options (always-on
+      Pi/old Mac, free-tier VM, scheduled cloud runner) and their trade-offs (image-delivery
+      tunnel, secrets handling, kill switch). Its own brainstorm — must stay simple enough for a
+      non-technical clone owner to set up.
