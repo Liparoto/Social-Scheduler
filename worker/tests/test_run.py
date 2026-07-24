@@ -72,6 +72,33 @@ def test_run_once_tunnel_unavailable_is_visible_not_fatal(conn, config, fake_cli
     assert "endpoint unavailable" in (row["last_error"] or "")
 
 
+def test_run_once_stamps_heartbeat(conn, config, fake_client, monkeypatch):
+    """Every poll records the worker's liveness for the dashboard to read."""
+    monkeypatch.setenv("KILL_SWITCH", "0")
+    monkeypatch.setenv("DRY_RUN", "1")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+
+    assert conn.execute("SELECT COUNT(*) FROM worker_heartbeat").fetchone()[0] == 0
+    run_once(conn, config, fake_client, now=NOW)
+
+    row = conn.execute("SELECT id, last_seen_at FROM worker_heartbeat").fetchone()
+    assert row["id"] == 1
+    assert row["last_seen_at"] == NOW.isoformat()
+
+
+def test_run_once_stamps_heartbeat_even_when_kill_switch_active(conn, config, fake_client, monkeypatch):
+    """The worker is alive whenever it polls — the heartbeat updates even with the kill
+    switch on (alive != publishing), so the dashboard shows it online during an e-stop."""
+    monkeypatch.setenv("KILL_SWITCH", "1")
+    monkeypatch.setenv("DRY_RUN", "0")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+
+    n = run_once(conn, config, fake_client, now=NOW)
+    assert n == 0  # published nothing
+    row = conn.execute("SELECT last_seen_at FROM worker_heartbeat").fetchone()
+    assert row["last_seen_at"] == NOW.isoformat()  # but still stamped alive
+
+
 def test_run_once_external_url_publishes_without_tunnel(conn, config, fake_client, make_publication, monkeypatch):
     """An asset with an external public_url must publish even when cloudflared is absent —
     no tunnel is opened for the paste escape hatch."""

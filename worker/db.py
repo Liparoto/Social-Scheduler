@@ -93,3 +93,18 @@ def record_publish_limit(
         (channel_id, quota_usage, quota_total, quota_duration, checked_at),
     )
     conn.commit()
+
+
+def write_heartbeat(conn: sqlite3.Connection, seen_at_iso: str) -> None:
+    """Stamp the worker's liveness. The dashboard reads this to know the worker is running.
+
+    Single-row table (id = 1); upsert so the first poll inserts and every poll after updates.
+    """
+    conn.execute(
+        """
+        INSERT INTO worker_heartbeat (id, last_seen_at) VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+        """,
+        (seen_at_iso,),
+    )
+    conn.commit()

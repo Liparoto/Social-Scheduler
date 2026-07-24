@@ -36,12 +36,18 @@ def run_once(conn, config: Config, client, *, now=None, logger=None, sleep_fn=ti
     mid-batch stops further publishing promptly).
     """
     load_env(override=True)  # pick up live edits to the switches
+
+    now = now or datetime.now(timezone.utc)
+
+    # Liveness first — the worker is "alive" whenever it polls, even if the kill switch is on
+    # (alive != publishing). The dashboard reads this to know a queued refresh will be picked up.
+    db.write_heartbeat(conn, now.isoformat())
+
     if kill_switch_active():
         if logger:
             logger.warning("KILL_SWITCH active — publishing nothing this cycle.")
         return 0
 
-    now = now or datetime.now(timezone.utc)
     dry_run = dry_run_active()
 
     # Keep channel queues topped up before publishing this cycle's due work.
