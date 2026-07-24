@@ -311,6 +311,31 @@ def test_rollups_sum_only_the_latest_metric_snapshot_per_send(conn, make_publica
     assert bundle.posts[0].total_likes == 40
 
 
+def test_rollups_do_not_double_count_same_fetched_at_snapshots(conn, make_publication):
+    # Two snapshots for the SAME publication with the SAME fetched_at (the worker
+    # computes one now_iso and reuses it across a batch). The rollup must pick a
+    # single deterministic winner, never sum both.
+    pub = make_publication()
+    conn.execute("UPDATE publications SET status='posted' WHERE id = ?", (pub["id"],))
+    conn.execute(
+        "INSERT INTO post_metrics (publication_id, fetched_at, reach, likes)"
+        " VALUES (?,?,?,?)",
+        (pub["id"], "2026-07-10T00:00:00+00:00", 100, 10),
+    )
+    conn.execute(
+        "INSERT INTO post_metrics (publication_id, fetched_at, reach, likes)"
+        " VALUES (?,?,?,?)",
+        (pub["id"], "2026-07-10T00:00:00+00:00", 400, 40),
+    )
+    conn.commit()
+
+    bundle = collect_all(conn, GENERATED_AT)
+
+    # Must equal the higher-id row's values (the tie-break winner), not the sum (500/50).
+    assert bundle.posts[0].total_reach == 400
+    assert bundle.posts[0].total_likes == 40
+
+
 def test_collect_all_is_read_only_under_query_only(db_path):
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row

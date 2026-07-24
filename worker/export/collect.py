@@ -400,15 +400,25 @@ def add_rollups(conn: sqlite3.Connection, posts: list[ExportedPost]) -> None:
         )
     }
     # Only the newest snapshot per publication, so repeated refreshes don't multiply.
+    # A plain MAX(fetched_at)-then-rejoin can match more than one row when two
+    # snapshots share the same fetched_at (there is no UNIQUE constraint on
+    # (publication_id, fetched_at), and the worker computes one now_iso and reuses
+    # it across a whole metrics-refresh batch) — that would double-count reach. A
+    # window function picks exactly one row per publication_id, with ties broken on
+    # id DESC so the choice is deterministic.
     totals: dict[int, tuple[int, int]] = {}
     latest = conn.execute(
-        "SELECT pub.post_id, m.reach, m.likes"
-        "  FROM post_metrics m"
-        "  JOIN publications pub ON pub.id = m.publication_id"
-        "  JOIN (SELECT publication_id, MAX(fetched_at) AS newest"
-        "          FROM post_metrics GROUP BY publication_id) top"
-        "    ON top.publication_id = m.publication_id AND top.newest = m.fetched_at"
-        " WHERE pub.is_dry_run = 0"
+        "SELECT post_id, reach, likes FROM ("
+        "  SELECT pub.post_id AS post_id, m.reach AS reach, m.likes AS likes,"
+        "         ROW_NUMBER() OVER ("
+        "           PARTITION BY m.publication_id"
+        "           ORDER BY m.fetched_at DESC, m.id DESC"
+        "         ) AS rn"
+        "    FROM post_metrics m"
+        "    JOIN publications pub ON pub.id = m.publication_id"
+        "   WHERE pub.is_dry_run = 0"
+        ") ranked"
+        " WHERE rn = 1"
     )
     for row in latest:
         reach, likes = totals.get(row["post_id"], (0, 0))
