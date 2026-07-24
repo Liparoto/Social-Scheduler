@@ -1035,7 +1035,7 @@ def test_copy_images_writes_originals_into_the_images_folder(tmp_path):
     out = tmp_path / "out"
 
     result = copy_images(
-        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "assets/a.jpg")])]),
+        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "a.jpg")])]),
         asset_root=assets,
         out_dir=out,
     )
@@ -1054,8 +1054,8 @@ def test_copy_images_writes_conformed_copies_into_a_separate_folder(tmp_path):
 
     copy_images(
         _bundle([_post(42, [_image(
-            1, "0042_test-post_1.jpg", "assets/a.jpg",
-            publish_path="assets/a-pub.jpg", published_name="0042_test-post_1.jpg",
+            1, "0042_test-post_1.jpg", "a.jpg",
+            publish_path="a-pub.jpg", published_name="0042_test-post_1.jpg",
         )])]),
         asset_root=assets,
         out_dir=out,
@@ -1072,7 +1072,7 @@ def test_copy_images_skips_the_published_folder_when_nothing_was_conformed(tmp_p
     out = tmp_path / "out"
 
     copy_images(
-        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "assets/a.jpg")])]),
+        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "a.jpg")])]),
         asset_root=assets,
         out_dir=out,
     )
@@ -1088,8 +1088,8 @@ def test_copy_images_records_missing_files_instead_of_raising(tmp_path):
 
     result = copy_images(
         _bundle([_post(42, [
-            _image(1, "0042_test-post_1.jpg", "assets/present.jpg"),
-            _image(2, "0042_test-post_2.jpg", "assets/gone.jpg"),
+            _image(1, "0042_test-post_1.jpg", "present.jpg"),
+            _image(2, "0042_test-post_2.jpg", "gone.jpg"),
         ])]),
         asset_root=assets,
         out_dir=out,
@@ -1110,8 +1110,8 @@ def test_copy_images_exports_a_shared_asset_once_per_post(tmp_path):
 
     result = copy_images(
         _bundle([
-            _post(42, [_image(1, "0042_test-post_1.jpg", "assets/shared.jpg")]),
-            _post(51, [_image(1, "0051_test-post_1.jpg", "assets/shared.jpg")]),
+            _post(42, [_image(1, "0042_test-post_1.jpg", "shared.jpg")]),
+            _post(51, [_image(1, "0051_test-post_1.jpg", "shared.jpg")]),
         ]),
         asset_root=assets,
         out_dir=out,
@@ -1167,14 +1167,14 @@ class CopyResult:
 
 
 def _resolve(asset_root: Path, stored_path: str) -> Path:
-    """Asset paths are stored relative to the asset store, but tolerate absolute ones."""
+    """Where an asset row's file actually lives.
+
+    storage_path holds a bare content-hash filename relative to the asset store
+    (verified against the live database). Absolute paths are tolerated in case an
+    install ever stores them that way.
+    """
     candidate = Path(stored_path)
-    if candidate.is_absolute():
-        return candidate
-    # Stored paths are often prefixed with the asset dir's own name ("assets/x.jpg").
-    if candidate.parts and candidate.parts[0] == asset_root.name:
-        candidate = Path(*candidate.parts[1:])
-    return asset_root / candidate
+    return candidate if candidate.is_absolute() else asset_root / candidate
 
 
 def _copy_one(src: Path, dest_dir: Path, name: str, result: CopyResult, asset_id: int) -> bool:
