@@ -280,3 +280,70 @@ def write_workbook(
     path = out_dir / WORKBOOK_NAME
     book.save(path)
     return path
+
+
+def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -> Path:
+    """Plain-English orientation, for someone opening this folder years from now
+    with no idea what produced it."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "SocialScheduler — Content Export",
+        "=" * 40,
+        "",
+        f"Created: {bundle.generated_at}",
+        "",
+        "WHAT'S IN HERE",
+        "",
+        "  SocialScheduler-Export.xlsx   Open this one. Five tabs:",
+        "                                Posts, Sends, Metrics, Assets, Channels.",
+        "                                Start on 'Posts' — it has everything you",
+        "                                normally want, including how often each",
+        "                                post has gone out and how it performed.",
+        "",
+        "  export.json                   The same data in a form software can read",
+        "                                back in. You don't need to open this.",
+        "",
+        f"  {IMAGES_DIR}/                        Your original uploaded images.",
+        "",
+        f"  {PUBLISHED_DIR}/              The cropped/padded versions that were",
+        "                                actually sent to Instagram, where those",
+        "                                differ from the original.",
+        "",
+        "Image filenames are 'postID_caption_position', so you can match any image",
+        "back to its row in the Posts tab.",
+        "",
+        "WHAT IT CONTAINS",
+        "",
+        f"  {len(bundle.posts)} post(s)",
+        f"  {len(bundle.sends)} scheduled or completed send(s)",
+        f"  {len(bundle.metrics)} metric snapshot(s)",
+        f"  {len(bundle.assets)} asset(s) on record",
+        f"  {len(bundle.channels)} channel(s)",
+        f"  {copy_result.copied} image file(s) copied",
+        "",
+        "A NOTE ON SECURITY",
+        "",
+        "  Access credentials are deliberately NOT included in this export. If you",
+        "  ever restore from it, you'll reconnect the accounts fresh. That's normal",
+        "  — it means this folder is safe to store in Google Drive or Dropbox.",
+        "",
+    ]
+
+    if copy_result.missing_asset_ids:
+        lines += [
+            "PROBLEMS",
+            "",
+            f"  {len(copy_result.missing_asset_ids)} image file(s) could not be found on",
+            "  disk. Their rows are marked MISSING in the Assets tab. Everything else",
+            "  exported normally.",
+            "",
+        ]
+        lines += [f"    - {p}" for p in copy_result.problems]
+        lines.append("")
+    else:
+        lines += ["PROBLEMS", "", "  No problems. Everything exported.", ""]
+
+    path = out_dir / "README.txt"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path

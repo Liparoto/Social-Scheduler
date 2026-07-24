@@ -422,3 +422,43 @@ def test_sends_tab_has_published_at_utc_adjacent_to_published_at_local(tmp_path)
 
     row = _rows(book["Sends"])[0]
     assert row["published_at_utc"] == "2026-07-24T18:05:00+00:00"
+
+
+from worker.export.write import CopyResult, write_readme
+
+
+def test_readme_summarizes_the_contents(tmp_path):
+    bundle = _bundle([_post(42, [])])
+    bundle.channels = [_channel()]
+
+    text = write_readme(bundle, tmp_path, CopyResult(copied=3)).read_text()
+
+    assert "1 post" in text
+    assert "3 image file" in text
+    assert "SocialScheduler-Export.xlsx" in text
+
+
+def test_readme_reports_missing_files_prominently(tmp_path):
+    result = CopyResult(copied=1, missing_asset_ids={2, 3},
+                        problems=["asset 2: file not found at /x/gone.jpg"])
+
+    text = write_readme(_bundle([]), tmp_path, result).read_text()
+
+    assert "2 image file(s) could not be found" in text
+    assert "gone.jpg" in text
+
+
+def test_readme_says_so_when_nothing_was_missing(tmp_path):
+    text = write_readme(_bundle([]), tmp_path, CopyResult(copied=1)).read_text()
+
+    assert "could not be found" not in text
+    assert "No problems" in text
+
+
+def test_readme_never_mentions_tokens(tmp_path):
+    bundle = _bundle([])
+    bundle.channels = [_channel()]
+
+    text = write_readme(bundle, tmp_path, CopyResult()).read_text()
+
+    assert "access_token" not in text
