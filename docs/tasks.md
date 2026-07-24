@@ -395,6 +395,20 @@ without ever risking her `.env` (secrets) or `/data` (DB + assets) — both giti
 
 ---
 
+## Export & backup  `[x] done`
+Read-only snapshot of an install's content, for anyone who wants a dated local/Drive backup
+without touching the database directly.
+- [x] `worker/export/` — read-only collect → write, `python -m worker.export`.
+- [x] Five-tab `.xlsx` (Posts, Sends, Metrics, Assets, Channels) + `export.json`.
+- [x] Originals and IG-conformed image copies, named `postID_caption_position`.
+- [x] `Export-Mac.command` double-click launcher — mirrors Start/Update's voice, opens the
+      finished folder in Finder, never touches the database.
+- [x] Secrets excluded by allow-list (`CHANNEL_COLUMNS` in `worker/export/collect.py`); guarded
+      by both a name-specific test and a structural test that rejects any future
+      token/secret/password/key/credential-shaped column, plus a grep over a real export.
+- [ ] Future: re-import from `export.json`; `--since` / `--channel` filters;
+      `Export-Windows.bat`.
+
 ## Phase 6 — Extend adapters  `[ ]`
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 Done one sub-project at a time (own spec → plan → build), not all at once.

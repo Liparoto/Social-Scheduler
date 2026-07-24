@@ -930,15 +930,22 @@ def add_rollups(conn: sqlite3.Connection, posts: list[ExportedPost]) -> None:
         )
     }
     # Only the newest snapshot per publication, so repeated refreshes don't multiply.
+    # ROW_NUMBER rather than a MAX(fetched_at) re-join: nothing constrains
+    # (publication_id, fetched_at) to be unique, and a re-join would sum BOTH rows
+    # on a tie. id DESC makes the pick deterministic when timestamps collide.
     totals: dict[int, tuple[int, int]] = {}
     latest = conn.execute(
-        "SELECT pub.post_id, m.reach, m.likes"
-        "  FROM post_metrics m"
-        "  JOIN publications pub ON pub.id = m.publication_id"
-        "  JOIN (SELECT publication_id, MAX(fetched_at) AS newest"
-        "          FROM post_metrics GROUP BY publication_id) top"
-        "    ON top.publication_id = m.publication_id AND top.newest = m.fetched_at"
-        " WHERE pub.is_dry_run = 0"
+        "SELECT post_id, reach, likes FROM ("
+        "  SELECT pub.post_id AS post_id, m.reach AS reach, m.likes AS likes,"
+        "         ROW_NUMBER() OVER ("
+        "           PARTITION BY m.publication_id"
+        "           ORDER BY m.fetched_at DESC, m.id DESC"
+        "         ) AS rn"
+        "    FROM post_metrics m"
+        "    JOIN publications pub ON pub.id = m.publication_id"
+        "   WHERE pub.is_dry_run = 0"
+        ") ranked"
+        " WHERE rn = 1"
     )
     for row in latest:
         reach, likes = totals.get(row["post_id"], (0, 0))
@@ -1035,7 +1042,7 @@ def test_copy_images_writes_originals_into_the_images_folder(tmp_path):
     out = tmp_path / "out"
 
     result = copy_images(
-        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "assets/a.jpg")])]),
+        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "a.jpg")])]),
         asset_root=assets,
         out_dir=out,
     )
@@ -1054,8 +1061,8 @@ def test_copy_images_writes_conformed_copies_into_a_separate_folder(tmp_path):
 
     copy_images(
         _bundle([_post(42, [_image(
-            1, "0042_test-post_1.jpg", "assets/a.jpg",
-            publish_path="assets/a-pub.jpg", published_name="0042_test-post_1.jpg",
+            1, "0042_test-post_1.jpg", "a.jpg",
+            publish_path="a-pub.jpg", published_name="0042_test-post_1.jpg",
         )])]),
         asset_root=assets,
         out_dir=out,
@@ -1072,7 +1079,7 @@ def test_copy_images_skips_the_published_folder_when_nothing_was_conformed(tmp_p
     out = tmp_path / "out"
 
     copy_images(
-        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "assets/a.jpg")])]),
+        _bundle([_post(42, [_image(1, "0042_test-post_1.jpg", "a.jpg")])]),
         asset_root=assets,
         out_dir=out,
     )
@@ -1088,8 +1095,8 @@ def test_copy_images_records_missing_files_instead_of_raising(tmp_path):
 
     result = copy_images(
         _bundle([_post(42, [
-            _image(1, "0042_test-post_1.jpg", "assets/present.jpg"),
-            _image(2, "0042_test-post_2.jpg", "assets/gone.jpg"),
+            _image(1, "0042_test-post_1.jpg", "present.jpg"),
+            _image(2, "0042_test-post_2.jpg", "gone.jpg"),
         ])]),
         asset_root=assets,
         out_dir=out,
@@ -1110,8 +1117,8 @@ def test_copy_images_exports_a_shared_asset_once_per_post(tmp_path):
 
     result = copy_images(
         _bundle([
-            _post(42, [_image(1, "0042_test-post_1.jpg", "assets/shared.jpg")]),
-            _post(51, [_image(1, "0051_test-post_1.jpg", "assets/shared.jpg")]),
+            _post(42, [_image(1, "0042_test-post_1.jpg", "shared.jpg")]),
+            _post(51, [_image(1, "0051_test-post_1.jpg", "shared.jpg")]),
         ]),
         asset_root=assets,
         out_dir=out,
@@ -1162,19 +1169,24 @@ PUBLISHED_DIR = "images-published"
 @dataclass
 class CopyResult:
     copied: int = 0
+    # AS SHIPPED (review fix): missing_asset_ids means the asset's ORIGINAL could not
+    # be exported — that is the only thing the Assets tab should mark MISSING. A
+    # missing CONFORMED copy is recorded in `problems` only, because the original is
+    # still sitting in images/ and calling it missing would be a false alarm about
+    # irreplaceable data. See worker/export/write.py for the shipped wording.
     missing_asset_ids: set[int] = field(default_factory=set)
     problems: list[str] = field(default_factory=list)
 
 
 def _resolve(asset_root: Path, stored_path: str) -> Path:
-    """Asset paths are stored relative to the asset store, but tolerate absolute ones."""
+    """Where an asset row's file actually lives.
+
+    storage_path holds a bare content-hash filename relative to the asset store
+    (verified against the live database). Absolute paths are tolerated in case an
+    install ever stores them that way.
+    """
     candidate = Path(stored_path)
-    if candidate.is_absolute():
-        return candidate
-    # Stored paths are often prefixed with the asset dir's own name ("assets/x.jpg").
-    if candidate.parts and candidate.parts[0] == asset_root.name:
-        candidate = Path(*candidate.parts[1:])
-    return asset_root / candidate
+    return candidate if candidate.is_absolute() else asset_root / candidate
 
 
 def _copy_one(src: Path, dest_dir: Path, name: str, result: CopyResult, asset_id: int) -> bool:
@@ -1552,8 +1564,8 @@ POSTS_HEADERS = [
 
 SENDS_HEADERS = [
     "publication_id", "post_id", "caption_preview", "channel", "scheduled_at_local",
-    "scheduled_at_utc", "published_at_local", "status", "is_held", "is_dry_run",
-    "attempt_count", "last_error", "remote_post_id",
+    "scheduled_at_utc", "published_at_local", "published_at_utc", "status", "is_held",
+    "is_dry_run", "attempt_count", "last_error", "remote_post_id",
 ]
 
 METRICS_HEADERS = [
@@ -1600,8 +1612,9 @@ def write_workbook(
     _add_sheet(book, "Sends", SENDS_HEADERS, [
         [
             s.publication_id, s.post_id, s.caption_preview, s.channel_label,
-            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local, s.status,
-            s.is_held, s.is_dry_run, s.attempt_count, s.last_error, s.remote_post_id,
+            s.scheduled_at_local, s.scheduled_at_utc, s.published_at_local,
+            s.published_at_utc, s.status, s.is_held, s.is_dry_run, s.attempt_count,
+            s.last_error, s.remote_post_id,
         ]
         for s in bundle.sends
     ])
@@ -1622,8 +1635,14 @@ def write_workbook(
         for image in post.images:
             usage.setdefault(image.asset_id, []).append(post.post_id)
             names.setdefault(image.asset_id, []).append(image.export_filename)
-            if image.published_filename:
-                published.setdefault(image.asset_id, []).append(image.published_filename)
+            # AS SHIPPED (review fix): one entry PER POST, using "-" where that post's
+            # copy was not conformed, so this column stays index-aligned with
+            # used_by_posts. Appending only real filenames silently paired a post with
+            # another post's file. An asset conformed nowhere renders as an empty cell
+            # rather than "-, -, -". See worker/export/write.py.
+            published.setdefault(image.asset_id, []).append(
+                image.published_filename or "-"
+            )
 
     _add_sheet(book, "Assets", ASSETS_HEADERS, [
         [
@@ -1782,6 +1801,13 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         "",
     ]
 
+    # AS SHIPPED (review fix): this section is gated on `problems`, NOT on
+    # missing_asset_ids. A conformed-copy failure never enters missing_asset_ids, so
+    # the original branching printed "No problems. Everything exported." and dropped
+    # the failure entirely — silent, which this project forbids. The shipped version
+    # also states the image count and the problem count as two clearly different
+    # figures (one asset can fail in several posts) and caps the listing at
+    # MAX_PROBLEM_LINES. See worker/export/write.py for the shipped text.
     if copy_result.missing_asset_ids:
         lines += [
             "PROBLEMS",

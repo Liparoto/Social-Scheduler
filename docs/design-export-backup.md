@@ -1,6 +1,6 @@
 # Design — Export & Backup
 
-**Status:** approved, not yet implemented
+**Status:** implemented and verified against the live database
 **Date:** 2026-07-24
 
 ## Problem
@@ -101,9 +101,21 @@ Running the export creates one dated, self-contained folder:
 │   ├── 0042_shoulder-mobility-tips_1.jpg
 │   ├── 0042_shoulder-mobility-tips_2.jpg
 │   └── 0051_balance-screening-week_1.jpg
-└── images-published/               only assets whose IG copy differs from the original
-    └── 0042_shoulder-mobility-tips_1.jpg
+├── images-published/               only assets whose IG copy differs from the original
+│   └── 0042_shoulder-mobility-tips_1.jpg
+└── images-unlinked/                assets belonging to no post (see below)
+    └── 0007_orphan-shot.jpg
 ```
+
+### Unlinked assets
+
+An asset can end up attached to no post at all — an upload abandoned before the post was
+created, or a post that was later deleted (`post_assets` cascades on delete, but `assets`
+is `ON DELETE RESTRICT`, so the image row outlives its post). Those originals are exactly
+what a backup exists to preserve, so they are exported to `images-unlinked/` as
+`{asset_id}_{original-filename-slug}{ext}`. The folder is created only when there is at
+least one. In the `Assets` tab they appear with an empty `used_by_posts`, which is what
+marks them as belonging to nothing.
 
 Finder opens on the folder when the run completes.
 
@@ -117,7 +129,9 @@ detached from the app and sitting in Drive.
 
 Slugs are ASCII-only, lowercased, non-alphanumerics collapsed to `-`, and truncated to
 40 characters. A caption that slugs to an empty string (pure emoji, or no caption)
-falls back to `untitled`. Collisions get a numeric suffix.
+falls back to `untitled`. Collisions cannot occur: a filename embeds the post id and
+the carousel position, and `post_assets` has a `UNIQUE (post_id, sort_order)`
+constraint, so no suffix logic is needed.
 
 An asset used by more than one post is exported once per post that uses it, under each
 post's name. Duplication on disk is cheaper than a filename that only makes sense with
@@ -125,10 +139,14 @@ the workbook open.
 
 ### Timestamps
 
-Every timestamp column renders in the relevant channel's IANA timezone, with the raw
-UTC value in an adjacent column. The database stores UTC; a spreadsheet that silently
-displayed UTC would cause every send time to be misread. Where no channel applies
-(post `created_at`), the local system timezone is used.
+The `Sends` tab renders each timestamp in the relevant channel's IANA timezone with the
+raw UTC value in an adjacent column. Columns elsewhere that carry a bare stored value are
+named with a `_utc` suffix (`created_at_utc`, `last_posted_at_utc`, `fetched_at_utc`) so
+the reader is never left guessing which zone a cell is in.
+
+The database stores UTC throughout. A spreadsheet that silently displayed UTC under a
+bare `scheduled_at` header would cause every send time to be misread, which is the whole
+reason for the dual columns on `Sends` and the `_utc` suffixes elsewhere.
 
 ## Workbook tabs
 
@@ -137,22 +155,22 @@ displayed UTC would cause every send time to be misread. Where no channel applie
 `post_id` · `caption` · `first_comment` · `post_type` · `content_kind` ·
 `content_status` · `status` · `tags` · `green_periods` · `blackout_periods` ·
 `cooldown_days` · `target_channels` · `image_files` · `times_posted` ·
-`last_posted_at` · `total_reach` · `total_likes` · `created_by` · `created_at`
+`last_posted_at_utc` · `total_reach` · `total_likes` · `created_by` · `created_at_utc`
 
 The primary tab, designed to be useful alone. Multi-value fields (`tags`,
 `target_channels`, `image_files`) are comma-joined; `image_files` preserves
 `post_assets.sort_order`.
 
 Rollups are computed from publications that are `posted` and not dry runs.
-`times_posted` counts them; `last_posted_at` is the most recent `published_at`;
+`times_posted` counts them; `last_posted_at_utc` is the most recent `published_at`;
 `total_reach` and `total_likes` sum the **latest** metric snapshot per publication —
 not every snapshot, which would multiply-count.
 
 ### `Sends` — one row per publication
 
 `publication_id` · `post_id` · `caption_preview` · `channel` · `scheduled_at_local` ·
-`scheduled_at_utc` · `published_at_local` · `status` · `is_held` · `is_dry_run` ·
-`attempt_count` · `last_error` · `remote_post_id`
+`scheduled_at_utc` · `published_at_local` · `published_at_utc` · `status` · `is_held` ·
+`is_dry_run` · `attempt_count` · `last_error` · `remote_post_id`
 
 Complete send history including failures, per the project rule that failed publishes
 are visible and never silent. `caption_preview` is the first 60 characters, for
@@ -163,7 +181,7 @@ shortcode, and cannot be turned into a public URL offline.
 
 ### `Metrics` — one row per snapshot
 
-`publication_id` · `post_id` · `fetched_at` · `reach` · `impressions` · `likes` ·
+`publication_id` · `post_id` · `fetched_at_utc` · `reach` · `impressions` · `likes` ·
 `comments` · `saves` · `shares` · `video_views`
 
 Every snapshot is kept, not only the most recent, so accumulation over a post's 30-day
@@ -180,7 +198,9 @@ but is preserved in `export.json`.
 
 Because an asset shared by two posts is written to disk once under each post's name,
 `exported_filename` and `published_copy_filename` are comma-joined lists, ordered to
-match `used_by_posts`.
+match `used_by_posts`. Where a post's copy of a shared asset was not conformed, its
+slot in `published_copy_filename` holds `-` so the columns stay index-aligned; when no
+post conformed the asset at all, the cell is simply empty.
 
 ### `Channels` — configuration only
 
@@ -224,6 +244,15 @@ This is a backup tool, so it must be structurally incapable of making things wor
   is flagged `MISSING` in the `Assets` tab and counted in `README.txt`. A partial
   backup known to be partial beats a crash and no backup at all.
 - **Never logs secrets.** Consistent with existing project logging rules.
+- **Control characters are stripped from workbook cells.** openpyxl refuses to write
+  them, and a caption pasted from Word or a PDF routinely contains one — unsanitized, a
+  single such character would abort the entire export. `export.json` keeps the original
+  text untouched, so nothing is actually lost.
+- **One read transaction spans the whole collection.** Without it each query would take
+  its own WAL snapshot, and a publish the worker commits mid-export could yield a
+  self-inconsistent backup — a send whose post is missing from the same file.
+- **No traceback ever reaches the user.** Unexpected errors are caught, reported in
+  plain English, and exit non-zero. This is a tool someone double-clicks.
 
 ### Error handling
 

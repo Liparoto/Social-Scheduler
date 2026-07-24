@@ -1,3 +1,5 @@
 # Worker runtime dependencies. Install into a venv:
 #   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 requests>=2.32
+# Export: writing the multi-tab .xlsx workbook (pure Python, no system libraries).
+openpyxl>=3.1
