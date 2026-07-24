@@ -27,6 +27,7 @@ def fetch_due_publications(conn: sqlite3.Connection, now_iso: str) -> list[sqlit
         SELECT * FROM publications
         WHERE status = 'scheduled'
           AND scheduled_at <= ?
+          AND is_held = 0
           AND (next_retry_at IS NULL OR next_retry_at <= ?)
         ORDER BY scheduled_at ASC
         """,
