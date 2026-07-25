@@ -111,6 +111,19 @@ def test_meta_platforms_do_not_upload_bytes_themselves():
         assert PLATFORM_CAPS[platform].uses_account_id is True
 
 
+def test_only_meta_platforms_declare_needs_conformed_media():
+    """Instagram/Facebook/Threads constrain aspect ratio, so they must keep receiving the
+    Instagram-conformed derivative. Discord and Telegram have no aspect-ratio rules, so they
+    should get the untouched original instead."""
+    from worker.clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
+
+    assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS)
+    for platform in ("instagram", "facebook", "threads"):
+        assert PLATFORM_CAPS[platform].needs_conformed_media is True
+    for platform in ("discord", "telegram"):
+        assert PLATFORM_CAPS[platform].needs_conformed_media is False
+
+
 def test_an_unsupported_platform_fails_terminally_and_visibly(
     conn, config, fake_client, make_publication
 ):

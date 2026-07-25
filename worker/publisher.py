@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import db
-from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
+from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS, PlatformCaps
 from .config import Config
 from .redact import redact
 
@@ -98,24 +98,35 @@ def _resolve_url(asset, asset_base_url: str | None) -> str | None:
     return None
 
 
-def _resolve_local_path(asset, config) -> Path | None:
+def _resolve_local_path(asset, caps: PlatformCaps, config) -> Path | None:
     """The on-disk file to upload, for platforms that send bytes rather than a URL.
 
-    Same precedence as _resolve_url: the Meta-conformed derivative if one exists, else the
-    original. Returns None when the file is missing, so validation can fail loudly instead of
+    Precedence depends on the platform's caps: when needs_conformed_media is True (Meta
+    platforms, which constrain aspect ratio), prefer the Meta-conformed derivative at
+    publish_path, falling back to the original — same precedence as _resolve_url. When
+    needs_conformed_media is False (Discord, Telegram — no aspect-ratio rules at all),
+    prefer the untouched original at storage_path, falling back to publish_path only if
+    the original is missing. The fallback is existence-aware — it checks the file is
+    actually on disk, not just that the DB column is non-empty — since storage_path is
+    always populated at upload time and would otherwise make the fallback unreachable.
+    Returns None when neither candidate exists, so validation can fail loudly instead of
     the publish blowing up mid-request.
     """
-    rel = None
-    if "publish_path" in asset.keys() and asset["publish_path"]:
-        rel = asset["publish_path"]
-    elif asset["storage_path"]:
-        rel = asset["storage_path"]
-    if not rel:
-        return None
-    path = Path(rel)
-    if not path.is_absolute():
-        path = config.asset_storage_dir / path
-    return path if path.exists() else None
+
+    def _candidate(rel) -> Path | None:
+        if not rel:
+            return None
+        path = Path(rel)
+        if not path.is_absolute():
+            path = config.asset_storage_dir / path
+        return path if path.exists() else None
+
+    has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
+    original = _candidate(asset["storage_path"])
+    conformed = _candidate(asset["publish_path"] if has_publish_path else None)
+    if caps.needs_conformed_media:
+        return conformed or original
+    return original or conformed
 
 
 def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,
@@ -153,7 +164,7 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         )
     if not dry_run:
         if caps.uploads_media_bytes:
-            missing = [a["id"] for a in assets if _resolve_local_path(a, config) is None]
+            missing = [a["id"] for a in assets if _resolve_local_path(a, caps, config) is None]
             if missing:
                 raise _NonRetryable(f"asset files missing from the local store: {missing}")
         else:
@@ -190,7 +201,10 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     ]
     # Local on-disk paths, for byte-upload platforms (Discord/Telegram). None entries are
     # expected in dry-run or when the platform doesn't use them.
-    asset_paths = [_resolve_local_path(a, config) if config is not None else None for a in assets]
+    caps = PLATFORM_CAPS[channel["platform"]]
+    asset_paths = [
+        _resolve_local_path(a, caps, config) if config is not None else None for a in assets
+    ]
     return {
         "platform": channel["platform"],
         "account": channel["account_name"],

@@ -98,7 +98,12 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
     <div className="flex flex-col gap-2 border-b border-border py-3 last:border-0">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <ChannelChip id={send.channel_id} platform={send.channel_platform} name={send.channel_name} />
+          <ChannelChip
+            id={send.channel_id}
+            platform={send.channel_platform}
+            name={send.channel_name}
+            colorHue={send.channel_color_hue}
+          />
           <span className="data text-xs text-ink-soft">
             {formatInTz(send.scheduled_at, send.channel_timezone)} {tzAbbrev(send.channel_timezone)}
           </span>

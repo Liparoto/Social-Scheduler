@@ -136,6 +136,7 @@ export function PublicationQueue({
                       id={p.channel_id}
                       platform={p.channel_platform}
                       name={p.channel_name}
+                      colorHue={p.channel_color_hue}
                     />
                   </td>
                   <td className="px-4 py-3">

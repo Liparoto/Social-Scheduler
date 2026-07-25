@@ -54,7 +54,7 @@ export default function OverviewPage() {
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {channels.map((c) => {
-                const color = channelColor(c.id);
+                const color = channelColor(c.id, c.color_hue);
                 const count = scheduledByChannel.get(c.id) ?? 0;
                 const next = nextByChannel.get(c.id);
                 return (
@@ -64,7 +64,7 @@ export default function OverviewPage() {
                     style={{ borderLeft: `3px solid ${color.dot}` }}
                   >
                     <div className="flex items-center justify-between">
-                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} />
+                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} />
                       <span className="data text-lg font-semibold text-ink">{count}</span>
                     </div>
                     <p className="mt-2 text-xs text-muted">

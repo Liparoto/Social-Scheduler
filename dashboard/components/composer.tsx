@@ -18,6 +18,7 @@ interface ChannelLite {
   account_name: string;
   timezone: string;
   requires_approval: boolean;
+  color_hue: number | null;
 }
 interface UploadedAsset {
   id: number;
@@ -484,7 +485,7 @@ export function Composer({
             {channels.map((c) => {
               const on = selected.has(c.id);
               const disabled = textOnly && !supportsText(c.platform);
-              const color = channelColor(c.id);
+              const color = channelColor(c.id, c.color_hue);
               return (
                 <button
                   key={c.id}
@@ -628,7 +629,7 @@ export function Composer({
               {channels
                 .filter((c) => selected.has(c.id))
                 .map((c) => {
-                  const color = channelColor(c.id);
+                  const color = channelColor(c.id, c.color_hue);
                   return (
                     <li key={c.id} className="flex items-center gap-2 text-sm">
                       <span

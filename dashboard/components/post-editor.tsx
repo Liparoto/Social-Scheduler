@@ -197,7 +197,7 @@ export function PostEditor({
         <div className="grid gap-2 sm:grid-cols-2">
           {channels.map((c) => {
             const on = targets.has(c.id);
-            const color = channelColor(c.id);
+            const color = channelColor(c.id, c.color_hue);
             return (
               <button
                 key={c.id}

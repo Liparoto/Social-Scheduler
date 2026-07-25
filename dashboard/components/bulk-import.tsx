@@ -7,6 +7,7 @@ import type { ConformMode } from "@/lib/conform";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
+import { channelColor } from "@/lib/format";
 
 // `uid` is a per-tile client id: two tiles can share an assetId (re-importing a
 // deduped image), so React keys must not be the assetId.
@@ -202,15 +203,27 @@ export function BulkImport({
           <div className="grid gap-2 sm:grid-cols-2">
             {channels.map((c) => {
               const on = targets.has(c.id);
+              const color = channelColor(c.id, c.color_hue);
               return (
                 <button
                   key={c.id}
                   type="button"
                   onClick={() => toggleTarget(c.id)}
                   className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                    on ? "border-brand bg-brand-weak" : "border-border hover:bg-surface-sunken"
+                    on ? "border-transparent" : "border-border hover:bg-surface-sunken"
                   }`}
+                  style={
+                    on ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined
+                  }
                 >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor: on ? color.dot : "transparent",
+                      border: on ? "none" : "1.5px solid var(--color-border-strong)",
+                    }}
+                    aria-hidden
+                  />
                   <span className="text-sm text-ink">{c.account_name}</span>
                   <span className="ml-auto text-xs text-muted">{c.platform}</span>
                 </button>

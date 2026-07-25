@@ -31,6 +31,7 @@ interface ChannelLite {
   platform: string;
   timezone: string;
   requires_approval: boolean;
+  color_hue: number | null;
 }
 
 function tomorrow(): string {
@@ -433,7 +434,7 @@ export function LibraryView({
             {channels.map((c) => {
               const on = effectiveChans.has(c.id);
               const disabled = incompatibleChannelIds.has(c.id);
-              const color = channelColor(c.id);
+              const color = channelColor(c.id, c.color_hue);
               return (
                 <button
                   key={c.id}

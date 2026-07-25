@@ -49,12 +49,14 @@ export function ChannelChip({
   id,
   platform,
   name,
+  colorHue,
 }: {
   id: number;
   platform: string;
   name: string;
+  colorHue?: number | null;
 }) {
-  const c = channelColor(id);
+  const c = channelColor(id, colorHue);
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium"

@@ -74,11 +74,38 @@ export function describePeriod(p: {
 export function channelHue(channelId: number): number {
   return Math.round((channelId * 137.508 + 200) % 360);
 }
-export function channelColor(channelId: number): { fg: string; bg: string; dot: string } {
-  const h = channelHue(channelId);
+
+/**
+ * `colorHue` is the owner's explicit pick (channels.color_hue). Omit it (or pass
+ * `null`/`undefined`) to fall back to the deterministic per-id hue — this is what makes
+ * an unconfigured channel look exactly as it did before this picker existed.
+ */
+export function channelColor(
+  channelId: number,
+  colorHue?: number | null
+): { fg: string; bg: string; dot: string } {
+  const h = typeof colorHue === "number" ? colorHue : channelHue(channelId);
   return {
     fg: `hsl(${h} 55% 32%)`,
     bg: `hsl(${h} 60% 95%)`,
     dot: `hsl(${h} 60% 45%)`,
   };
 }
+
+/**
+ * Preset swatches for the accent-colour picker — evenly spread (36° apart) so every
+ * choice stays visually distinct, with a human name for the accessible label/tooltip
+ * (a hue number reads worse than a colour name).
+ */
+export const COLOR_SWATCHES: { hue: number; name: string }[] = [
+  { hue: 0, name: "Red" },
+  { hue: 36, name: "Orange" },
+  { hue: 72, name: "Gold" },
+  { hue: 108, name: "Lime" },
+  { hue: 144, name: "Green" },
+  { hue: 180, name: "Teal" },
+  { hue: 216, name: "Blue" },
+  { hue: 252, name: "Indigo" },
+  { hue: 288, name: "Violet" },
+  { hue: 324, name: "Pink" },
+];
