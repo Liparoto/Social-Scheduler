@@ -50,14 +50,24 @@ COLUMN_MAP = {
 def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hours: int):
     max_age_cutoff = (now - timedelta(days=max_age_days)).isoformat()
     interval_cutoff = (now - timedelta(hours=min_interval_hours)).isoformat()
+    # Platforms _FETCHERS registers as None have no metrics endpoint at all (Discord,
+    # Telegram) — excluding them here means they are never reselected, cycle after
+    # cycle, only for run_metrics to skip them again every time.
+    no_metrics_platforms = [platform for platform, fetch in _FETCHERS.items() if fetch is None]
+    exclude_clause = ""
+    if no_metrics_platforms:
+        placeholders = ",".join("?" for _ in no_metrics_platforms)
+        exclude_clause = f"AND ch.platform NOT IN ({placeholders})"
     return conn.execute(
-        """
+        f"""
         SELECT pub.* FROM publications pub
+        JOIN channels ch ON ch.id = pub.channel_id
         WHERE pub.status = 'posted'
           AND pub.is_dry_run = 0
           AND pub.remote_post_id IS NOT NULL
           AND pub.remote_post_id != 'DRYRUN'
           AND pub.published_at IS NOT NULL
+          {exclude_clause}
           AND (
             -- Automatic refresh: within the age window AND past the interval gate.
             (
@@ -72,7 +82,7 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
             OR pub.metrics_refresh_requested_at IS NOT NULL
           )
         """,
-        (max_age_cutoff, interval_cutoff),
+        (*no_metrics_platforms, max_age_cutoff, interval_cutoff),
     ).fetchall()
 
 
@@ -156,6 +166,11 @@ _FETCHERS = {
     "instagram": _fetch_instagram,
     "facebook": _fetch_facebook,
     "threads": _fetch_threads,
+    # None means "this platform has no metrics" (a webhook / bot API has no insights
+    # endpoint at all) — distinct from a platform simply missing from this dict, which
+    # would mean someone forgot to register it.
+    "discord": None,
+    "telegram": None,
 }
 
 assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (
@@ -182,12 +197,22 @@ def run_metrics(conn, config: Config, client, now, logger=None, client_for=None)
             if not token:
                 continue
             platform = channel["platform"]
-            fetch = _FETCHERS.get(platform)
-            if fetch is None:
+            if platform not in _FETCHERS:
+                # Missing entirely from the registry — someone forgot to register this
+                # platform. That's worth a log line every time it happens.
                 if logger:
                     logger.info(
                         "[metrics pub %s] no metrics adapter for platform '%s'",
                         pub["id"], platform,
+                    )
+                continue
+            fetch = _FETCHERS[platform]
+            if fetch is None:
+                # Registered as having no metrics endpoint at all (Discord, Telegram) —
+                # expected, not a problem, so no per-cycle warning noise.
+                if logger:
+                    logger.debug(
+                        "[metrics pub %s] platform '%s' has no metrics", pub["id"], platform,
                     )
                 continue
             try:

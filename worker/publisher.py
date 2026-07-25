@@ -327,12 +327,67 @@ def _publish_threads(client, plan, token, config, sleep_fn) -> str:
     return client.publish_threads_container(user, container, token)
 
 
+def _read_asset(path: Path) -> tuple[str, bytes]:
+    """(filename, bytes) shape both Discord's `files` list and Telegram's photo/media-group
+    parts want. Validation already guarantees these paths exist before we get here."""
+    return (path.name, path.read_bytes())
+
+
+def _publish_discord(client, plan, token, config, sleep_fn) -> str:
+    """Discord's "token" is the webhook URL itself — there is no separate account id.
+    One POST per post_type: text sends `content` alone, single/carousel attach files.
+    Discord replies 204 (empty body) unless the webhook is asked to wait for the message,
+    so a missing id in the response is expected, not an error — fall back to a stable
+    marker rather than crashing on a None remote_post_id.
+    """
+    caption = plan["caption"]
+    post_type = plan["post_type"]
+    if post_type == "text":
+        result = client.send_message(token, content=caption)
+    elif post_type == "single":
+        files = [_read_asset(p) for p in plan["asset_paths"]]
+        result = client.send_message(token, content=caption, files=files)
+    elif post_type == "carousel":
+        files = [_read_asset(p) for p in plan["asset_paths"]]
+        result = client.send_message(token, content=caption, files=files)
+    else:
+        raise _NonRetryable(f"discord adapter has no publish path for post_type '{post_type}'")
+    message_id = result.get("id")
+    return str(message_id) if message_id is not None else "posted"
+
+
+def _publish_telegram(client, plan, token, config, sleep_fn) -> str:
+    """Telegram's target is plan["account_id"] (the chat id/username); the bot token is
+    the credential. sendMediaGroup returns a list of Message objects rather than a single
+    one, so the id extraction differs for carousels.
+    """
+    chat_id = plan["account_id"]
+    caption = plan["caption"]
+    post_type = plan["post_type"]
+    if post_type == "text":
+        result = client.send_message(token, chat_id, caption)
+    elif post_type == "single":
+        photo = _read_asset(plan["asset_paths"][0])
+        result = client.send_photo(token, chat_id, photo, caption=caption)
+    elif post_type == "carousel":
+        photos = [_read_asset(p) for p in plan["asset_paths"]]
+        result = client.send_media_group(token, chat_id, photos, caption=caption)
+    else:
+        raise _NonRetryable(f"telegram adapter has no publish path for post_type '{post_type}'")
+    if isinstance(result, list):
+        result = result[0] if result else {}
+    message_id = (result or {}).get("message_id")
+    return str(message_id) if message_id is not None else "posted"
+
+
 # Publish entry point per platform. Uniform signature so the dispatch below is a lookup,
 # not a chain of ifs whose final `else` silently means "Instagram".
 _PUBLISHERS = {
     "instagram": _publish_instagram,
     "facebook": _publish_facebook,
     "threads": _publish_threads,
+    "discord": _publish_discord,
+    "telegram": _publish_telegram,
 }
 
 # Whether each platform exposes a runtime publish quota to read before posting. An
@@ -347,10 +402,14 @@ _PUBLISHERS = {
 #   * threads   — has its own threads_publishing_limit endpoint (250 published posts per
 #                 rolling 24h, per Meta's docs — read live, never hardcoded); must be
 #                 gated like Instagram.
+#   * discord   — a webhook has no publish quota endpoint at all.
+#   * telegram  — the Bot API exposes no publish quota endpoint at all.
 _QUOTA_GATED = {
     "instagram": True,
     "facebook": False,
     "threads": True,
+    "discord": False,
+    "telegram": False,
 }
 
 # The quota-reading call differs per gated platform (Instagram and Threads expose the same

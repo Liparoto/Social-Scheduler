@@ -57,6 +57,16 @@ class TelegramClient:
             )
         return body.get("result")
 
+    def get_me(self, token: str) -> dict:
+        """Verify the bot token is valid. Used by preflight — read-only, no chat needed."""
+        return self._call(token, "getMe", {})
+
+    def get_chat(self, token: str, chat_id: str) -> dict:
+        """Verify the bot can see `chat_id` and fetch its display name. Used by preflight
+        alongside get_me — a valid token alone doesn't prove the bot is actually in the
+        target chat."""
+        return self._call(token, "getChat", {"chat_id": chat_id})
+
     def send_message(self, token: str, chat_id: str, text: str) -> dict:
         return self._call(token, "sendMessage", {"chat_id": chat_id, "text": text})
 

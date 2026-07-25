@@ -16,15 +16,19 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .config import Config
+from .discord_api import DiscordClient
 from .graph_api import GraphClient
+from .telegram_api import TelegramClient
 
 FACEBOOK_BASE = "https://graph.facebook.com"
 THREADS_BASE = "https://graph.threads.net"
+DISCORD_BASE = "https://discord.com/api/v10"
+TELEGRAM_BASE = "https://api.telegram.org"
 
 # Every platform this worker has an adapter for. Adding one here without also adding it to
 # clients._BASE_URLS, publisher._PUBLISHERS, publisher._QUOTA_GATED, preflight._CHECKS and
 # metrics._FETCHERS fails test_platform_dispatch.py — which is the point.
-SUPPORTED_PLATFORMS = ("instagram", "facebook", "threads")
+SUPPORTED_PLATFORMS = ("instagram", "facebook", "threads", "discord", "telegram")
 
 
 class UnknownPlatform(Exception):
@@ -38,6 +42,8 @@ _BASE_URLS: dict[str, Callable[[Config], str]] = {
     "facebook": lambda _config: FACEBOOK_BASE,
     "instagram": lambda config: config.graph_base,
     "threads": lambda _config: THREADS_BASE,
+    "discord": lambda _config: DISCORD_BASE,
+    "telegram": lambda _config: TELEGRAM_BASE,
 }
 
 assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), (
@@ -52,6 +58,12 @@ _API_VERSIONS: dict[str, Callable[[Config], str]] = {
     "facebook": lambda config: config.graph_version,
     "instagram": lambda config: config.graph_version,
     "threads": lambda config: config.threads_api_version,
+    # Discord's version is pinned in DISCORD_BASE itself (.../api/v10); recorded here too
+    # so the registry never has to special-case a platform for "no separate version".
+    "discord": lambda _config: "v10",
+    # Telegram has no API versioning at all. Empty string documents that fact rather than
+    # pretending a version exists.
+    "telegram": lambda _config: "",
 }
 
 assert set(_API_VERSIONS) == set(SUPPORTED_PLATFORMS), (
@@ -97,6 +109,20 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
         supports_text=True, max_carousel=20,
         caption_chars={"text": 500, "single": 500, "carousel": 500},
     ),
+    # Discord webhook: 2000-char message, up to 10 attachments, uploads bytes itself.
+    # The webhook URL is both address and secret, so there is no separate account id.
+    "discord": PlatformCaps(
+        supports_text=True, max_carousel=10,
+        caption_chars={"text": 2000, "single": 2000, "carousel": 2000},
+        uploads_media_bytes=True, uses_account_id=False,
+    ),
+    # Telegram bot: 4096 for a text message but only 1024 once media is attached;
+    # sendMediaGroup takes 2-10 items. Uploads bytes itself.
+    "telegram": PlatformCaps(
+        supports_text=True, max_carousel=10,
+        caption_chars={"text": 4096, "single": 1024, "carousel": 1024},
+        uploads_media_bytes=True, uses_account_id=True,
+    ),
 }
 
 assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), (
@@ -127,24 +153,44 @@ def api_version_for(platform: str, config: Config) -> str:
     return resolver(config)
 
 
-class ClientRegistry:
-    """Lazily builds and caches one Graph client per (base URL, API version) pair.
+# How to build a client per platform. ClientRegistry used to hardcode GraphClient; Discord and
+# Telegram are not Graph APIs, and the publisher only ever calls clients by method name, so the
+# construction is the only Meta-specific part left.
+_CLIENT_FACTORIES: dict[str, Callable[[str, str], object]] = {
+    "instagram": lambda version, base: GraphClient(version, base_url=base),
+    "facebook": lambda version, base: GraphClient(version, base_url=base),
+    "threads": lambda version, base: GraphClient(version, base_url=base),
+    "discord": lambda _version, base: DiscordClient(base_url=base),
+    "telegram": lambda _version, base: TelegramClient(base_url=base),
+}
 
-    Caching on base URL alone would be wrong now that platforms can share a base URL but
-    need different versions — it would hand back a client built for the wrong version.
+assert set(_CLIENT_FACTORIES) == set(SUPPORTED_PLATFORMS), (
+    "clients._CLIENT_FACTORIES and clients.SUPPORTED_PLATFORMS disagree"
+)
+
+
+class ClientRegistry:
+    """Lazily builds and caches one client per (platform, base URL, API version) triple.
+
+    Caching on base+version alone would let two platforms that happen to share both
+    (unlikely today, but not impossible) collide and hand back a client built for the
+    wrong platform's factory. Keying on platform too closes that off.
     """
 
     def __init__(self, config: Config, factory: Callable[[str, str], object] | None = None) -> None:
         self._config = config
-        self._factory = factory or (
-            lambda version, base_url: GraphClient(version, base_url=base_url)
-        )
-        self._cache: dict[tuple[str, str], object] = {}
+        # None (the default) means: build each platform's client via its own entry in
+        # _CLIENT_FACTORIES. Tests inject an explicit factory to hand back a fake client
+        # for every platform instead — that injected-factory path must keep working
+        # exactly as it does today.
+        self._factory = factory
+        self._cache: dict[tuple[str, str, str], object] = {}
 
     def for_platform(self, platform: str):
         base = base_url_for(platform, self._config)
         version = api_version_for(platform, self._config)
-        key = (base, version)
+        key = (platform, base, version)
         if key not in self._cache:
-            self._cache[key] = self._factory(version, base)
+            factory = self._factory or _CLIENT_FACTORIES[platform]
+            self._cache[key] = factory(version, base)
         return self._cache[key]
