@@ -18,6 +18,7 @@ export type ChannelLite = {
   account_name: string;
   timezone: string;
   requires_approval: boolean;
+  color_hue: number | null;
 };
 
 const card = "rounded-card border border-border bg-surface p-5";

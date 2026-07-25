@@ -427,7 +427,7 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
       `SELECT pub.id, pub.channel_id, pub.scheduled_at, pub.status, pub.is_held,
               pub.is_dry_run, pub.remote_post_id,
               c.account_name AS channel_name, c.platform AS channel_platform,
-              c.timezone AS channel_timezone
+              c.timezone AS channel_timezone, c.color_hue AS channel_color_hue
        FROM publications pub JOIN channels c ON c.id = pub.channel_id
        WHERE pub.post_id = ? ORDER BY pub.scheduled_at ASC`
     )
@@ -536,6 +536,7 @@ export interface PublicationRow extends Publication {
   channel_name: string;
   channel_platform: string;
   channel_timezone: string;
+  channel_color_hue: number | null;
   asset_count: number;
   first_asset_id: number | null;
   m_reach: number | null;
@@ -557,6 +558,7 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          c.account_name AS channel_name,
          c.platform     AS channel_platform,
          c.timezone     AS channel_timezone,
+         c.color_hue    AS channel_color_hue,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT pa.asset_id FROM post_assets pa
             WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,

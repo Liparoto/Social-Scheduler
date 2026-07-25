@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { PLATFORMS, accountIdLabel, usesAccountId, usesLinkedPage } from "@/lib/platforms";
+import { PLATFORMS, accountIdLabel, usesAccountId, usesLinkedPage, platformLabel } from "@/lib/platforms";
+import { ColorSwatchPicker } from "@/components/color-swatch-picker";
 
 const field =
   "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
@@ -26,6 +27,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
     linked_page_id: "",
     access_token: "",
     requires_approval: false,
+    color_hue: null as number | null,
   });
 
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
@@ -51,6 +53,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
       remote_account_id: "",
       linked_page_id: "",
       access_token: "",
+      color_hue: null,
     }));
     setOpen(false);
     startTransition(() => router.refresh());
@@ -165,6 +168,16 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
           />
           Require approval before anything publishes to this channel
         </label>
+        <div className="sm:col-span-2">
+          <label className={label}>Accent colour (optional)</label>
+          <ColorSwatchPicker
+            value={form.color_hue}
+            onChange={(hue) => set("color_hue", hue)}
+            previewChannelId={0}
+            previewName={form.account_name || "New channel"}
+            previewPlatformLabel={platformLabel(form.platform)}
+          />
+        </div>
       </div>
 
       {error ? <p className="mt-3 text-sm text-status-failed">{error}</p> : null}

@@ -5,6 +5,7 @@ import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
 import { ChannelCredentials } from "@/components/channel-credentials";
+import { ChannelColor } from "@/components/channel-color";
 import { AutofillConfig } from "@/components/autofill-config";
 import { tzAbbrev } from "@/lib/format";
 
@@ -40,7 +41,7 @@ export default function ChannelsPage() {
               >
                 <div className="flex items-start justify-between">
                   <div>
-                    <ChannelChip id={c.id} platform={c.platform} name={c.account_name} />
+                    <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} />
                     {c.business_label ? (
                       <p className="mt-1.5 text-xs text-muted">{c.business_label}</p>
                     ) : null}
@@ -93,6 +94,13 @@ export default function ChannelsPage() {
                   channelId={c.id}
                   platform={c.platform}
                   remoteAccountId={c.remote_account_id}
+                />
+
+                <ChannelColor
+                  channelId={c.id}
+                  platform={c.platform}
+                  accountName={c.account_name}
+                  colorHue={c.color_hue}
                 />
 
                 <AutofillConfig

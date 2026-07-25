@@ -31,6 +31,7 @@ export default function LibraryPage() {
     platform: c.platform,
     timezone: c.timezone,
     requires_approval: c.requires_approval === 1,
+    color_hue: c.color_hue,
   }));
 
   return (
