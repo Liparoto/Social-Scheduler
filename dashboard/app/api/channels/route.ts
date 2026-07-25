@@ -9,7 +9,12 @@ export function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
   const account_name = (body.account_name || "").trim();
   const platform = body.platform;
   if (!account_name) {

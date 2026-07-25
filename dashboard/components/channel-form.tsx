@@ -9,7 +9,19 @@ const field =
   "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
 const label = "block text-xs font-medium text-ink-soft mb-1";
 
-export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
+export function ChannelForm({
+  defaultTimezone,
+  nextChannelId,
+}: {
+  defaultTimezone: string;
+  /**
+   * The id this channel will actually get (highest existing channel id + 1 — SQLite
+   * reuses the max rowid+1 for a plain INTEGER PRIMARY KEY absent AUTOINCREMENT, so
+   * this matches in the common case). Without this the Automatic preview always showed
+   * hue 200, which is only ever right by coincidence.
+   */
+  nextChannelId: number;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -173,7 +185,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
           <ColorSwatchPicker
             value={form.color_hue}
             onChange={(hue) => set("color_hue", hue)}
-            previewChannelId={0}
+            previewChannelId={nextChannelId}
             previewName={form.account_name || "New channel"}
             previewPlatformLabel={platformLabel(form.platform)}
           />

@@ -22,7 +22,10 @@ export default function ChannelsPage() {
       />
 
       <div className="px-8 py-6 space-y-6">
-        <ChannelForm defaultTimezone={config.defaultTimezone} />
+        <ChannelForm
+          defaultTimezone={config.defaultTimezone}
+          nextChannelId={channels.reduce((max, c) => Math.max(max, c.id), 0) + 1}
+        />
 
         {channels.length === 0 ? (
           <EmptyState title="No channels configured">

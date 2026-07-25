@@ -106,27 +106,27 @@ def _resolve_local_path(asset, caps: PlatformCaps, config) -> Path | None:
     publish_path, falling back to the original — same precedence as _resolve_url. When
     needs_conformed_media is False (Discord, Telegram — no aspect-ratio rules at all),
     prefer the untouched original at storage_path, falling back to publish_path only if
-    the original is missing. Returns None when the file is missing, so validation can fail
-    loudly instead of the publish blowing up mid-request.
+    the original is missing. The fallback is existence-aware — it checks the file is
+    actually on disk, not just that the DB column is non-empty — since storage_path is
+    always populated at upload time and would otherwise make the fallback unreachable.
+    Returns None when neither candidate exists, so validation can fail loudly instead of
+    the publish blowing up mid-request.
     """
-    rel = None
+
+    def _candidate(rel) -> Path | None:
+        if not rel:
+            return None
+        path = Path(rel)
+        if not path.is_absolute():
+            path = config.asset_storage_dir / path
+        return path if path.exists() else None
+
     has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
+    original = _candidate(asset["storage_path"])
+    conformed = _candidate(asset["publish_path"] if has_publish_path else None)
     if caps.needs_conformed_media:
-        if has_publish_path:
-            rel = asset["publish_path"]
-        elif asset["storage_path"]:
-            rel = asset["storage_path"]
-    else:
-        if asset["storage_path"]:
-            rel = asset["storage_path"]
-        elif has_publish_path:
-            rel = asset["publish_path"]
-    if not rel:
-        return None
-    path = Path(rel)
-    if not path.is_absolute():
-        path = config.asset_storage_dir / path
-    return path if path.exists() else None
+        return conformed or original
+    return original or conformed
 
 
 def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,

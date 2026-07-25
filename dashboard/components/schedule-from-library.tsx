@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
+import { channelColor } from "@/lib/format";
 
 export type LibraryPickItem = {
   id: number;
@@ -187,6 +188,7 @@ export function ScheduleFromLibrary({
           {channels.map((c) => {
             const on = effectiveTargets.has(c.id);
             const disabled = incompatibleIds.has(c.id);
+            const color = channelColor(c.id, c.color_hue);
             return (
               <button
                 key={c.id}
@@ -197,10 +199,23 @@ export function ScheduleFromLibrary({
                   disabled
                     ? "cursor-not-allowed border-border opacity-50"
                     : on
-                    ? "border-brand bg-brand-weak"
+                    ? "border-transparent"
                     : "border-border hover:bg-surface-sunken"
                 }`}
+                style={
+                  on && !disabled
+                    ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` }
+                    : undefined
+                }
               >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{
+                    backgroundColor: on && !disabled ? color.dot : "transparent",
+                    border: on && !disabled ? "none" : "1.5px solid var(--color-border-strong)",
+                  }}
+                  aria-hidden
+                />
                 <span className="text-sm text-ink">{c.account_name}</span>
                 <span className="ml-auto text-xs text-muted">
                   {disabled ? `${platformLabel(c.platform)} can't post this type` : c.platform}

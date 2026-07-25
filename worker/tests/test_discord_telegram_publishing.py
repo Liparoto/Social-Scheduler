@@ -115,6 +115,32 @@ def test_discord_single_image_uploads_the_original_not_the_conformed_derivative(
     assert files[0][1] == b"original-0"
 
 
+def test_discord_falls_back_to_conformed_when_original_missing_from_disk(
+    conn, config, fake_discord_client, make_publication
+):
+    """The original can be pruned from /data (space saving, a partial restore, manual
+    cleanup) while the conformed derivative survives. Discord — which prefers the
+    original — must still publish using the conformed copy instead of failing outright.
+    This is existence-aware, not just "is storage_path set": storage_path is always
+    populated at upload time, so the fallback only matters once the file itself is gone.
+    """
+    pub = make_publication(platform="discord", post_type="single", n_assets=1, public_url=None)
+    _write_original_and_conformed_files(config, conn, pub["post_id"])
+    row = conn.execute(
+        """SELECT a.storage_path FROM assets a
+           JOIN post_assets pa ON pa.asset_id = a.id
+           WHERE pa.post_id = ?""",
+        (pub["post_id"],),
+    ).fetchone()
+    (config.asset_storage_dir / row["storage_path"]).unlink()
+
+    out = publish_one(conn, pub, config, fake_discord_client, dry_run=False)
+
+    assert out.result == "posted"
+    _, _, files = fake_discord_client.calls[0]
+    assert files[0][1] == b"conformed-0"
+
+
 def test_discord_album_of_three_sends_one_call_in_asset_order(
     conn, config, fake_discord_client, make_publication
 ):

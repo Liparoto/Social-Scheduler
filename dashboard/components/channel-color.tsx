@@ -25,14 +25,23 @@ export function ChannelColor({
   const [pending, startTransition] = useTransition();
   const [value, setValue] = useState<number | null>(colorHue);
   const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function pick(hue: number | null) {
+    const previous = value;
+    setError(null);
     setValue(hue);
-    await fetch(`/api/channels/${channelId}`, {
+    const res = await fetch(`/api/channels/${channelId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ color_hue: hue }),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setValue(previous);
+      setError(body.error ?? "Could not save the accent colour.");
+      return;
+    }
     startTransition(() => router.refresh());
   }
 
@@ -56,6 +65,7 @@ export function ChannelColor({
             previewPlatformLabel={platformLabel(platform)}
           />
           {pending ? <p className="mt-2 text-[11px] text-muted">Saving…</p> : null}
+          {error ? <p className="mt-2 text-[11px] text-status-failed">{error}</p> : null}
         </div>
       ) : null}
     </div>

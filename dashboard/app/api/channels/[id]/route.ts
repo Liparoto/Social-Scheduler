@@ -12,7 +12,12 @@ export async function PATCH(
   if (!getChannel(channelId)) {
     return NextResponse.json({ error: "Channel not found." }, { status: 404 });
   }
-  const body = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
   if (
     "color_hue" in body &&
     body.color_hue !== null &&
