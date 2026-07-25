@@ -69,18 +69,34 @@ class PlatformCaps:
 
     supports_text: bool          # can publish a post with a caption and no media
     max_carousel: int            # maximum children in a multi-image post
-    max_caption_chars: int | None  # None = no limit this worker enforces
+    # Caption limits differ BY POST TYPE on some platforms — Telegram allows 4096 characters
+    # for a text post but only 1024 once a photo is attached — so this is a mapping, not one
+    # number. A post type absent from the mapping has no limit we enforce.
+    caption_chars: dict[str, int]
+    # True when the platform accepts the file bytes in the publish request. Meta fetches media
+    # from a public URL (which is why publishing opens a tunnel); these platforms do not, so
+    # they need neither a public URL nor cloudflared.
+    uploads_media_bytes: bool = False
+    # False when the credential alone identifies the destination, so there is no separate
+    # account id to store or ask for (Discord's webhook URL is both address and secret).
+    uses_account_id: bool = True
+
+    def caption_limit(self, post_type: str) -> int | None:
+        return self.caption_chars.get(post_type)
 
 
 PLATFORM_CAPS: dict[str, PlatformCaps] = {
     # Instagram: feed carousels cap at 10 (see reference.md). No text-only format.
-    "instagram": PlatformCaps(supports_text=False, max_carousel=10, max_caption_chars=None),
+    "instagram": PlatformCaps(supports_text=False, max_carousel=10, caption_chars={}),
     # Facebook Pages: attached_media multi-photo posts cap at 10. No text-only format
     # here either — a Page status update is a different product surface we don't publish.
-    "facebook": PlatformCaps(supports_text=False, max_carousel=10, max_caption_chars=None),
+    "facebook": PlatformCaps(supports_text=False, max_carousel=10, caption_chars={}),
     # Threads: text-first. 500-character text limit, 2-20 carousel children,
     # 250 API-published posts per rolling 24h (verified 2026-07-25).
-    "threads": PlatformCaps(supports_text=True, max_carousel=20, max_caption_chars=500),
+    "threads": PlatformCaps(
+        supports_text=True, max_carousel=20,
+        caption_chars={"text": 500, "single": 500, "carousel": 500},
+    ),
 }
 
 assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), (

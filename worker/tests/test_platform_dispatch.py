@@ -90,6 +90,26 @@ def test_neither_meta_platform_claims_text_support():
     assert PLATFORM_CAPS["instagram"].max_carousel == 10
 
 
+def test_caption_limits_are_declared_per_post_type():
+    from worker.clients import PLATFORM_CAPS
+
+    # Threads' 500 applies to every type it supports; Meta declares no limit at all.
+    assert PLATFORM_CAPS["threads"].caption_limit("text") == 500
+    assert PLATFORM_CAPS["threads"].caption_limit("single") == 500
+    assert PLATFORM_CAPS["instagram"].caption_limit("single") is None
+    # An unknown post type must not invent a limit.
+    assert PLATFORM_CAPS["threads"].caption_limit("reel") is None
+
+
+def test_meta_platforms_do_not_upload_bytes_themselves():
+    from worker.clients import PLATFORM_CAPS
+
+    # Meta fetches media from a public URL, which is what the tunnel exists for.
+    for platform in ("instagram", "facebook", "threads"):
+        assert PLATFORM_CAPS[platform].uploads_media_bytes is False
+        assert PLATFORM_CAPS[platform].uses_account_id is True
+
+
 def test_an_unsupported_platform_fails_terminally_and_visibly(
     conn, config, fake_client, make_publication
 ):

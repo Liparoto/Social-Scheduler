@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from . import db
 from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
@@ -96,8 +97,28 @@ def _resolve_url(asset, asset_base_url: str | None) -> str | None:
     return None
 
 
+def _resolve_local_path(asset, config) -> Path | None:
+    """The on-disk file to upload, for platforms that send bytes rather than a URL.
+
+    Same precedence as _resolve_url: the Meta-conformed derivative if one exists, else the
+    original. Returns None when the file is missing, so validation can fail loudly instead of
+    the publish blowing up mid-request.
+    """
+    rel = None
+    if "publish_path" in asset.keys() and asset["publish_path"]:
+        rel = asset["publish_path"]
+    elif asset["storage_path"]:
+        rel = asset["storage_path"]
+    if not rel:
+        return None
+    path = Path(rel)
+    if not path.is_absolute():
+        path = config.asset_storage_dir / path
+    return path if path.exists() else None
+
+
 def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,
-              caption: str | None = None) -> None:
+              caption: str | None = None, config=None) -> None:
     if platform not in _PUBLISHERS:
         raise _NonRetryable(
             f"unsupported platform '{platform}' — this worker has no adapter for it"
@@ -123,18 +144,23 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             )
         if not (caption or "").strip():
             raise _NonRetryable("a text post needs a caption")
-    if caps.max_caption_chars is not None and caption is not None:
-        if len(caption) > caps.max_caption_chars:
-            raise _NonRetryable(
-                f"caption is {len(caption)} characters; {platform} allows "
-                f"{caps.max_caption_chars}"
-            )
+    limit = caps.caption_limit(post_type)
+    if limit is not None and caption is not None and len(caption) > limit:
+        raise _NonRetryable(
+            f"caption is {len(caption)} characters; {platform} allows {limit} "
+            f"for a {post_type} post"
+        )
     if not dry_run:
-        missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]
-        if missing:
-            raise _NonRetryable(
-                f"assets have no public URL (no tunnel and no stored public_url): {missing}"
-            )
+        if caps.uploads_media_bytes:
+            missing = [a["id"] for a in assets if _resolve_local_path(a, config) is None]
+            if missing:
+                raise _NonRetryable(f"asset files missing from the local store: {missing}")
+        else:
+            missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]
+            if missing:
+                raise _NonRetryable(
+                    f"assets have no public URL (no tunnel and no stored public_url): {missing}"
+                )
 
 
 def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str | None:
@@ -154,12 +180,16 @@ def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str |
     return post["caption"] if post else None
 
 
-def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None) -> dict:
+def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None,
+                 config=None) -> dict:
     # For real publishes every asset resolves (validated above). In dry-run there is no
     # tunnel, so show a readable local marker instead of a live URL.
     asset_urls = [
         _resolve_url(a, asset_base_url) or f"(local:{a['storage_path']})" for a in assets
     ]
+    # Local on-disk paths, for byte-upload platforms (Discord/Telegram). None entries are
+    # expected in dry-run or when the platform doesn't use them.
+    asset_paths = [_resolve_local_path(a, config) if config is not None else None for a in assets]
     return {
         "platform": channel["platform"],
         "account": channel["account_name"],
@@ -169,6 +199,7 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
         "caption": caption,
         "first_comment": post["first_comment"],
         "asset_urls": asset_urls,
+        "asset_paths": asset_paths,
     }
 
 
@@ -386,8 +417,8 @@ def publish_one(
             (pub["post_id"], pub["channel_id"]),
         ).fetchone()[0]
         caption = _select_caption(conn, post["id"], channel["platform"], used_count)
-        _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption)
-        plan = _build_plan(channel, post, assets, asset_base_url, caption)
+        _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption, config)
+        plan = _build_plan(channel, post, assets, asset_base_url, caption, config)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
         return _mark_failure(conn, pub, config, now, str(exc), terminal=True)
