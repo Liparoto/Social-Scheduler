@@ -212,10 +212,12 @@ product, it does **not** reuse your Instagram or Facebook setup. It's a differen
 flow, with its own product to add in the App Dashboard and its own permissions
 (`threads_basic`, `threads_content_publish`).
 
-**About the Threads user id.** Meta's documentation does **not** state whether it is the same
-number as your Instagram user id for a linked account — it simply tells you to ask the API for
-it. So don't assume either way, and don't copy your IG id across. Get the real one with a single
-call using your Threads token:
+**About the Threads user id — it is NOT your Instagram user id.** Meta's docs don't state this
+either way, but it was confirmed on a real linked account (2026-07-25): the same person's
+Instagram id was `1784140…` while Threads returned a completely different `2786950…`. Using the
+Instagram id gets you `THApiException` code 100, *"Object with ID … does not exist"* — which
+looks like a broken token but isn't. Get the real one with a single call using your Threads
+token:
 ```
 curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=YOUR_THREADS_TOKEN"
 ```

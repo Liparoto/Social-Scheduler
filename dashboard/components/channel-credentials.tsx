@@ -54,7 +54,10 @@ export function ChannelCredentials({
         className="flex w-full items-center justify-between text-left"
       >
         <span className="text-xs font-medium text-ink-soft">Credentials</span>
-        <span className="text-xs text-muted">{open ? "Hide" : "Update token"}</span>
+        {/* Says "Edit", not "Update token" — this panel also edits the account id, and
+            labelling it by the token alone hides that. A wrong account id is a real and
+            easy mistake (the Threads id is not the Instagram one). */}
+        <span className="text-xs text-muted">{open ? "Hide" : "Edit"}</span>
       </button>
 
       {open ? (
@@ -73,7 +76,9 @@ export function ChannelCredentials({
           <label className="block text-xs text-ink-soft">
             <span className="mb-1 block">
               New access token{" "}
-              <span className="text-faint">(long, starts with IGAA… — leave blank to keep current)</span>
+              {/* The "IGAA…" prefix is Instagram's; Threads and Page tokens look different,
+                  so don't tell someone their valid token looks wrong. */}
+              <span className="text-faint">(long — leave blank to keep the current one)</span>
             </span>
             <input
               className={field}
