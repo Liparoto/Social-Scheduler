@@ -21,6 +21,12 @@ from .clients import ClientRegistry, UnknownPlatform
 from .config import Config, dry_run_active, kill_switch_active, load_env
 from .logging_setup import configure_logging
 
+# Imported eagerly, not lazily, so publisher's registry-vs-SUPPORTED_PLATFORMS asserts run
+# at startup. Imported inside run_once instead, a mismatch surfaces only once the first
+# batch runs, where run_forever's catch-all swallows it — the daemon then looks healthy
+# while silently publishing nothing.
+from . import publisher as _publisher_registry_check  # noqa: F401
+
 _stop = False
 
 
