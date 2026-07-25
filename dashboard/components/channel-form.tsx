@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { PLATFORMS, accountIdLabel, usesLinkedPage } from "@/lib/platforms";
 
 const field =
   "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
@@ -13,7 +14,11 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
-    platform: "instagram",
+    // `as string`: PLATFORMS[0].value is a non-fresh literal ("instagram"), which TS
+    // would NOT widen during useState's generic inference (unlike a literal written
+    // inline here) — leaving form.platform typed as that one literal and breaking the
+    // plain-string onChange handler below.
+    platform: PLATFORMS[0].value as string,
     account_name: "",
     business_label: "",
     timezone: defaultTimezone,
@@ -78,8 +83,11 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
             value={form.platform}
             onChange={(e) => set("platform", e.target.value)}
           >
-            <option value="instagram">Instagram</option>
-            <option value="facebook">Facebook Page</option>
+            {PLATFORMS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
           </select>
         </div>
         <div>
@@ -111,7 +119,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
         </div>
         <div>
           <label className={label}>
-            {form.platform === "instagram" ? "IG user id" : "Page id"}
+            {accountIdLabel(form.platform)}
           </label>
           <input
             className={field}
@@ -120,7 +128,7 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
             onChange={(e) => set("remote_account_id", e.target.value)}
           />
         </div>
-        {form.platform === "instagram" ? (
+        {usesLinkedPage(form.platform) ? (
           <div>
             <label className={label}>Linked Facebook Page id (optional)</label>
             <input

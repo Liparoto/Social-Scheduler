@@ -8,6 +8,8 @@ proof of reachability:
   * Facebook Pages — a plain node read (id, name). Pages have no
     content_publishing_limit endpoint, so this instead proves the Page token and
     Page id are valid and the Page is reachable. There is no publish quota to report.
+  * Any other platform — reported as unchecked (no adapter), never silently checked
+    against another platform's endpoint.
 
 Uses ClientRegistry so each channel is checked against the correct Graph host for its
 platform (Facebook is always graph.facebook.com; Instagram uses the install's
@@ -29,6 +31,33 @@ from .config import Config
 from .graph_api import GraphAPIError
 
 
+def _check_facebook(client, ch, name, print_fn) -> None:
+    info = client.get_page_info(ch["remote_account_id"], ch["access_token"])
+    page_name = info.get("name", ch["account_name"])
+    print_fn(
+        f"  ✓ {name}: token OK — Page reachable "
+        f"({page_name}; Pages have no publish quota)"
+    )
+
+
+def _check_instagram(client, ch, name, print_fn) -> None:
+    usage, total, duration = client.get_content_publishing_limit(
+        ch["remote_account_id"], ch["access_token"]
+    )
+    hours = (duration or 0) // 3600
+    print_fn(
+        f"  ✓ {name}: token OK — published {usage}/{total} in the last {hours}h window"
+    )
+
+
+# One check per platform. A bare `else` here is how a Facebook Page got preflighted
+# against Instagram's quota endpoint; an unknown platform must be reported, not guessed.
+_CHECKS = {
+    "instagram": _check_instagram,
+    "facebook": _check_facebook,
+}
+
+
 def check_channels(rows, registry: ClientRegistry, *, print_fn=print) -> bool:
     """Check every channel row. Returns True iff all of them are reachable.
 
@@ -46,24 +75,16 @@ def check_channels(rows, registry: ClientRegistry, *, print_fn=print) -> bool:
             print_fn(f"  ✗ {name}: no account id set")
             all_ok = False
             continue
-        client = registry.for_platform(ch["platform"])
+        check = _CHECKS.get(ch["platform"])
+        if check is None:
+            print_fn(
+                f"  ✗ {name}: no preflight check for platform '{ch['platform']}' "
+                f"— this worker has no adapter for it"
+            )
+            all_ok = False
+            continue
         try:
-            if ch["platform"] == "facebook":
-                info = client.get_page_info(ch["remote_account_id"], ch["access_token"])
-                page_name = info.get("name", ch["account_name"])
-                print_fn(
-                    f"  ✓ {name}: token OK — Page reachable "
-                    f"({page_name}; Pages have no publish quota)"
-                )
-            else:
-                usage, total, duration = client.get_content_publishing_limit(
-                    ch["remote_account_id"], ch["access_token"]
-                )
-                hours = (duration or 0) // 3600
-                print_fn(
-                    f"  ✓ {name}: token OK — published {usage}/{total} in the last "
-                    f"{hours}h window"
-                )
+            check(registry.for_platform(ch["platform"]), ch, name, print_fn)
         except GraphAPIError as exc:
             print_fn(f"  ✗ {name}: {exc}")
             all_ok = False

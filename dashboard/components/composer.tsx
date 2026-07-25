@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
+import { platformLabel } from "@/lib/platforms";
 import type { Period, PeriodMode, Tag } from "@/lib/types";
 import type { ConformMode } from "@/lib/conform";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -388,7 +389,7 @@ export function Composer({
                       {c.account_name}
                     </span>
                     <span className="data block text-[11px] text-muted">
-                      {c.platform === "instagram" ? "Instagram" : "Facebook"}
+                      {platformLabel(c.platform)}
                       {c.requires_approval ? " · needs approval" : ""}
                     </span>
                   </span>

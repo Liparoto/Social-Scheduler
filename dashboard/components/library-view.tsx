@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz } from "@/lib/format";
+import { PLATFORMS } from "@/lib/platforms";
 
 interface PostLite {
   id: number;
@@ -226,19 +227,19 @@ export function LibraryView({
             );
           })}
           <span className="mx-1 h-4 w-px bg-border" />
-          {(["instagram", "facebook"] as const).map((plat) => {
-            const on = platformFilter === plat;
+          {PLATFORMS.map((p) => {
+            const on = platformFilter === p.value;
             return (
               <button
-                key={plat}
-                onClick={() => setPlatformFilter(on ? null : plat)}
+                key={p.value}
+                onClick={() => setPlatformFilter(on ? null : p.value)}
                 className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
                   on
                     ? "border-brand bg-brand/10 text-brand-strong"
                     : "border-border bg-surface text-muted hover:bg-surface-sunken"
                 }`}
               >
-                {plat}
+                {p.value}
               </button>
             );
           })}

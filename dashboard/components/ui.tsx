@@ -1,5 +1,6 @@
 import type { PublicationStatus } from "@/lib/types";
 import { channelColor } from "@/lib/format";
+import { platformBadge } from "@/lib/platforms";
 
 const STATUS_META: Record<
   PublicationStatus,
@@ -66,7 +67,7 @@ export function ChannelChip({
       />
       {name}
       <span className="text-[10px] uppercase tracking-wide opacity-60">
-        {platform === "instagram" ? "IG" : "FB"}
+        {platformBadge(platform)}
       </span>
     </span>
   );

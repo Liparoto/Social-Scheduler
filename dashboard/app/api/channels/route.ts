@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createChannel, getChannels } from "@/lib/queries";
+import { isPlatform, PLATFORMS } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
@@ -14,8 +15,11 @@ export async function POST(req: NextRequest) {
   if (!account_name) {
     return NextResponse.json({ error: "Account name is required." }, { status: 400 });
   }
-  if (platform !== "instagram" && platform !== "facebook") {
-    return NextResponse.json({ error: "Platform must be instagram or facebook." }, { status: 400 });
+  if (!isPlatform(platform)) {
+    return NextResponse.json(
+      { error: `Platform must be one of: ${PLATFORMS.map((p) => p.value).join(", ")}.` },
+      { status: 400 }
+    );
   }
   const id = createChannel({
     platform,

@@ -1,3 +1,5 @@
+import pytest
+
 from worker.clients import FACEBOOK_BASE, ClientRegistry, base_url_for
 
 
@@ -13,8 +15,13 @@ def test_instagram_uses_the_installs_configured_base(config):
     assert base_url_for("instagram", config) == "https://graph.instagram.com"
 
 
-def test_unknown_platform_falls_back_to_the_installs_base(config):
-    assert base_url_for("mastodon", config) == config.graph_base
+def test_unknown_platform_raises_instead_of_guessing_a_host(config):
+    # Silently returning the install's base URL is how a new platform ends up talking to
+    # Instagram's API — the failure this task exists to prevent.
+    from worker.clients import UnknownPlatform
+
+    with pytest.raises(UnknownPlatform):
+        base_url_for("mastodon", config)
 
 
 def test_registry_builds_one_client_per_base_and_caches_it(config):

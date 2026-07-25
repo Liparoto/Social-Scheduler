@@ -115,6 +115,17 @@ def main() -> int:
         print(f"Applying {f.name} ...", end=" ")
         try:
             conn.execute("BEGIN;")
+            # NOTE: sqlite3's executescript() issues an implicit COMMIT before it runs,
+            # which ends the BEGIN above — so by the time the migration's SQL runs, this
+            # connection is back in autocommit mode and every statement in the script
+            # commits individually. Migration scripts may therefore open and manage their
+            # own transaction (see 0008_platform_foundation.sql for an example: it needs
+            # BOTH an explicit BEGIN/COMMIT around its DDL for atomicity AND a
+            # `PRAGMA foreign_keys = OFF` outside any transaction, because that PRAGMA is
+            # a silent no-op while a transaction is open. If this BEGIN is ever changed to
+            # keep a real transaction open across executescript(), 0008's foreign_keys
+            # PRAGMA would stop taking effect with NO error raised, and cascading deletes
+            # would fire silently — re-check 0008 against any change here.
             conn.executescript(sql)
             conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (?);", (f.name,)

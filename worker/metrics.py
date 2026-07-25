@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
+from .clients import SUPPORTED_PLATFORMS
 from .config import Config
 
 # Metrics requested from the IG media insights endpoint. We store whatever comes back;
@@ -139,6 +140,10 @@ def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub
 
 
 _FETCHERS = {"instagram": _fetch_instagram, "facebook": _fetch_facebook}
+
+assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (
+    "metrics._FETCHERS and clients.SUPPORTED_PLATFORMS disagree"
+)
 
 
 def run_metrics(conn, config: Config, client, now, logger=None, client_for=None) -> int:
