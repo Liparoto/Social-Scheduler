@@ -13,6 +13,16 @@ export async function PATCH(
     return NextResponse.json({ error: "Channel not found." }, { status: 404 });
   }
   const body = await req.json();
+  if (
+    "color_hue" in body &&
+    body.color_hue !== null &&
+    (!Number.isInteger(body.color_hue) || body.color_hue < 0 || body.color_hue > 360)
+  ) {
+    return NextResponse.json(
+      { error: "color_hue must be null or an integer between 0 and 360." },
+      { status: 400 }
+    );
+  }
   const fields: Record<string, unknown> = {};
   if (typeof body.account_name === "string") fields.account_name = body.account_name.trim();
   if ("business_label" in body) fields.business_label = body.business_label || null;
@@ -28,6 +38,7 @@ export async function PATCH(
   if ("min_queue_depth" in body) fields.min_queue_depth = Number(body.min_queue_depth) || 0;
   if ("target_queue_depth" in body) fields.target_queue_depth = Number(body.target_queue_depth) || 0;
   if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
+  if ("color_hue" in body) fields.color_hue = body.color_hue ?? null;
 
   updateChannel(channelId, fields);
   return NextResponse.json({ ok: true });

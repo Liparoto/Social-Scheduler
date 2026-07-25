@@ -21,6 +21,16 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+  if (
+    body.color_hue !== undefined &&
+    body.color_hue !== null &&
+    (!Number.isInteger(body.color_hue) || body.color_hue < 0 || body.color_hue > 360)
+  ) {
+    return NextResponse.json(
+      { error: "color_hue must be null or an integer between 0 and 360." },
+      { status: 400 }
+    );
+  }
   const id = createChannel({
     platform,
     account_name,
@@ -30,6 +40,7 @@ export async function POST(req: NextRequest) {
     linked_page_id: body.linked_page_id,
     access_token: body.access_token,
     requires_approval: !!body.requires_approval,
+    color_hue: body.color_hue ?? null,
   });
   return NextResponse.json({ id }, { status: 201 });
 }

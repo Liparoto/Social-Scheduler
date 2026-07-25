@@ -45,6 +45,7 @@ export interface CreateChannelInput {
   linked_page_id?: string;
   access_token?: string;
   requires_approval?: boolean;
+  color_hue?: number | null;
 }
 
 export function createChannel(input: CreateChannelInput): number {
@@ -52,9 +53,9 @@ export function createChannel(input: CreateChannelInput): number {
     .prepare(
       `INSERT INTO channels
         (platform, account_name, business_label, timezone, remote_account_id,
-         linked_page_id, access_token, requires_approval)
+         linked_page_id, access_token, requires_approval, color_hue)
        VALUES (@platform, @account_name, @business_label, @timezone, @remote_account_id,
-         @linked_page_id, @access_token, @requires_approval)`
+         @linked_page_id, @access_token, @requires_approval, @color_hue)`
     )
     .run({
       platform: input.platform,
@@ -65,6 +66,7 @@ export function createChannel(input: CreateChannelInput): number {
       linked_page_id: input.linked_page_id || null,
       access_token: input.access_token || null,
       requires_approval: input.requires_approval ? 1 : 0,
+      color_hue: input.color_hue ?? null,
     });
   return Number(info.lastInsertRowid);
 }
@@ -85,6 +87,7 @@ export function updateChannel(
     min_queue_depth: number;
     target_queue_depth: number;
     reuse_min_age_days: number;
+    color_hue: number | null;
   }>
 ): void {
   const keys = Object.keys(fields);

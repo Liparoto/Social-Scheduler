@@ -45,6 +45,7 @@ export interface Channel {
   is_active: number;
   created_at: string;
   updated_at: string | null;
+  color_hue: number | null;
 }
 
 export interface Asset {
