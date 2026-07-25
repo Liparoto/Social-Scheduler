@@ -17,11 +17,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import db
-from .clients import SUPPORTED_PLATFORMS
+from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
 from .config import Config
 
 MIN_CAROUSEL = 2
-MAX_CAROUSEL = 10  # Graph API limit (see reference.md), NOT the app's 20.
 SUPPORTED_POST_TYPES = ("single", "carousel")
 
 
@@ -102,6 +101,7 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         raise _NonRetryable(
             f"unsupported platform '{platform}' — this worker has no adapter for it"
         )
+    caps = PLATFORM_CAPS[platform]
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
@@ -109,9 +109,9 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         )
     if post_type == "single" and len(assets) != 1:
         raise _NonRetryable(f"single post needs exactly 1 asset, has {len(assets)}")
-    if post_type == "carousel" and not (MIN_CAROUSEL <= len(assets) <= MAX_CAROUSEL):
+    if post_type == "carousel" and not (MIN_CAROUSEL <= len(assets) <= caps.max_carousel):
         raise _NonRetryable(
-            f"carousel needs {MIN_CAROUSEL}-{MAX_CAROUSEL} assets, has {len(assets)}"
+            f"carousel needs {MIN_CAROUSEL}-{caps.max_carousel} assets, has {len(assets)}"
         )
     if not dry_run:
         missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]

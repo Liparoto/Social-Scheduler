@@ -56,9 +56,9 @@ def _force_platform(conn, channel_id: int, platform: str) -> None:
     conn.commit()
 
 
-def test_all_four_registries_cover_exactly_the_supported_platforms():
+def test_all_registries_cover_exactly_the_supported_platforms():
     """The guard that makes adding a platform mechanical: miss a registry, fail here."""
-    from worker.clients import _BASE_URLS
+    from worker.clients import PLATFORM_CAPS, _BASE_URLS
     from worker.metrics import _FETCHERS
     from worker.preflight import _CHECKS
     from worker.publisher import _PUBLISHERS, _QUOTA_GATED
@@ -68,6 +68,23 @@ def test_all_four_registries_cover_exactly_the_supported_platforms():
     assert set(_CHECKS) == set(SUPPORTED_PLATFORMS), "preflight registry out of sync"
     assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), "metrics registry out of sync"
     assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), "quota-gate declaration out of sync"
+    assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), "capability registry out of sync"
+
+
+def test_platform_caps_are_declared_for_every_supported_platform():
+    from worker.clients import PLATFORM_CAPS
+
+    assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), "capability registry out of sync"
+
+
+def test_neither_meta_platform_claims_text_support():
+    """Instagram and Facebook have no text-only post format — a caps typo here would let
+    the publisher send a captionless-image-less post at them."""
+    from worker.clients import PLATFORM_CAPS
+
+    assert PLATFORM_CAPS["instagram"].supports_text is False
+    assert PLATFORM_CAPS["facebook"].supports_text is False
+    assert PLATFORM_CAPS["instagram"].max_carousel == 10
 
 
 def test_an_unsupported_platform_fails_terminally_and_visibly(

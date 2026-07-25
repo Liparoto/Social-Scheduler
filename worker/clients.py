@@ -12,6 +12,7 @@ connection pooling and avoids rebuilding one per publication.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 from .config import Config
@@ -39,6 +40,32 @@ _BASE_URLS: dict[str, Callable[[Config], str]] = {
 
 assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), (
     "clients._BASE_URLS and clients.SUPPORTED_PLATFORMS disagree"
+)
+
+
+@dataclass(frozen=True)
+class PlatformCaps:
+    """What a platform can actually publish.
+
+    Declared as data so validation is a lookup rather than a scatter of `if platform ==`
+    checks, and so a new platform cannot be added without stating what it supports.
+    """
+
+    supports_text: bool          # can publish a post with a caption and no media
+    max_carousel: int            # maximum children in a multi-image post
+    max_caption_chars: int | None  # None = no limit this worker enforces
+
+
+PLATFORM_CAPS: dict[str, PlatformCaps] = {
+    # Instagram: feed carousels cap at 10 (see reference.md). No text-only format.
+    "instagram": PlatformCaps(supports_text=False, max_carousel=10, max_caption_chars=None),
+    # Facebook Pages: attached_media multi-photo posts cap at 10. No text-only format
+    # here either — a Page status update is a different product surface we don't publish.
+    "facebook": PlatformCaps(supports_text=False, max_carousel=10, max_caption_chars=None),
+}
+
+assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), (
+    "clients.PLATFORM_CAPS and clients.SUPPORTED_PLATFORMS disagree"
 )
 
 
