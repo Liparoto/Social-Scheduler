@@ -29,7 +29,12 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} h-full`}
     >
-      <body className="min-h-full">
+      {/* Browser extensions (Grammarly and friends) inject attributes and classes onto
+          <body> before React hydrates, which React then reports as a hydration mismatch.
+          It's the extension, not our markup — suppress it here the same way <html> already
+          does. This only covers attributes on this element; a genuine content mismatch
+          deeper in the tree is still reported. */}
+      <body className="min-h-full" suppressHydrationWarning>
         <script
           dangerouslySetInnerHTML={{
             __html:
