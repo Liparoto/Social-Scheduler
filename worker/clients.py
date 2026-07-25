@@ -92,6 +92,11 @@ class PlatformCaps:
     # False when the credential alone identifies the destination, so there is no separate
     # account id to store or ask for (Discord's webhook URL is both address and secret).
     uses_account_id: bool = True
+    # True when this platform constrains aspect ratio, so it should be sent the
+    # Instagram-conformed derivative (assets.publish_path) rather than the untouched
+    # original. Defaults True so every platform keeps today's behaviour unless it
+    # explicitly opts out below.
+    needs_conformed_media: bool = True
 
     def caption_limit(self, post_type: str) -> int | None:
         return self.caption_chars.get(post_type)
@@ -111,17 +116,20 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
     ),
     # Discord webhook: 2000-char message, up to 10 attachments, uploads bytes itself.
     # The webhook URL is both address and secret, so there is no separate account id.
+    # Discord has no aspect-ratio rules of its own, so it should get the untouched
+    # original rather than the Instagram-shaped derivative.
     "discord": PlatformCaps(
         supports_text=True, max_carousel=10,
         caption_chars={"text": 2000, "single": 2000, "carousel": 2000},
-        uploads_media_bytes=True, uses_account_id=False,
+        uploads_media_bytes=True, uses_account_id=False, needs_conformed_media=False,
     ),
     # Telegram bot: 4096 for a text message but only 1024 once media is attached;
     # sendMediaGroup takes 2-10 items. Uploads bytes itself.
+    # Telegram, like Discord, has no aspect-ratio rules — send the untouched original.
     "telegram": PlatformCaps(
         supports_text=True, max_carousel=10,
         caption_chars={"text": 4096, "single": 1024, "carousel": 1024},
-        uploads_media_bytes=True, uses_account_id=True,
+        uploads_media_bytes=True, uses_account_id=True, needs_conformed_media=False,
     ),
 }
 

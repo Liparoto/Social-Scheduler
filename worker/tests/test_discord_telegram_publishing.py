@@ -36,6 +36,33 @@ def _write_local_files(config, conn, post_id):
         path.write_bytes(f"bytes-{i}".encode())
 
 
+def _write_original_and_conformed_files(config, conn, post_id):
+    """Give each asset a publish_path distinct from storage_path, with different bytes at
+    each, so a test can prove which file a platform actually received rather than merely
+    which path was chosen."""
+    rows = conn.execute(
+        """SELECT a.id, a.storage_path FROM assets a
+           JOIN post_assets pa ON pa.asset_id = a.id
+           WHERE pa.post_id = ?
+           ORDER BY pa.sort_order""",
+        (post_id,),
+    ).fetchall()
+    for i, row in enumerate(rows):
+        original = config.asset_storage_dir / row["storage_path"]
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_bytes(f"original-{i}".encode())
+
+        conformed_rel = f"conformed/{post_id}-{i}.jpg"
+        conformed = config.asset_storage_dir / conformed_rel
+        conformed.parent.mkdir(parents=True, exist_ok=True)
+        conformed.write_bytes(f"conformed-{i}".encode())
+
+        conn.execute(
+            "UPDATE assets SET publish_path = ? WHERE id = ?", (conformed_rel, row["id"])
+        )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------------------
 # Discord
 # ---------------------------------------------------------------------------------------
@@ -71,6 +98,21 @@ def test_discord_single_image_uploads_bytes_from_the_asset_store(
     assert content == "hello world"
     assert len(files) == 1
     assert files[0][1] == b"bytes-0"
+
+
+def test_discord_single_image_uploads_the_original_not_the_conformed_derivative(
+    conn, config, fake_discord_client, make_publication
+):
+    """Discord has no aspect-ratio rules, so it must receive assets.storage_path (the
+    untouched original) rather than the Instagram-conformed publish_path."""
+    pub = make_publication(platform="discord", post_type="single", n_assets=1, public_url=None)
+    _write_original_and_conformed_files(config, conn, pub["post_id"])
+
+    out = publish_one(conn, pub, config, fake_discord_client, dry_run=False)
+
+    assert out.result == "posted"
+    _, _, files = fake_discord_client.calls[0]
+    assert files[0][1] == b"original-0"
 
 
 def test_discord_album_of_three_sends_one_call_in_asset_order(
@@ -307,6 +349,21 @@ def test_telegram_single_image_uploads_bytes_from_the_asset_store(
     assert photo[1] == b"bytes-0"
 
 
+def test_telegram_single_image_uploads_the_original_not_the_conformed_derivative(
+    conn, config, fake_telegram_client, make_publication
+):
+    """Telegram has no aspect-ratio rules, so it must receive assets.storage_path (the
+    untouched original) rather than the Instagram-conformed publish_path."""
+    pub = make_publication(platform="telegram", post_type="single", n_assets=1, public_url=None)
+    _write_original_and_conformed_files(config, conn, pub["post_id"])
+
+    out = publish_one(conn, pub, config, fake_telegram_client, dry_run=False)
+
+    assert out.result == "posted"
+    _, _, photo = fake_telegram_client.calls[0]
+    assert photo[1] == b"original-0"
+
+
 def test_telegram_album_of_three_sends_one_call_in_asset_order(
     conn, config, fake_telegram_client, make_publication
 ):
@@ -468,3 +525,20 @@ def test_telegram_dry_run_makes_zero_calls(conn, config, fake_telegram_client, m
 
     assert out.result == "dry_run"
     assert fake_telegram_client.calls == []
+
+
+def test_instagram_still_resolves_the_conformed_derivative_not_the_original(
+    conn, config, fake_client, make_publication
+):
+    """Regression guard for the working Meta platforms: Instagram constrains aspect ratio,
+    so the local path the publisher builds (used for validation/dry-run bookkeeping) must
+    keep pointing at the Instagram-conformed publish_path, never the untouched original."""
+    pub = make_publication(platform="instagram", post_type="single", n_assets=1)
+    _write_original_and_conformed_files(config, conn, pub["post_id"])
+
+    out = publish_one(conn, pub, config, fake_client, dry_run=True)
+
+    assert out.result == "dry_run"
+    path = out.plan["asset_paths"][0]
+    assert path is not None
+    assert path.read_bytes() == b"conformed-0"
