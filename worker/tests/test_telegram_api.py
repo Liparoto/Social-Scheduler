@@ -122,3 +122,29 @@ def test_bot_token_never_appears_in_raised_message_for_media_group():
         c.send_media_group(TOKEN, "chat-1", [("a.jpg", b"1")])
     assert TOKEN not in str(excinfo.value)
     assert "super-secret-token" not in str(excinfo.value)
+
+
+class RaisingSession:
+    """A session whose post raises a network-layer error carrying the real bot token,
+    exactly like a genuine requests.ConnectionError would (its message embeds the request
+    URL, and the token lives in that URL's path)."""
+
+    def post(self, url, data=None, files=None, timeout=None):
+        import requests
+
+        raise requests.ConnectionError(
+            f"HTTPSConnectionPool(host='api.telegram.org', port=443): Max retries "
+            f"exceeded with url: {url} (Caused by NewConnectionError('...'))"
+        )
+
+
+def test_send_message_network_failure_raises_without_leaking_token():
+    c = TelegramClient(session=RaisingSession())
+    with pytest.raises(TelegramAPIError) as excinfo:
+        c.send_message(TOKEN, "chat-1", "hi")
+    message = str(excinfo.value)
+    assert TOKEN not in message
+    assert "super-secret-token" not in message
+    # still says something useful: it was a connection failure to Telegram's API
+    assert "api.telegram.org" in message
+    assert "ConnectionError" in message or "connection" in message.lower()

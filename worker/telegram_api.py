@@ -12,22 +12,15 @@ and the body must be checked (see reference.md for the verified specifics).
 from __future__ import annotations
 
 import json
-import re
 
 import requests
 
+from .redact import redact
+
 
 class TelegramAPIError(Exception):
-    """Raised when Telegram reports a failure. Never includes the bot token."""
-
-
-_TOKEN_PATTERN = re.compile(r"/bot[^/]+/")
-
-
-def _redact(url: str) -> str:
-    """Replace the token segment of a Telegram API URL with a placeholder so it is safe
-    to include in an exception message."""
-    return _TOKEN_PATTERN.sub("/bot<redacted>/", url)
+    """Raised when Telegram reports a failure, or the underlying request fails at the
+    network layer. Never includes the bot token."""
 
 
 class TelegramClient:
@@ -46,12 +39,21 @@ class TelegramClient:
 
     def _call(self, token: str, method: str, data: dict, files: dict | None = None) -> dict:
         url = self._url(token, method)
-        resp = self.session.post(url, data=data, files=files, timeout=self.timeout)
+        try:
+            resp = self.session.post(url, data=data, files=files, timeout=self.timeout)
+        except requests.RequestException as exc:
+            # The token lives in the URL path, and exc's own str() embeds that URL (e.g.
+            # a ConnectionError repeats the request URL) — redact before it's raised.
+            raise TelegramAPIError(
+                f"POST {redact(url)} -> request failed: {redact(str(exc))}"
+            ) from exc
         body = resp.json()
         if not resp.ok or not body.get("ok"):
-            description = body.get("description", resp.text)
+            # A response body can, in principle, echo the token back — redact it too,
+            # cheap insurance on top of always redacting the URL itself.
+            description = redact(body.get("description", resp.text))
             raise TelegramAPIError(
-                f"POST {_redact(url)} -> {resp.status_code}: {description}"
+                f"POST {redact(url)} -> {resp.status_code}: {description}"
             )
         return body.get("result")
 

@@ -128,3 +128,41 @@ def test_send_message_requires_content_or_files():
     c = client()
     with pytest.raises(ValueError):
         c.send_message(WEBHOOK_URL)
+
+
+class RaisingSession:
+    """A session whose post/get raise a network-layer error carrying the real webhook
+    URL, exactly like a genuine requests.ConnectionError would (its message embeds the
+    URL the connection attempt was made to — and here the URL IS the credential)."""
+
+    def post(self, url, data=None, files=None, json=None, timeout=None):
+        import requests
+
+        raise requests.ConnectionError(
+            f"HTTPSConnectionPool(host='discord.com', port=443): Max retries exceeded "
+            f"with url: {url.replace('https://discord.com', '')} "
+            f"(Caused by NewConnectionError('...'))"
+        )
+
+    def get(self, url, timeout=None):
+        import requests
+
+        raise requests.ConnectionError(f"Failed to establish a new connection to {url}")
+
+
+def test_send_message_network_failure_raises_without_leaking_webhook_url():
+    c = DiscordClient(session=RaisingSession())
+    with pytest.raises(DiscordAPIError) as excinfo:
+        c.send_message(WEBHOOK_URL, content="hi")
+    message = str(excinfo.value)
+    assert WEBHOOK_URL not in message
+    assert "super-secret-token" not in message
+
+
+def test_get_webhook_network_failure_raises_without_leaking_webhook_url():
+    c = DiscordClient(session=RaisingSession())
+    with pytest.raises(DiscordAPIError) as excinfo:
+        c.get_webhook(WEBHOOK_URL)
+    message = str(excinfo.value)
+    assert WEBHOOK_URL not in message
+    assert "super-secret-token" not in message

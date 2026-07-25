@@ -20,6 +20,7 @@ from pathlib import Path
 from . import db
 from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
 from .config import Config
+from .redact import redact
 
 MIN_CAROUSEL = 2
 SUPPORTED_POST_TYPES = ("single", "carousel", "text")
@@ -373,6 +374,11 @@ assert set(_QUOTA_READERS) == {p for p, gated in _QUOTA_GATED.items() if gated},
 
 
 def _mark_failure(conn, pub, config, now, error: str, terminal: bool) -> PublishOutcome:
+    # Defence in depth: any exception string reaching this point (including ones from
+    # future code paths that stringify an exception without going through a client's own
+    # redaction) gets scrubbed before it is written to publications.last_error, which the
+    # dashboard renders directly on the Overview page.
+    error = redact(error)
     attempts = pub["attempt_count"] + 1
     if terminal or attempts >= config.max_attempts:
         db.update_publication(

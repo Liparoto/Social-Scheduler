@@ -22,9 +22,12 @@ import json
 
 import requests
 
+from .redact import redact
+
 
 class DiscordAPIError(Exception):
-    """Raised when Discord returns a non-OK response. Never includes the webhook URL."""
+    """Raised when Discord returns a non-OK response, or the underlying request fails
+    at the network layer. Never includes the webhook URL (the credential)."""
 
 
 class DiscordClient:
@@ -53,8 +56,10 @@ class DiscordClient:
     @staticmethod
     def _fail(resp) -> None:
         """Raise DiscordAPIError without ever including the webhook URL (the credential)
-        in the message — only the status code and response text are safe to surface."""
-        raise DiscordAPIError(f"Discord request failed -> {resp.status_code}: {resp.text}")
+        in the message — only the status code and response text are safe to surface, and
+        the text is run through the redactor too, cheap insurance in case Discord ever
+        echoes the URL back in an error body."""
+        raise DiscordAPIError(f"Discord request failed -> {resp.status_code}: {redact(resp.text)}")
 
     def send_message(
         self,
@@ -70,21 +75,29 @@ class DiscordClient:
         if content is not None:
             payload["content"] = content
 
-        if files:
-            data = {"payload_json": json.dumps(payload)}
-            file_parts = {f"files[{i}]": f for i, f in enumerate(files)}
-            resp = self.session.post(
-                webhook_url, data=data, files=file_parts, timeout=self.timeout
-            )
-        else:
-            resp = self.session.post(webhook_url, json=payload, timeout=self.timeout)
+        try:
+            if files:
+                data = {"payload_json": json.dumps(payload)}
+                file_parts = {f"files[{i}]": f for i, f in enumerate(files)}
+                resp = self.session.post(
+                    webhook_url, data=data, files=file_parts, timeout=self.timeout
+                )
+            else:
+                resp = self.session.post(webhook_url, json=payload, timeout=self.timeout)
+        except requests.RequestException as exc:
+            # The webhook URL IS the credential, and it lives inside exc's own str() (e.g.
+            # a ConnectionError embeds the request URL) — never let that reach the message.
+            raise DiscordAPIError(f"Discord request failed: {redact(str(exc))}") from exc
 
         if not resp.ok:
             self._fail(resp)
         return self._parse(resp)
 
     def get_webhook(self, webhook_url: str) -> dict:
-        resp = self.session.get(webhook_url, timeout=self.timeout)
+        try:
+            resp = self.session.get(webhook_url, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise DiscordAPIError(f"Discord request failed: {redact(str(exc))}") from exc
         if not resp.ok:
             self._fail(resp)
         return self._parse(resp)
