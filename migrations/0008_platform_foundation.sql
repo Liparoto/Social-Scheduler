@@ -13,8 +13,18 @@
 -- These tables have no indexes, triggers or views, so there is nothing else to recreate.
 -- Column sets, defaults and all OTHER CHECKs are reproduced verbatim: widening the two
 -- target enums is the only semantic change.
+--
+-- The rebuild DDL below is wrapped in its own explicit BEGIN/COMMIT so the two table
+-- rebuilds are atomic even though executescript() already ended migrate.py's outer
+-- transaction (see migrate.py's comment at the executescript() call site) — a crash or
+-- error partway through (e.g. between the DROP and the RENAME) must roll back instead of
+-- leaving channels/posts dropped and channels_new/posts_new orphaned. The PRAGMAs stay
+-- OUTSIDE this transaction: PRAGMA foreign_keys is a silent no-op while a transaction is
+-- open, so it must run before BEGIN (to actually disable enforcement) and after COMMIT
+-- (to actually restore it).
 
 PRAGMA foreign_keys = OFF;
+BEGIN;
 
 -- ---- channels: platform gains 'threads' -------------------------------------------
 CREATE TABLE channels_new (
@@ -90,4 +100,5 @@ FROM posts;
 DROP TABLE posts;
 ALTER TABLE posts_new RENAME TO posts;
 
+COMMIT;
 PRAGMA foreign_keys = ON;

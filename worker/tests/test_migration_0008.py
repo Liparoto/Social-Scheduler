@@ -18,6 +18,11 @@ MIGRATIONS_DIR = REPO_ROOT / "migrations"
 TARGET = "0008_platform_foundation.sql"
 
 # Every table with a cascading FK onto channels or posts (9 edges, 7 tables).
+# NOTE: post_metrics is NOT listed here. It has no direct FK onto channels/posts — it
+# cascades from publications (post_metrics -> publications -> posts/channels), so a wipe
+# is only caught transitively today, via publications being wiped. If a future migration
+# touches publications directly (not channels/posts), this list won't cover post_metrics
+# and it should be added explicitly.
 CHILD_TABLES = [
     "post_assets",
     "publications",
@@ -221,17 +226,24 @@ def test_the_other_constraints_and_defaults_survive(seeded_db):
     conn.close()
 
 
-def test_column_sets_are_unchanged(seeded_db):
-    """No column added, removed, renamed or reordered."""
+def test_column_definitions_are_unchanged(seeded_db):
+    """No column added, removed, renamed, reordered, retyped, or changed NOT NULL/DEFAULT.
+
+    Compares full PRAGMA table_info() rows (cid, name, type, notnull, dflt_value, pk),
+    not just names, so a lost NOT NULL or DEFAULT would fail this test. Note:
+    PRAGMA table_info doesn't report CHECK constraints, so this doesn't cover those —
+    the CHECK behavior itself is exercised by test_bogus_values_are_still_rejected and
+    test_the_other_constraints_and_defaults_survive.
+    """
     conn = sqlite3.connect(str(seeded_db))
     before = {
-        t: [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
+        t: [tuple(r) for r in conn.execute(f"PRAGMA table_info({t})")]
         for t in ("channels", "posts")
     }
     conn.close()
     conn = _apply_target(seeded_db)
     after = {
-        t: [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
+        t: [tuple(r) for r in conn.execute(f"PRAGMA table_info({t})")]
         for t in ("channels", "posts")
     }
     conn.close()
@@ -244,3 +256,55 @@ def test_no_leftover_scratch_tables(seeded_db):
     assert "channels_new" not in names
     assert "posts_new" not in names
     conn.close()
+
+
+def test_a_failure_partway_through_rolls_back_cleanly(seeded_db):
+    """A crash after the first DROP TABLE must not leave `channels` gone.
+
+    Simulates the reviewer's failure injection: the migration's SQL is doctored so a
+    statement fails AFTER `channels` has already been dropped and rebuilt, but before the
+    script finishes. Applied the same way migrate.py applies it (BEGIN then
+    executescript()), this must raise — and, critically, `channels` must still exist
+    afterwards with its original seeded row intact. Before the fix (no explicit BEGIN/
+    COMMIT inside the .sql file), executescript() autocommits every statement
+    individually, so `channels` stays dropped/renamed away and the row is lost even
+    though the script as a whole "failed".
+    """
+    original_sql = (MIGRATIONS_DIR / TARGET).read_text()
+    assert "ALTER TABLE channels_new RENAME TO channels;" in original_sql
+
+    # Inject a guaranteed failure between `DROP TABLE channels` and the RENAME that
+    # follows it — this is the exact line the reviewer injected a failure at. Without
+    # atomicity, `channels` is gone (dropped) and `channels_new` is left orphaned,
+    # un-renamed, by the time the script raises.
+    doctored_sql = original_sql.replace(
+        "ALTER TABLE channels_new RENAME TO channels;",
+        "INSERT INTO this_table_does_not_exist (x) VALUES (1);\n"
+        "ALTER TABLE channels_new RENAME TO channels;",
+    )
+    assert doctored_sql != original_sql
+
+    conn = sqlite3.connect(str(seeded_db))
+    before_row = conn.execute(
+        "SELECT platform, account_name FROM channels WHERE account_name = 'SEED CH'"
+    ).fetchone()
+    conn.close()
+    assert before_row is not None, "seed fixture broke — nothing to prove survived"
+
+    conn = sqlite3.connect(str(seeded_db))
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("BEGIN;")
+    with pytest.raises(sqlite3.OperationalError):
+        conn.executescript(doctored_sql)
+    conn.rollback()
+
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "channels" in names, "channels was left dropped after a failed migration"
+    assert "channels_new" not in names, "a scratch table was left behind after rollback"
+
+    after_row = conn.execute(
+        "SELECT platform, account_name FROM channels WHERE account_name = 'SEED CH'"
+    ).fetchone()
+    conn.close()
+    assert after_row == before_row, "the seeded channels row did not survive the rollback"
