@@ -8,7 +8,20 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const assetIds: number[] = Array.isArray(body.asset_ids) ? body.asset_ids : [];
-  if (assetIds.length === 0) {
+  const isText: boolean = body.post_type === "text";
+  const caption: string = (body.caption || "").trim();
+
+  if (isText) {
+    if (assetIds.length > 0) {
+      return NextResponse.json(
+        { error: "A text-only post can't have images." },
+        { status: 400 }
+      );
+    }
+    if (!caption) {
+      return NextResponse.json({ error: "Write a caption for the text post." }, { status: 400 });
+    }
+  } else if (assetIds.length === 0) {
     return NextResponse.json({ error: "Add at least one image." }, { status: 400 });
   }
   if (assetIds.length > 10) {
@@ -61,8 +74,9 @@ export async function POST(req: NextRequest) {
   }
 
   const postId = createDraftPost({
-    caption: (body.caption || "").trim(),
+    caption,
     first_comment: (body.first_comment || "").trim(),
+    post_type: isText ? "text" : undefined,
     asset_ids: assetIds,
     created_by: body.created_by,
     content_kind: contentKind,

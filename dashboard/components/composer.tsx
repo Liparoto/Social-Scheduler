@@ -219,15 +219,19 @@ export function Composer({
 
   async function saveDraft() {
     setError(null);
-    if (textOnly) return setError("Text-only posts can't be saved to the library yet.");
-    if (assets.length === 0) return setError("Add at least one image to save a draft.");
+    if (textOnly) {
+      if (!caption.trim()) return setError("Write a caption for the text post.");
+    } else if (assets.length === 0) {
+      return setError("Add at least one image to save a draft.");
+    }
     const res = await fetch("/api/posts/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         caption,
         first_comment: firstComment,
-        asset_ids: assets.map((a) => a.id),
+        post_type: textOnly ? "text" : undefined,
+        asset_ids: textOnly ? [] : assets.map((a) => a.id),
         content_kind: contentKind,
         content_status: libraryStatus,
         target_channel_ids: Array.from(selected),
@@ -542,20 +546,28 @@ export function Composer({
             Preview
           </h3>
           <div className="overflow-hidden rounded-lg border border-border">
-            <div className="aspect-square bg-surface-sunken">
-              {assets[0] ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={`/api/media/${assets[0].id}`}
-                  alt=""
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center text-xs text-faint">
-                  First image appears here
-                </div>
-              )}
-            </div>
+            {textOnly ? (
+              <div className="flex items-center gap-2 border-b border-border bg-surface-sunken px-3 py-2">
+                <span className="data text-xs font-medium uppercase tracking-wide text-muted">
+                  Text post
+                </span>
+              </div>
+            ) : (
+              <div className="aspect-square bg-surface-sunken">
+                {assets[0] ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`/api/media/${assets[0].id}`}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-xs text-faint">
+                    First image appears here
+                  </div>
+                )}
+              </div>
+            )}
             <div className="p-3">
               <p className="whitespace-pre-wrap text-sm text-ink">
                 {caption || <span className="text-faint">Your caption…</span>}
@@ -637,7 +649,7 @@ export function Composer({
         </div>
         <button
           onClick={saveDraft}
-          disabled={submitting || textOnly}
+          disabled={submitting}
           className="w-full rounded-lg border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
         >
           Save to library

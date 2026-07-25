@@ -295,6 +295,7 @@ export function createPostWithPublications(
 export interface CreateDraftInput extends ContentModelInput {
   caption: string;
   first_comment: string;
+  post_type?: PostType;
   asset_ids: number[];
   created_by?: string;
 }
@@ -305,7 +306,8 @@ export interface CreateDraftInput extends ContentModelInput {
  */
 export function createDraftPost(input: CreateDraftInput): number {
   const db = getDb();
-  const postType = input.asset_ids.length > 1 ? "carousel" : "single";
+  const postType: PostType =
+    input.post_type ?? (input.asset_ids.length > 1 ? "carousel" : "single");
   const tx = db.transaction((data: CreateDraftInput) => {
     const info = db
       .prepare(
