@@ -515,6 +515,7 @@ export interface PublicationRow extends Publication {
   m_likes: number | null;
   m_comments: number | null;
   m_shares: number | null;
+  m_impressions: number | null;
   m_fetched_at: string | null;
 }
 
@@ -531,12 +532,13 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT pa.asset_id FROM post_assets pa
             WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,
-         lm.reach      AS m_reach,
-         lm.saves      AS m_saves,
-         lm.likes      AS m_likes,
-         lm.comments   AS m_comments,
-         lm.shares     AS m_shares,
-         lm.fetched_at AS m_fetched_at
+         lm.reach       AS m_reach,
+         lm.saves       AS m_saves,
+         lm.likes       AS m_likes,
+         lm.comments    AS m_comments,
+         lm.shares      AS m_shares,
+         lm.impressions AS m_impressions,
+         lm.fetched_at  AS m_fetched_at
        FROM publications pub
        JOIN posts p    ON p.id = pub.post_id
        JOIN channels c ON c.id = pub.channel_id
