@@ -107,9 +107,12 @@ def test_get_threads_container_status_reads_status_field():
     assert out == "FINISHED"
 
 
-def test_get_threads_container_status_defaults_to_empty_string_when_missing():
+def test_get_threads_container_status_raises_when_status_field_missing():
+    """A malformed response (no `status` field) must fail fast, not be treated as a
+    permanently-pending status that burns every poll retry."""
     c = client([FakeResponse({})])
-    assert c.get_threads_container_status("container-1", "tok") == ""
+    with pytest.raises(GraphAPIError):
+        c.get_threads_container_status("container-1", "tok")
 
 
 def test_publish_threads_container_posts_creation_id_and_returns_id():

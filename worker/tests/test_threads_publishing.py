@@ -181,6 +181,41 @@ def test_threads_unhandled_post_type_fails_terminally_naming_the_type(
     assert "threads_publish" not in _call_kinds(client)
 
 
+def test_threads_status_field_missing_fails_fast_without_exhausting_retries(
+    conn, config, make_publication
+):
+    """A container-status response missing the `status` field must raise immediately
+    (via GraphClient.get_threads_container_status) rather than being polled to
+    exhaustion (status_poll_max_tries attempts x status_poll_interval each) while the
+    rest of the batch waits. Confirmed by counting status calls: exactly one, not
+    config.status_poll_max_tries (5, per the `config` fixture).
+    """
+    from worker.graph_api import GraphAPIError
+
+    client = FakeGraphClient(threads_limit=(0, 250, 86400))
+    status_calls = []
+
+    def missing_status(container_id, token):
+        status_calls.append(container_id)
+        raise GraphAPIError(f"GET {container_id} -> response missing 'status' field")
+
+    client.get_threads_container_status = missing_status
+    pub = make_publication(platform="threads", post_type="single", n_assets=1)
+
+    out = publish_one(conn, pub, config, client, dry_run=False)
+
+    # A malformed status response is a transient/retryable publish error (like any other
+    # Graph API failure), so this single attempt ends in retry_scheduled, not terminal
+    # failure. The point being verified here is narrower: it must NOT have polled
+    # config.status_poll_max_tries (5) times waiting for a status that will never come.
+    assert out.result == "retry_scheduled"
+    assert len(status_calls) == 1  # fails on first poll, never exhausts max_tries
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "scheduled"
+    assert row["next_retry_at"] is not None
+    assert "threads_publish" not in _call_kinds(client)
+
+
 def test_threads_preflight_uses_threads_quota_not_instagrams(conn):
     from worker.preflight import check_channels
 

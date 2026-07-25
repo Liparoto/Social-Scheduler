@@ -277,11 +277,19 @@ class GraphClient:
 
     def get_threads_container_status(self, container_id: str, token: str) -> str:
         """Poll until this returns FINISHED before publishing. Note the field name is
-        `status`, unlike Instagram's `status_code` — defaults to "" rather than raising
-        if the field is absent."""
-        return self._get(
-            container_id, {"fields": "status", "access_token": token}
-        ).get("status", "")
+        `status`, unlike Instagram's `status_code`.
+
+        Raises if the field is absent, matching Instagram's get_container_status — a
+        malformed response must fail fast rather than silently returning "" and burning
+        every retry (status_poll_max_tries x status_poll_interval, synchronously, inside
+        the batch loop) waiting for a value that will never arrive.
+        """
+        data = self._get(container_id, {"fields": "status", "access_token": token})
+        if "status" not in data:
+            raise GraphAPIError(
+                f"GET {container_id} -> response missing 'status' field"
+            )
+        return data["status"]
 
     def publish_threads_container(
         self, threads_user_id: str, creation_id: str, token: str

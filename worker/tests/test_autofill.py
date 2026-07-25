@@ -22,14 +22,14 @@ def picks(conn, channel_id, limit):
 
 # ---- seed helpers ---------------------------------------------------------------
 def make_channel(conn, *, autofill=1, min_depth=3, target=5, cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
-                 tz="America/New_York", approval=0):
+                 tz="America/New_York", approval=0, platform="instagram"):
     return conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, requires_approval,
               remote_account_id, access_token)
-           VALUES ('instagram','Chan',?,?,?,?,?,180,?, 'ig1','tok')""",
-        (tz, autofill, cadence, min_depth, target, approval),
+           VALUES (?,'Chan',?,?,?,?,?,180,?, 'acct1','tok')""",
+        (platform, tz, autofill, cadence, min_depth, target, approval),
     ).lastrowid
 
 
@@ -45,6 +45,20 @@ def make_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
         (f"h{pid}", "image", f"{pid}.jpg", "https://a.test/x.jpg"),
     ).lastrowid
     conn.execute("INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?,?,0)", (pid, aid))
+    if channel_id is not None:
+        conn.execute("INSERT INTO post_targets (post_id, channel_id) VALUES (?,?)", (pid, channel_id))
+    conn.commit()
+    return pid
+
+
+def make_text_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
+                    content_kind="evergreen"):
+    """A text post: caption only, deliberately NO row in post_assets."""
+    pid = conn.execute(
+        "INSERT INTO posts (caption, post_type, status, content_status, content_kind, created_at) "
+        "VALUES ('hello world','text','draft','ready',?,?)",
+        (content_kind, created_at),
+    ).lastrowid
     if channel_id is not None:
         conn.execute("INSERT INTO post_targets (post_id, channel_id) VALUES (?,?)", (pid, channel_id))
     conn.commit()
@@ -240,6 +254,23 @@ def test_green_period_gates_by_season(conn):
     conn.commit()
     # NOW is July -> out of the Winter window -> excluded.
     assert winter not in picks(conn, ch, 10)
+
+
+def test_text_post_selected_for_threads_channel(conn):
+    """Threads declares supports_text=True in PLATFORM_CAPS, so a Ready text post
+    (no assets at all) must be selectable for a Threads channel."""
+    ch = make_channel(conn, platform="threads")
+    p = make_text_post(conn, ch)
+    assert p in picks(conn, ch, 10)
+
+
+def test_text_post_not_selected_for_instagram_channel(conn):
+    """Instagram declares supports_text=False, so the same Ready text post targeted at
+    an Instagram channel must never be auto-scheduled there — widening only the
+    post_type gate without the platform-capability gate would let this happen."""
+    ch = make_channel(conn, platform="instagram")
+    p = make_text_post(conn, ch)
+    assert p not in picks(conn, ch, 10)
 
 
 def test_blackout_overrides_eligibility(conn):
