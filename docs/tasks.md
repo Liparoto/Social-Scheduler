@@ -431,6 +431,19 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       `reach + saves`, both of which Facebook rarely/never provides, so it scores every FB
       post as 0 and recycling falls back to age/staleness order for FB until the planned
       best-performing-post work (see Phase 6+ backlog below) revisits the ranking formula.
+- [x] **Threads real-post verification — DONE 2026-07-25.** First real post published
+      end-to-end: media id `17976347178119414`,
+      https://www.threads.com/@liparoto/post/DbOMTJ1kULz (IMAGE, @liparoto). Read back from
+      the live API to confirm, not just trusted from our own DB. Proved on first contact:
+      correct host+version (`graph.threads.net/v1.0`), the cloudflared tunnel serving a local
+      image to Meta and tearing itself down, container→publish polling `status`, the runtime
+      250/24h quota gate, and same-cycle metrics (views/likes/replies/reposts = 0 on a
+      seconds-old post; `reach`/`saves` correctly null). `DRY_RUN` was flipped to 0 for exactly
+      one `--once` cycle and restored to 1 immediately.
+      - Gotcha that cost real time, now documented in `docs/meta-setup.md`: **the Threads user
+        id is NOT the Instagram user id** (here `2786950…` vs `1784140…`). Using the IG id
+        fails with `THApiException` code 100 *"Object with ID … does not exist"*, which reads
+        like a bad token but isn't. `preflight` caught it before any publish attempt.
 - [x] **Threads adapter (publish + metrics)** — third platform, registered in every platform
       registry (`clients._BASE_URLS`/`PLATFORM_CAPS`, `publisher._PUBLISHERS`/`_QUOTA_GATED`/
       `_QUOTA_READERS`, `preflight._CHECKS`, `metrics._FETCHERS`), each guarded by an assert
