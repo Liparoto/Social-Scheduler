@@ -116,9 +116,34 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
             try:
                 pub_client = pick_client(channel["platform"]) if channel else client
             except UnknownPlatform:
-                # No adapter for this platform. Hand it to publish_one anyway: it validates
-                # the platform and marks this ONE publication terminally failed, so the rest
-                # of the batch still goes out.
+                platform = channel["platform"] if channel else None
+                from .publisher import _PUBLISHERS  # local import: keep module load light
+
+                if platform in _PUBLISHERS:
+                    # clients._BASE_URLS and publisher._PUBLISHERS disagree about this
+                    # platform — that's a programming error (someone added the platform to
+                    # one registry but not the other), NOT an unsupported channel. Falling
+                    # back to `client` here would silently publish through whatever
+                    # platform `client` happens to be built for (see main()), so fail this
+                    # one publication loudly instead of guessing.
+                    error = (
+                        f"platform '{platform}' has a publisher but no base URL "
+                        f"(clients._BASE_URLS and publisher._PUBLISHERS disagree) — "
+                        f"fix the registries, this is a bug, not a missing adapter"
+                    )
+                    if logger:
+                        logger.error("[pub %s] %s", pub["id"], error)
+                    db.update_publication(
+                        conn, pub["id"],
+                        status="failed", attempt_count=pub["attempt_count"] + 1,
+                        last_error=error, next_retry_at=None,
+                        updated_at=now.isoformat(),
+                    )
+                    processed += 1
+                    continue
+                # No adapter for this platform at all. Hand it to publish_one anyway: it
+                # validates the platform and marks this ONE publication terminally
+                # failed, so the rest of the batch still goes out.
                 pub_client = client
             publish_one(conn, pub, config, pub_client, dry_run=dry_run,
                         asset_base_url=asset_base_url, now=now,

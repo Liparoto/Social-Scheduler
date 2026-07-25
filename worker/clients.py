@@ -20,13 +20,26 @@ from .graph_api import GraphClient
 FACEBOOK_BASE = "https://graph.facebook.com"
 
 # Every platform this worker has an adapter for. Adding one here without also adding it to
-# publisher._PUBLISHERS, preflight._CHECKS and metrics._FETCHERS fails
-# test_platform_dispatch.py — which is the point.
+# clients._BASE_URLS, publisher._PUBLISHERS, publisher._QUOTA_GATED, preflight._CHECKS and
+# metrics._FETCHERS fails test_platform_dispatch.py — which is the point.
 SUPPORTED_PLATFORMS = ("instagram", "facebook")
 
 
 class UnknownPlatform(Exception):
     """A channel names a platform this worker has no adapter for."""
+
+
+# Base-URL resolver per platform. A registry, not an if-chain, so this list can't silently
+# drift from SUPPORTED_PLATFORMS/_PUBLISHERS/_CHECKS/_FETCHERS the way a hand-written
+# `if platform == ... elif ... else raise` could.
+_BASE_URLS: dict[str, Callable[[Config], str]] = {
+    "facebook": lambda _config: FACEBOOK_BASE,
+    "instagram": lambda config: config.graph_base,
+}
+
+assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), (
+    "clients._BASE_URLS and clients.SUPPORTED_PLATFORMS disagree"
+)
 
 
 def base_url_for(platform: str, config: Config) -> str:
@@ -35,11 +48,10 @@ def base_url_for(platform: str, config: Config) -> str:
     Raises UnknownPlatform rather than guessing. Falling back to the install's configured
     base is how an unrecognised platform ends up quietly talking to Instagram's API.
     """
-    if platform == "facebook":
-        return FACEBOOK_BASE
-    if platform == "instagram":
-        return config.graph_base
-    raise UnknownPlatform(platform)
+    resolver = _BASE_URLS.get(platform)
+    if resolver is None:
+        raise UnknownPlatform(platform)
+    return resolver(config)
 
 
 class ClientRegistry:

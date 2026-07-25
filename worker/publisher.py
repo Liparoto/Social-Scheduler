@@ -235,12 +235,25 @@ _PUBLISHERS = {
     "facebook": _publish_facebook,
 }
 
-# Platforms exposing a runtime publish quota to read before posting. Facebook Pages have
-# no content_publishing_limit endpoint; never substitute a hardcoded number.
-_QUOTA_GATED = ("instagram",)
+# Whether each platform exposes a runtime publish quota to read before posting. An
+# explicit declaration for every supported platform, not a whitelist that defaults new
+# platforms to "no gate" by omission — that silently violates the project rule of never
+# hardcoding (or skipping) the publish rate limit. False means "this platform genuinely
+# has no quota endpoint", never "we didn't get round to it":
+#   * instagram — has content_publishing_limit; must be gated.
+#   * facebook  — Facebook Pages have no content_publishing_limit endpoint, so there is
+#                 nothing to read; inventing a hardcoded number would be worse than not
+#                 gating.
+_QUOTA_GATED = {
+    "instagram": True,
+    "facebook": False,
+}
 
 assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
     "publisher._PUBLISHERS and clients.SUPPORTED_PLATFORMS disagree"
+)
+assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), (
+    "publisher._QUOTA_GATED and clients.SUPPORTED_PLATFORMS disagree"
 )
 
 
@@ -312,7 +325,7 @@ def publish_one(
     # 3. Rate-limit gate: read Meta's REAL quota, cache it, refuse if exhausted.
     #    Instagram only — Facebook Pages expose no content_publishing_limit endpoint,
     #    and inventing a hardcoded number here would be worse than not gating.
-    if plan["platform"] in _QUOTA_GATED:
+    if _QUOTA_GATED.get(plan["platform"]):
         try:
             usage, total, duration = client.get_content_publishing_limit(ig, token)
             db.record_publish_limit(conn, channel["id"], usage, total, duration, _iso(now))

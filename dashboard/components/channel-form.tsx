@@ -14,7 +14,11 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
-    platform: "instagram",
+    // `as string`: PLATFORMS[0].value is a non-fresh literal ("instagram"), which TS
+    // would NOT widen during useState's generic inference (unlike a literal written
+    // inline here) — leaving form.platform typed as that one literal and breaking the
+    // plain-string onChange handler below.
+    platform: PLATFORMS[0].value as string,
     account_name: "",
     business_label: "",
     timezone: defaultTimezone,

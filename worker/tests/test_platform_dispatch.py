@@ -56,15 +56,18 @@ def _force_platform(conn, channel_id: int, platform: str) -> None:
     conn.commit()
 
 
-def test_all_three_registries_cover_exactly_the_supported_platforms():
+def test_all_four_registries_cover_exactly_the_supported_platforms():
     """The guard that makes adding a platform mechanical: miss a registry, fail here."""
+    from worker.clients import _BASE_URLS
     from worker.metrics import _FETCHERS
     from worker.preflight import _CHECKS
-    from worker.publisher import _PUBLISHERS
+    from worker.publisher import _PUBLISHERS, _QUOTA_GATED
 
+    assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), "clients base-url registry out of sync"
     assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), "publisher registry out of sync"
     assert set(_CHECKS) == set(SUPPORTED_PLATFORMS), "preflight registry out of sync"
     assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), "metrics registry out of sync"
+    assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), "quota-gate declaration out of sync"
 
 
 def test_an_unsupported_platform_fails_terminally_and_visibly(
@@ -166,5 +169,63 @@ def test_an_unknown_platform_does_not_abort_the_rest_of_the_batch(
 
     assert bad_row["status"] == "failed"
     assert "mastodon" in bad_row["last_error"]
+    assert good_row["status"] == "posted"   # the batch carried on
+    assert n == 2                           # both were processed, not abandoned
+
+
+def test_a_platform_with_a_publisher_but_no_base_url_fails_loudly_not_via_fallback(
+    conn, config, fake_client, make_publication, monkeypatch
+):
+    """Guards the specific bug the final review found: run the documented recipe for adding
+    a platform (add it to SUPPORTED_PLATFORMS + the three dispatch registries) but forget
+    clients._BASE_URLS, and the OLD code fell through to whatever client main() happened to
+    build for Instagram — silently publishing through the wrong platform's API host while
+    reporting 'posted'. That is a registry-disagreement bug, not an unsupported channel, and
+    must fail the affected publication loudly instead of guessing.
+
+    Simulated here by deleting 'facebook' from clients._BASE_URLS while leaving it in
+    publisher._PUBLISHERS (facebook is a genuinely supported platform, so this reproduces
+    the disagreement without touching real platform support).
+    """
+    from datetime import datetime, timezone
+
+    import worker.clients as clients_mod
+    from worker.clients import ClientRegistry
+    from worker.publisher import _PUBLISHERS
+    from worker.run import run_once
+
+    assert "facebook" in _PUBLISHERS  # sanity: facebook DOES have a publisher
+
+    now = datetime(2026, 7, 22, 18, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setenv("KILL_SWITCH", "0")
+    monkeypatch.setenv("DRY_RUN", "0")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+    # Reproduce the disagreement: facebook keeps its publisher but loses its base URL.
+    monkeypatch.setattr(
+        clients_mod, "_BASE_URLS", {"instagram": lambda config: config.graph_base}
+    )
+
+    bad = make_publication(post_type="single", n_assets=1, now=now, platform="facebook")
+    good = make_publication(post_type="single", n_assets=1, now=now, platform="instagram")
+
+    registry = ClientRegistry(config, factory=lambda version, base_url: fake_client)
+
+    n = run_once(conn, config, fake_client, client_for=registry.for_platform, now=now)
+
+    bad_row = conn.execute(
+        "SELECT status, next_retry_at, last_error FROM publications WHERE id = ?",
+        (bad["id"],),
+    ).fetchone()
+    good_row = conn.execute(
+        "SELECT status FROM publications WHERE id = ?", (good["id"],)
+    ).fetchone()
+
+    assert bad_row["status"] == "failed"
+    assert bad_row["next_retry_at"] is None
+    assert "disagree" in bad_row["last_error"]
+    assert "facebook" in bad_row["last_error"]
+    # Must NOT have been silently published through the fallback (Instagram) client.
+    facebook_call_kinds = {"page_photo", "page_child", "page_feed"}
+    assert not any(kind in facebook_call_kinds for kind, _ in fake_client.calls)
     assert good_row["status"] == "posted"   # the batch carried on
     assert n == 2                           # both were processed, not abandoned
