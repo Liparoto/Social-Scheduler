@@ -202,3 +202,74 @@ photos — they're harmless (nothing is posted to the feed until all uploads suc
 they aren't cleaned up automatically, and a retry uploads fresh copies rather than reusing
 them. You can safely delete the leftover unpublished photos from Meta Business Suite's media
 library if you want to tidy up.
+
+---
+
+## Adding a Threads account
+
+**Important: Threads Login is its own separate thing.** Even though Threads is a Meta
+product, it does **not** reuse your Instagram or Facebook setup. It's a different login
+flow, with its own product to add in the App Dashboard and its own permissions
+(`threads_basic`, `threads_content_publish`). And the id you'll get for your account — the
+**Threads user id** — is a different number from your **Instagram user id**, even if it's
+the same account "underneath." Don't reuse the IG id anywhere in this section.
+
+1. **Add the Threads product to your app.** developers.facebook.com/apps → your app →
+   **Dashboard** → find **Threads** in the product list → **Set up**. (If your app was
+   created for the Instagram or Facebook use case, this is an *additional* product — it
+   doesn't remove or change what's already working.)
+2. **Authorize your account and get a token.** Open the Threads product's **Login** /
+   **Generate access tokens** panel. Click **Add account** (or **Generate token** for your
+   own account, depending on how Meta is currently labeling this panel), log in with the
+   Threads account you want to connect, and approve the permissions
+   (`threads_basic`, `threads_content_publish`). **Copy the token immediately — it isn't
+   shown again.** Like the Instagram token, this first one is short-lived.
+3. **Exchange it for a long-lived token.** Same idea as Instagram's Step 3, but Threads has
+   its own exchange endpoint:
+   ```
+   curl -s "https://graph.threads.net/access_token\
+   ?grant_type=th_exchange_token\
+   &client_secret=YOUR_APP_SECRET\
+   &access_token=SHORT_LIVED_TOKEN"
+   ```
+   The returned `access_token` is valid ~60 days. Refresh it before expiry the same way you
+   would an Instagram token, using Threads' own refresh endpoint — ask me if you want the
+   exact call when you're closer to that date.
+4. **Find your Threads user id.** The same token-generation panel that gave you the token
+   also shows the account's **Threads user id** — a long number, separate from any
+   Instagram or Facebook id you already have on file. Note it; you'll need it in the next
+   step, not the IG user id.
+5. **Add the channel in the dashboard.** **Channels → Add channel**:
+   - Platform: **Threads**
+   - Account name: whatever label helps you tell it apart (e.g. `Liparoto Threads`)
+   - Timezone: e.g. `America/New_York`
+   - **Threads user id**: from Step 4
+   - **Access token**: the long-lived token from Step 3
+6. **Verify without posting.** From the repo root, with the venv active:
+   ```
+   source worker/.venv/bin/activate
+   python -m worker.preflight
+   ```
+   For a Threads channel this reads your real publishing quota — a
+   `✓ ... published N/M in the last 24h window` line means the token and Threads user id
+   are valid. It posts nothing. Only move on to a real post once this comes back clean.
+
+**Limits you'll actually hit:**
+- **500 characters** per post (caption/body) — the composer's character counter enforces
+  this before you can even save, and the worker enforces it again independently.
+- **Carousels need 2–20 images** — fewer than 2 or more than 20 is rejected before anything
+  is sent to Meta. (Instagram's own carousel cap is lower, 10 — don't assume the same
+  number applies here.)
+- **250 published posts per rolling 24 hours.** Unlike Facebook Pages, Threads *does* expose
+  a real quota endpoint, and the worker reads it live before every publish rather than
+  guessing — if you're at 250/250 it simply defers the post and retries later rather than
+  failing.
+
+**Text-only posts are a Threads thing.** Threads is the only platform here that can publish
+a post with no image at all — the composer's **"Text only"** toggle hides the image picker
+and switches the character counter to whatever the strictest limit is among the channels
+you've selected. If you toggle it on while an Instagram or Facebook channel is also
+selected, those channels get deselected automatically, because they can't publish text —
+and if a text post ever did reach the worker aimed at one of them anyway, the worker itself
+would refuse it outright (a clear, permanent failure, not a retry) rather than silently
+dropping the text or guessing at an image.
