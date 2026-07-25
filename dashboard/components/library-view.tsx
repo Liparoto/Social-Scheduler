@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz } from "@/lib/format";
-import { PLATFORMS } from "@/lib/platforms";
+import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 
 interface PostLite {
   id: number;
@@ -63,9 +63,24 @@ export function LibraryView({
   const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
 
   function toggle(id: number) {
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setSelected((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      // Drop any already-picked channel that can no longer take every selected post's
+      // type (e.g. a Threads text post was just added to a selection that had an
+      // Instagram channel picked) — leaving it selected would submit a target the
+      // worker is guaranteed to reject.
+      const nextPosts = posts.filter((p) => next.includes(p.id));
+      const bad = new Set(
+        nextPosts.flatMap((p) => incompatibleChannelsForPostType(p.post_type, channels).map((c) => c.id))
+      );
+      if (bad.size > 0) {
+        setChans((prevChans) => {
+          const filtered = new Set([...prevChans].filter((cid) => !bad.has(cid)));
+          return filtered.size === prevChans.size ? prevChans : filtered;
+        });
+      }
+      return next;
+    });
   }
   function toggleChan(id: number) {
     setChans((prev) => {
@@ -155,6 +170,13 @@ export function LibraryView({
     if (q && !(p.caption ?? "").toLowerCase().includes(q)) return false;
     return true;
   });
+
+  // Channels that can't publish at least one of the currently-selected posts' type —
+  // disabled in the "To channels" picker below rather than offered and rejected later.
+  const selectedPostObjs = posts.filter((p) => selected.includes(p.id));
+  const incompatibleChannelIds = new Set(
+    selectedPostObjs.flatMap((p) => incompatibleChannelsForPostType(p.post_type, channels).map((c) => c.id))
+  );
 
   const sorted = [...shown].sort((a, b) => {
     if (sort === "newest") return b.id - a.id;
@@ -295,6 +317,10 @@ export function LibraryView({
                       alt=""
                       className="h-full w-full object-cover"
                     />
+                  ) : p.post_type === "text" ? (
+                    <div className="flex h-full w-full items-center justify-center text-center text-[10px] text-faint">
+                      Text post
+                    </div>
                   ) : null}
                 </Link>
                 {on ? (
@@ -414,23 +440,29 @@ export function LibraryView({
           <div className="flex flex-wrap gap-2">
             {channels.map((c) => {
               const on = chans.has(c.id);
+              const disabled = incompatibleChannelIds.has(c.id);
               const color = channelColor(c.id);
               return (
                 <button
                   key={c.id}
-                  onClick={() => toggleChan(c.id)}
-                  className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium"
+                  onClick={() => !disabled && toggleChan(c.id)}
+                  disabled={disabled}
+                  title={disabled ? `${platformLabel(c.platform)} can't publish one or more selected posts` : undefined}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${
+                    disabled ? "cursor-not-allowed opacity-40" : ""
+                  }`}
                   style={
-                    on
+                    on && !disabled
                       ? { color: color.fg, backgroundColor: color.bg, borderColor: color.dot }
                       : { borderColor: "var(--color-border)", color: "var(--color-muted)" }
                   }
                 >
                   <span
                     className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: on ? color.dot : "var(--color-faint)" }}
+                    style={{ backgroundColor: on && !disabled ? color.dot : "var(--color-faint)" }}
                   />
                   {c.account_name}
+                  {disabled ? " — can't post this type" : ""}
                 </button>
               );
             })}

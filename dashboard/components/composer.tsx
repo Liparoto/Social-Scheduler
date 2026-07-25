@@ -80,23 +80,45 @@ export function Composer({
     ? "single"
     : "—";
 
-  // Strictest caption limit among the currently-selected channels. With nothing selected
-  // yet, fall back to the strictest limit among text-capable platforms so the counter is
-  // still meaningful before a channel is picked.
+  // Mirrors the worker's _select_caption: platform-specific variant if present, else the
+  // generic ("Any") variant, else whatever's non-empty. Counting anything else would let
+  // the counter show a different caption than the one that actually gets published.
+  function selectCaptionForPlatform(platform: string): string {
+    const specific = variants.find((v) => v.platform === platform && v.body.trim());
+    if (specific) return specific.body.trim();
+    const generic = variants.find((v) => v.platform === "" && v.body.trim());
+    if (generic) return generic.body.trim();
+    const any = variants.find((v) => v.body.trim());
+    return any ? any.body.trim() : "";
+  }
+
   const selectedChannels = channels.filter((c) => selected.has(c.id));
-  const selectedLimits = selectedChannels
-    .map((c) => maxCaptionChars(c.platform))
-    .filter((n): n is number => n !== null);
+
+  // One check per selected channel that actually declares a caption limit — each using
+  // the caption that would be published to THAT platform, not the generic display caption.
+  const captionChecks = selectedChannels
+    .map((c) => {
+      const limit = maxCaptionChars(c.platform);
+      return limit === null ? null : { channel: c as ChannelLite | null, limit, length: selectCaptionForPlatform(c.platform).length };
+    })
+    .filter((v): v is { channel: ChannelLite | null; limit: number; length: number } => v !== null);
+
+  // With nothing selected yet in text-only mode, fall back to the strictest limit among
+  // text-capable platforms so the counter is still meaningful before a channel is picked.
   const fallbackLimits = PLATFORMS.filter((p) => p.supportsText)
     .map((p): number | null => p.maxCaptionChars)
     .filter((n): n is number => n !== null);
-  const captionLimit =
-    selectedLimits.length > 0
-      ? Math.min(...selectedLimits)
-      : fallbackLimits.length > 0
-      ? Math.min(...fallbackLimits)
+  const fallbackCheck =
+    captionChecks.length === 0 && textOnly && fallbackLimits.length > 0
+      ? { channel: null, limit: Math.min(...fallbackLimits), length: caption.length }
       : null;
-  const overCaptionLimit = textOnly && captionLimit !== null && caption.length > captionLimit;
+
+  const allCaptionChecks = fallbackCheck ? [fallbackCheck] : captionChecks;
+  const worstCaptionCheck =
+    allCaptionChecks.length > 0
+      ? allCaptionChecks.reduce((worst, c) => (c.length - c.limit > worst.length - worst.limit ? c : worst))
+      : null;
+  const overCaptionLimit = allCaptionChecks.some((c) => c.length > c.limit);
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -185,9 +207,15 @@ export function Composer({
     setError(null);
     if (textOnly) {
       if (!caption.trim()) return setError("Write a caption for the text post.");
-      if (overCaptionLimit) return setError(`Caption is over the ${captionLimit}-character limit.`);
     } else if (assets.length === 0) {
       return setError("Add at least one image.");
+    }
+    if (overCaptionLimit) {
+      const names = allCaptionChecks
+        .filter((c) => c.length > c.limit)
+        .map((c) => (c.channel ? `${c.channel.account_name} (${c.length}/${c.limit})` : `${c.limit}-character limit`))
+        .join(", ");
+      return setError(`Caption is over the limit for: ${names}.`);
     }
     if (selected.size === 0) return setError("Select at least one channel.");
     if (!scheduledLocal) return setError("Pick a date and time.");
@@ -413,14 +441,14 @@ export function Composer({
         {/* Caption + first comment */}
         <section className="rounded-card border border-border bg-surface p-5 space-y-4">
           <CaptionVariantsEditor value={variants} onChange={setVariants} />
-          {textOnly ? (
+          {worstCaptionCheck ? (
             <p
               className={`text-xs ${
                 overCaptionLimit ? "font-medium text-accent-strong" : "text-muted"
               }`}
             >
-              {caption.length}
-              {captionLimit !== null ? ` / ${captionLimit}` : ""} characters
+              {worstCaptionCheck.length} / {worstCaptionCheck.limit} characters
+              {worstCaptionCheck.channel ? ` for ${platformLabel(worstCaptionCheck.channel.platform)}` : ""}
               {overCaptionLimit ? " — over the limit for a selected channel." : ""}
             </p>
           ) : null}

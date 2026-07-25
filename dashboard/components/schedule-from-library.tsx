@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
+import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 
 export type LibraryPickItem = {
   id: number;
@@ -9,6 +10,7 @@ export type LibraryPickItem = {
   caption: string | null;
   content_kind: string;
   content_status: string;
+  post_type: string;
 };
 export type ChannelLite = {
   id: number;
@@ -44,13 +46,30 @@ export function ScheduleFromLibrary({
   const shown = posts.filter((p) =>
     query.trim() ? (p.caption ?? "").toLowerCase().includes(query.trim().toLowerCase()) : true
   );
-  const toggleTarget = (id: number) =>
+  const incompatibleIds = useMemo(
+    () =>
+      new Set(
+        selected ? incompatibleChannelsForPostType(selected.post_type, channels).map((c) => c.id) : []
+      ),
+    [selected, channels]
+  );
+  // Changing which post is selected can make a previously-picked target incompatible
+  // (e.g. switching from a Threads text post to an Instagram image post's target
+  // selection carrying over) — derive the effective set instead of writing it back into
+  // state, so there's nothing to keep in sync.
+  const effectiveTargets = useMemo(
+    () => new Set([...targets].filter((id) => !incompatibleIds.has(id))),
+    [targets, incompatibleIds]
+  );
+  const toggleTarget = (id: number) => {
+    if (incompatibleIds.has(id)) return;
     setTargets((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  };
 
   async function schedule() {
     if (!selected) return;
@@ -60,7 +79,7 @@ export function ScheduleFromLibrary({
     const res = await fetch(`/api/posts/${selected.id}/schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channel_ids: Array.from(targets), date, time }),
+      body: JSON.stringify({ channel_ids: Array.from(effectiveTargets), date, time }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -102,8 +121,8 @@ export function ScheduleFromLibrary({
                     className="h-14 w-14 shrink-0 rounded object-cover"
                   />
                 ) : (
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded bg-surface-sunken text-[10px] text-faint">
-                    no image
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded bg-surface-sunken text-center text-[10px] text-faint">
+                    {p.post_type === "text" ? "Text post" : "no image"}
                   </div>
                 )}
                 <div className="min-w-0">
@@ -133,8 +152,8 @@ export function ScheduleFromLibrary({
                 className="h-20 w-20 shrink-0 rounded-lg object-cover"
               />
             ) : (
-              <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-xs text-faint">
-                no image
+              <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
+                {selected.post_type === "text" ? "Text post" : "no image"}
               </div>
             )}
             <div>
@@ -165,18 +184,26 @@ export function ScheduleFromLibrary({
         <h3 className="mb-2 font-display text-sm font-semibold text-ink">Where & when</h3>
         <div className="mb-3 grid gap-2 sm:grid-cols-2">
           {channels.map((c) => {
-            const on = targets.has(c.id);
+            const on = effectiveTargets.has(c.id);
+            const disabled = incompatibleIds.has(c.id);
             return (
               <button
                 key={c.id}
                 type="button"
                 onClick={() => toggleTarget(c.id)}
+                disabled={disabled}
                 className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                  on ? "border-brand bg-brand-weak" : "border-border hover:bg-surface-sunken"
+                  disabled
+                    ? "cursor-not-allowed border-border opacity-50"
+                    : on
+                    ? "border-brand bg-brand-weak"
+                    : "border-border hover:bg-surface-sunken"
                 }`}
               >
                 <span className="text-sm text-ink">{c.account_name}</span>
-                <span className="ml-auto text-xs text-muted">{c.platform}</span>
+                <span className="ml-auto text-xs text-muted">
+                  {disabled ? `${platformLabel(c.platform)} can't post this type` : c.platform}
+                </span>
               </button>
             );
           })}
@@ -202,10 +229,10 @@ export function ScheduleFromLibrary({
         <div className="mt-4 flex justify-end">
           <button
             onClick={schedule}
-            disabled={busy || targets.size === 0}
+            disabled={busy || effectiveTargets.size === 0}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
-            {busy ? "Scheduling…" : `Schedule to ${targets.size} account${targets.size === 1 ? "" : "s"}`}
+            {busy ? "Scheduling…" : `Schedule to ${effectiveTargets.size} account${effectiveTargets.size === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>

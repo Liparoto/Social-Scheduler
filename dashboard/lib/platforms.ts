@@ -75,3 +75,36 @@ export function supportsText(value: string): boolean {
 export function maxCaptionChars(value: string): number | null {
   return BY_VALUE.get(value)?.maxCaptionChars ?? null;
 }
+
+// Default 10 (Instagram/Facebook's value) is the safe direction for an unrecognised
+// platform: it under-promises rather than letting an unknown platform look infinitely
+// permissive.
+export function maxCarousel(value: string): number {
+  return BY_VALUE.get(value)?.maxCarousel ?? 10;
+}
+
+// ---- Post-type / channel compatibility -------------------------------------------
+// The single place that decides "can this post_type go to this channel" client- and
+// server-side. Today only 'text' (caption, no media) is gated — every other post_type
+// carries assets and every platform we know about accepts images/carousels. The worker
+// (worker/publisher.py's _validate) is the real gate and re-checks this at publish
+// time; this exists purely so the UI/API can reject (or hide) the mistake before it
+// ever becomes a publication that dies terminally after being "scheduled".
+export interface ChannelLikeForCompat {
+  id: number;
+  platform: string;
+  account_name: string;
+}
+
+export function incompatibleChannelsForPostType<T extends ChannelLikeForCompat>(
+  postType: string,
+  channels: T[]
+): T[] {
+  if (postType !== "text") return [];
+  return channels.filter((c) => !supportsText(c.platform));
+}
+
+/** "Account name (Platform)" — the consistent way to name an offending channel in an error. */
+export function describeChannel(c: ChannelLikeForCompat): string {
+  return `${c.account_name} (${platformLabel(c.platform)})`;
+}

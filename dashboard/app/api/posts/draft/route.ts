@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createDraftPost, getChannel, getPeriod, listTags } from "@/lib/queries";
 import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
+import { PLATFORMS, maxCarousel } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
@@ -23,9 +24,6 @@ export async function POST(req: NextRequest) {
     }
   } else if (assetIds.length === 0) {
     return NextResponse.json({ error: "Add at least one image." }, { status: 400 });
-  }
-  if (assetIds.length > 10) {
-    return NextResponse.json({ error: "A carousel can hold at most 10 images." }, { status: 400 });
   }
 
   let contentKind: ContentKind | undefined;
@@ -55,6 +53,22 @@ export async function POST(req: NextRequest) {
       }
     }
     targetChannelIds = body.target_channel_ids;
+  }
+
+  if (!isText && assetIds.length > 1) {
+    // A draft isn't scheduled to any specific channel yet, so cap it against the most
+    // permissive platform among its targets (or overall, if untargeted) — the worker
+    // still enforces each channel's own limit independently at publish time.
+    const limit =
+      targetChannelIds && targetChannelIds.length > 0
+        ? Math.max(...targetChannelIds.map((cid) => maxCarousel(getChannel(cid)!.platform)))
+        : Math.max(...PLATFORMS.map((p) => p.maxCarousel));
+    if (assetIds.length > limit) {
+      return NextResponse.json(
+        { error: `A carousel can hold at most ${limit} images for the selected targets.` },
+        { status: 400 }
+      );
+    }
   }
 
   const captionVariants = parseCaptionVariants(body.caption_variants);

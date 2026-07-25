@@ -1,10 +1,27 @@
 "use client";
 
-import { PLATFORMS } from "@/lib/platforms";
+import { PLATFORMS, maxCaptionChars, platformLabel } from "@/lib/platforms";
 
 export interface CaptionVariantDraft {
   platform: string;
   body: string;
+}
+
+/** Variants whose own selected platform has a caption limit they're over. Callers (the
+ * composer, the library editor) use this to block a save/submit — a per-row counter
+ * alone doesn't stop the click. */
+export function overLimitCaptionVariants(
+  variants: CaptionVariantDraft[]
+): { platform: string; length: number; limit: number }[] {
+  const out: { platform: string; length: number; limit: number }[] = [];
+  for (const v of variants) {
+    if (!v.platform || !v.body.trim()) continue;
+    const limit = maxCaptionChars(v.platform);
+    if (limit !== null && v.body.length > limit) {
+      out.push({ platform: v.platform, length: v.body.length, limit });
+    }
+  }
+  return out;
 }
 
 const fieldCls =
@@ -37,39 +54,49 @@ export function CaptionVariantsEditor({
         for that platform.
       </p>
       <div className="space-y-3">
-        {value.map((v, i) => (
-          <div key={i} className="space-y-2">
-            <div className="flex items-center gap-2">
-              <select
-                className={`${fieldCls} w-40 shrink-0`}
-                value={v.platform}
-                onChange={(e) => update(i, { platform: e.target.value })}
-              >
-                <option value="">Any</option>
-                {PLATFORMS.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              {value.length > 1 ? (
-                <button
-                  type="button"
-                  onClick={() => remove(i)}
-                  className="text-xs font-medium text-muted hover:text-status-failed"
+        {value.map((v, i) => {
+          const limit = v.platform ? maxCaptionChars(v.platform) : null;
+          const over = limit !== null && v.body.length > limit;
+          return (
+            <div key={i} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <select
+                  className={`${fieldCls} w-40 shrink-0`}
+                  value={v.platform}
+                  onChange={(e) => update(i, { platform: e.target.value })}
                 >
-                  Remove
-                </button>
+                  <option value="">Any</option>
+                  {PLATFORMS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                {value.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => remove(i)}
+                    className="text-xs font-medium text-muted hover:text-status-failed"
+                  >
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+              <textarea
+                className={`${fieldCls} min-h-24 resize-y`}
+                placeholder="Write the caption…"
+                value={v.body}
+                onChange={(e) => update(i, { body: e.target.value })}
+              />
+              {limit !== null ? (
+                <p className={`text-xs ${over ? "font-medium text-accent-strong" : "text-muted"}`}>
+                  {v.body.length} / {limit} characters
+                  {over ? ` — over ${platformLabel(v.platform)}'s limit.` : ""}
+                </p>
               ) : null}
             </div>
-            <textarea
-              className={`${fieldCls} min-h-24 resize-y`}
-              placeholder="Write the caption…"
-              value={v.body}
-              onChange={(e) => update(i, { body: e.target.value })}
-            />
-          </div>
-        ))}
+          );
+        })}
       </div>
       <button
         type="button"

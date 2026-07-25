@@ -185,11 +185,17 @@ export function PublicationQueue({
                           <span title="Replies">💬 {p.m_comments ?? "—"}</span>
                           <span title="Reposts">↻ {p.m_shares ?? "—"}</span>
                         </p>
-                      ) : (
+                      ) : p.channel_platform === "instagram" ? (
                         <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
                           <span title="Reach">◎ {p.m_reach ?? "—"}</span>
                           <span title="Saves">⤓ {p.m_saves ?? "—"}</span>
                           <span title="Likes">♥ {p.m_likes ?? "—"}</span>
+                        </p>
+                      ) : (
+                        // An unrecognised platform should look wrong, not quietly inherit
+                        // Instagram's metric set — matches lib/platforms.ts's fallback style.
+                        <p className="data mt-1 text-[11px] text-status-failed">
+                          Unknown platform &quot;{p.channel_platform}&quot; — no metrics display for it.
                         </p>
                       )
                     ) : p.status === "posted" && p.is_dry_run !== 1 ? (

@@ -15,6 +15,7 @@ import type {
   Tag,
 } from "./types";
 import type { Platform } from "./platforms";
+import { describeChannel, incompatibleChannelsForPostType } from "./platforms";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -482,10 +483,32 @@ export interface BulkEntry {
   status: "scheduled" | "pending_approval";
 }
 
+/** Thrown when a caller (route or otherwise) tries to target a channel that can't publish
+ *  the post's type — e.g. a text post at an Instagram channel. Every entry point that can
+ *  create publications should already have rejected this earlier with a 400; this is the
+ *  last line of defense in the one write path they all funnel through. */
+export class IncompatiblePostTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IncompatiblePostTargetError";
+  }
+}
+
 /** Create many publications atomically and flip their posts out of 'draft'. */
 export function bulkCreatePublications(entries: BulkEntry[]): number {
   if (entries.length === 0) return 0;
   const db = getDb();
+  for (const entry of entries) {
+    const post = getPost(entry.post_id);
+    const channel = getChannel(entry.channel_id);
+    if (!post || !channel) continue; // let the transaction below hit the FK constraint
+    const incompatible = incompatibleChannelsForPostType(post.post_type, [channel]);
+    if (incompatible.length > 0) {
+      throw new IncompatiblePostTargetError(
+        `${describeChannel(channel)} can't publish a ${post.post_type} post.`
+      );
+    }
+  }
   const tx = db.transaction((rows: BulkEntry[]) => {
     const insert = db.prepare(
       `INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by)

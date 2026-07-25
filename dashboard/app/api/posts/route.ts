@@ -3,6 +3,7 @@ import { createPostWithPublications, getChannel, getPeriod, listTags } from "@/l
 import { zonedTimeToUtc } from "@/lib/time";
 import type { ContentKind, PostType } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
+import { describeChannel, incompatibleChannelsForPostType, maxCarousel } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
@@ -34,18 +35,34 @@ export async function POST(req: NextRequest) {
   if (!localTime) {
     return NextResponse.json({ error: "Pick a date and time." }, { status: 400 });
   }
-  for (const cid of channelIds) {
-    if (!getChannel(cid)) {
-      return NextResponse.json({ error: `Unknown channel ${cid}.` }, { status: 400 });
-    }
+  const channels = channelIds.map((cid) => getChannel(cid));
+  const unknownIdx = channels.findIndex((c) => !c);
+  if (unknownIdx !== -1) {
+    return NextResponse.json({ error: `Unknown channel ${channelIds[unknownIdx]}.` }, { status: 400 });
   }
+  const targetChannels = channels.map((c) => c!);
 
   const postType: PostType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
-  if (postType === "carousel" && assetIds.length > 10) {
+
+  const incompatible = incompatibleChannelsForPostType(postType, targetChannels);
+  if (incompatible.length > 0) {
     return NextResponse.json(
-      { error: "A carousel can hold at most 10 images." },
+      { error: `${incompatible.map(describeChannel).join(", ")} can't publish a ${postType} post.` },
       { status: 400 }
     );
+  }
+
+  if (postType === "carousel") {
+    // The most permissive selected channel sets the ceiling here — the worker still
+    // enforces each channel's own limit independently per publication, so a Threads-only
+    // carousel shouldn't be capped at Instagram/Facebook's stricter number.
+    const limit = Math.max(...targetChannels.map((c) => maxCarousel(c.platform)));
+    if (assetIds.length > limit) {
+      return NextResponse.json(
+        { error: `A carousel can hold at most ${limit} images for the selected channels.` },
+        { status: 400 }
+      );
+    }
   }
 
   let scheduledUtc: string;
