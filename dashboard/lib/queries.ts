@@ -14,6 +14,7 @@ import type {
   PostType,
   Tag,
 } from "./types";
+import type { Platform } from "./platforms";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -35,7 +36,7 @@ export function getChannel(id: number): Channel | undefined {
 }
 
 export interface CreateChannelInput {
-  platform: "instagram" | "facebook";
+  platform: Platform;
   account_name: string;
   business_label?: string;
   timezone: string;

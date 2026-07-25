@@ -1,5 +1,7 @@
 "use client";
 
+import { PLATFORMS } from "@/lib/platforms";
+
 export interface CaptionVariantDraft {
   platform: string;
   body: string;
@@ -44,8 +46,11 @@ export function CaptionVariantsEditor({
                 onChange={(e) => update(i, { platform: e.target.value })}
               >
                 <option value="">Any</option>
-                <option value="instagram">Instagram</option>
-                <option value="facebook">Facebook</option>
+                {PLATFORMS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
               </select>
               {value.length > 1 ? (
                 <button

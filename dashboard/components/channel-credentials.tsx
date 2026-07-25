@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { accountIdLabel } from "@/lib/platforms";
 
 /**
  * Update a channel's credentials (IG user id + access token). Tokens expire / get
@@ -60,7 +61,7 @@ export function ChannelCredentials({
         <div className="mt-3 space-y-2.5">
           <label className="block text-xs text-ink-soft">
             <span className="mb-1 block">
-              {platform === "instagram" ? "Instagram user id" : "Page id"}
+              {accountIdLabel(platform)}
             </span>
             <input
               className={field}

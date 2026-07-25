@@ -1,5 +1,6 @@
 import { getChannels } from "@/lib/queries";
 import { config } from "@/lib/config";
+import { accountIdLabel } from "@/lib/platforms";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
@@ -52,7 +53,7 @@ export default function ChannelsPage() {
                       {c.timezone} · {tzAbbrev(c.timezone)}
                     </span>
                   </Row>
-                  <Row label={c.platform === "instagram" ? "IG user id" : "Page id"}>
+                  <Row label={accountIdLabel(c.platform)}>
                     <span className="data text-ink-soft">
                       {c.remote_account_id || <span className="text-faint">not set</span>}
                     </span>

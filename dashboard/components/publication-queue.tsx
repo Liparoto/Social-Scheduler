@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { PublicationRow } from "@/lib/queries";
-import type { PublicationStatus } from "@/lib/types";
+import type { PublicationStatus, Platform } from "@/lib/types";
+import { PLATFORMS } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev } from "@/lib/format";
@@ -30,7 +31,7 @@ export function PublicationQueue({
   workerOnline?: boolean;
 }) {
   const [account, setAccount] = useState<"all" | number>("all");
-  const [platform, setPlatform] = useState<"all" | "instagram" | "facebook">("all");
+  const [platform, setPlatform] = useState<"all" | Platform>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
 
   const shown = pubs.filter((p) => {
@@ -58,11 +59,14 @@ export function PublicationQueue({
         <select
           className={selectCls}
           value={platform}
-          onChange={(e) => setPlatform(e.target.value as "all" | "instagram" | "facebook")}
+          onChange={(e) => setPlatform(e.target.value as "all" | Platform)}
         >
           <option value="all">All platforms</option>
-          <option value="instagram">Instagram</option>
-          <option value="facebook">Facebook</option>
+          {PLATFORMS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
         </select>
         <select
           className={selectCls}

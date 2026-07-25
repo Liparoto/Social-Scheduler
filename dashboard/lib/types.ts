@@ -1,7 +1,8 @@
 // Row shapes mirroring migrations/0001_init.sql. Kept in sync by hand — the SQL
 // remains the source of truth (see CLAUDE.md).
 
-export type Platform = "instagram" | "facebook";
+import type { Platform } from "./platforms";
+export type { Platform } from "./platforms";
 export type TagKind = "topic" | "time_of_day";
 export interface Tag {
   id: number;
