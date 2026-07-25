@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz } from "@/lib/format";
@@ -63,24 +63,7 @@ export function LibraryView({
   const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
 
   function toggle(id: number) {
-    setSelected((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      // Drop any already-picked channel that can no longer take every selected post's
-      // type (e.g. a Threads text post was just added to a selection that had an
-      // Instagram channel picked) — leaving it selected would submit a target the
-      // worker is guaranteed to reject.
-      const nextPosts = posts.filter((p) => next.includes(p.id));
-      const bad = new Set(
-        nextPosts.flatMap((p) => incompatibleChannelsForPostType(p.post_type, channels).map((c) => c.id))
-      );
-      if (bad.size > 0) {
-        setChans((prevChans) => {
-          const filtered = new Set([...prevChans].filter((cid) => !bad.has(cid)));
-          return filtered.size === prevChans.size ? prevChans : filtered;
-        });
-      }
-      return next;
-    });
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
   function toggleChan(id: number) {
     setChans((prev) => {
@@ -95,13 +78,13 @@ export function LibraryView({
     setError(null);
     setNotice(null);
     if (selected.length === 0) return setError("Select at least one post.");
-    if (chans.size === 0) return setError("Select at least one channel.");
+    if (effectiveChans.size === 0) return setError("Select at least one channel.");
     const res = await fetch("/api/posts/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         post_ids: selected,
-        channel_ids: Array.from(chans),
+        channel_ids: Array.from(effectiveChans),
         every_days: everyDays,
         time,
         start_date: startDate,
@@ -122,13 +105,13 @@ export function LibraryView({
     setError(null);
     setNotice(null);
     if (selected.length === 0) return setError("Select at least one post.");
-    if (chans.size === 0) return setError("Select at least one channel.");
+    if (effectiveChans.size === 0) return setError("Select at least one channel.");
     const res = await fetch("/api/posts/targets/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         post_ids: selected,
-        channel_ids: Array.from(chans),
+        channel_ids: Array.from(effectiveChans),
         action,
       }),
     });
@@ -140,7 +123,7 @@ export function LibraryView({
     const verb = action === "add" ? "Added" : "Removed";
     const prep = action === "add" ? "to" : "from";
     setNotice(
-      `${verb} ${chans.size} account${chans.size === 1 ? "" : "s"} ${prep} ${
+      `${verb} ${effectiveChans.size} account${effectiveChans.size === 1 ? "" : "s"} ${prep} ${
         selected.length
       } post${selected.length === 1 ? "" : "s"}.`
     );
@@ -176,6 +159,15 @@ export function LibraryView({
   const selectedPostObjs = posts.filter((p) => selected.includes(p.id));
   const incompatibleChannelIds = new Set(
     selectedPostObjs.flatMap((p) => incompatibleChannelsForPostType(p.post_type, channels).map((c) => c.id))
+  );
+  // Derived, not written back into `chans` state: changing the post selection (e.g.
+  // adding a Threads text post to a selection that had an Instagram channel picked) can
+  // make an already-picked channel incompatible. Deriving this instead of syncing it
+  // back with a nested setChans-inside-setSelected keeps there nothing to keep in sync —
+  // matching the pattern already used in schedule-from-library.tsx's effectiveTargets.
+  const effectiveChans = useMemo(
+    () => new Set([...chans].filter((id) => !incompatibleChannelIds.has(id))),
+    [chans, incompatibleChannelIds]
   );
 
   const sorted = [...shown].sort((a, b) => {
@@ -439,7 +431,7 @@ export function LibraryView({
           <p className="mb-1.5 text-xs text-ink-soft">To channels:</p>
           <div className="flex flex-wrap gap-2">
             {channels.map((c) => {
-              const on = chans.has(c.id);
+              const on = effectiveChans.has(c.id);
               const disabled = incompatibleChannelIds.has(c.id);
               const color = channelColor(c.id);
               return (
@@ -474,8 +466,8 @@ export function LibraryView({
 
         <div className="mt-3 flex items-center justify-between gap-4">
           <p className="text-[11px] text-faint">
-            {selected.length > 0 && chans.size > 0
-              ? `${selected.length} post(s) × ${chans.size} channel(s), one every ${everyDays} day(s) from ${formatInTz(
+            {selected.length > 0 && effectiveChans.size > 0
+              ? `${selected.length} post(s) × ${effectiveChans.size} channel(s), one every ${everyDays} day(s) from ${formatInTz(
                   `${startDate}T${time}:00Z`,
                   "UTC",
                   { month: "short", day: "numeric" }
@@ -498,14 +490,14 @@ export function LibraryView({
           <div className="flex items-center gap-2">
             <button
               onClick={() => retarget("add")}
-              disabled={pending || selected.length === 0 || chans.size === 0}
+              disabled={pending || selected.length === 0 || effectiveChans.size === 0}
               className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
             >
               Add as target
             </button>
             <button
               onClick={() => retarget("remove")}
-              disabled={pending || selected.length === 0 || chans.size === 0}
+              disabled={pending || selected.length === 0 || effectiveChans.size === 0}
               className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
             >
               Remove target

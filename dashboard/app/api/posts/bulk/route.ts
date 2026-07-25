@@ -3,11 +3,12 @@ import {
   bulkCreatePublications,
   getChannel,
   getPost,
+  getPostAssets,
   IncompatiblePostTargetError,
   type BulkEntry,
 } from "@/lib/queries";
 import { intervalSlots } from "@/lib/scheduling";
-import { describeChannel, incompatibleChannelsForPostType } from "@/lib/platforms";
+import { incompatiblePostError } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
@@ -52,14 +53,14 @@ export async function POST(req: NextRequest) {
   if (unknownPostIdx !== -1) {
     return NextResponse.json({ error: `Unknown post ${postIds[unknownPostIdx]}.` }, { status: 400 });
   }
-  const postTypes = new Set(posts.map((p) => p!.post_type));
-  for (const postType of postTypes) {
-    const incompatible = incompatibleChannelsForPostType(postType, targetChannels);
-    if (incompatible.length > 0) {
-      return NextResponse.json(
-        { error: `${incompatible.map(describeChannel).join(", ")} can't publish a ${postType} post.` },
-        { status: 400 }
-      );
+  // Per post, not just per post_type: two carousels can share a post_type but differ in
+  // asset count, and this route never checked carousel size against maxCarousel at all
+  // before — an oversized one used to sail through and fail terminally at publish.
+  for (const post of posts) {
+    const assetCount = post!.post_type === "carousel" ? getPostAssets(post!.id).length : 0;
+    const compatError = incompatiblePostError(post!.post_type, assetCount, targetChannels);
+    if (compatError) {
+      return NextResponse.json({ error: compatError }, { status: 400 });
     }
   }
 

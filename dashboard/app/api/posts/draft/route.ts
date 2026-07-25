@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createDraftPost, getChannel, getPeriod, listTags } from "@/lib/queries";
 import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
-import { PLATFORMS, maxCarousel } from "@/lib/platforms";
+import { PLATFORMS, incompatiblePostError } from "@/lib/platforms";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -55,14 +56,22 @@ export async function POST(req: NextRequest) {
     targetChannelIds = body.target_channel_ids;
   }
 
-  if (!isText && assetIds.length > 1) {
-    // A draft isn't scheduled to any specific channel yet, so cap it against the most
-    // permissive platform among its targets (or overall, if untargeted) — the worker
-    // still enforces each channel's own limit independently at publish time.
-    const limit =
-      targetChannelIds && targetChannelIds.length > 0
-        ? Math.max(...targetChannelIds.map((cid) => maxCarousel(getChannel(cid)!.platform)))
-        : Math.max(...PLATFORMS.map((p) => p.maxCarousel));
+  const postType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
+  const targetChannels = (targetChannelIds ?? []).map((cid) => getChannel(cid)!);
+
+  if (targetChannels.length > 0) {
+    // A draft with known targets is checked exactly like a live post — the strictest
+    // targeted channel wins, never the most permissive.
+    const compatError = incompatiblePostError(postType, assetIds.length, targetChannels);
+    if (compatError) {
+      return NextResponse.json({ error: compatError }, { status: 400 });
+    }
+  } else if (postType === "carousel") {
+    // Untargeted: cap against the strictest cap among all known platforms — the worker
+    // still enforces each channel's own limit independently once it's actually targeted,
+    // but a draft shouldn't be savable at a size that's already guaranteed to fail
+    // everywhere.
+    const limit = Math.min(...PLATFORMS.map((p) => p.maxCarousel));
     if (assetIds.length > limit) {
       return NextResponse.json(
         { error: `A carousel can hold at most ${limit} images for the selected targets.` },
@@ -74,6 +83,13 @@ export async function POST(req: NextRequest) {
   const captionVariants = parseCaptionVariants(body.caption_variants);
   if (captionVariants === "invalid") {
     return NextResponse.json({ error: "Invalid caption_variants." }, { status: 400 });
+  }
+
+  if (targetChannels.length > 0) {
+    const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption);
+    if (captionError) {
+      return NextResponse.json({ error: captionError }, { status: 400 });
+    }
   }
 
   const periodLinks = parsePeriodLinks(body.period_links, getPeriod);

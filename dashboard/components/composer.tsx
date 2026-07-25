@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
 import { platformLabel, supportsText, maxCaptionChars, PLATFORMS } from "@/lib/platforms";
+import { captionsForPlatform } from "@/lib/caption-limits";
 import type { Period, PeriodMode, Tag } from "@/lib/types";
 import type { ConformMode } from "@/lib/conform";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -80,26 +81,29 @@ export function Composer({
     ? "single"
     : "—";
 
-  // Mirrors the worker's _select_caption: platform-specific variant if present, else the
-  // generic ("Any") variant, else whatever's non-empty. Counting anything else would let
-  // the counter show a different caption than the one that actually gets published.
-  function selectCaptionForPlatform(platform: string): string {
-    const specific = variants.find((v) => v.platform === platform && v.body.trim());
-    if (specific) return specific.body.trim();
-    const generic = variants.find((v) => v.platform === "" && v.body.trim());
-    if (generic) return generic.body.trim();
-    const any = variants.find((v) => v.body.trim());
-    return any ? any.body.trim() : "";
+  // Mirrors worker/publisher.py's _select_caption's matching rules, but — like
+  // captionLimitError on the server — checks the length of EVERY variant that would
+  // match this platform, not just the first. The worker rotates through all of a
+  // platform's variants by post count, so a second, longer variant a `.find()` would
+  // never reach can still get selected on a later publish and fail terminally; showing
+  // the worst (longest) candidate here keeps the counter honest about that risk.
+  function worstCaptionLengthForPlatform(platform: string): number {
+    const trimmedVariants = variants
+      .filter((v) => v.body.trim())
+      .map((v) => ({ platform: v.platform || null, body: v.body.trim() }));
+    const candidates = captionsForPlatform(platform, trimmedVariants, caption);
+    return Math.max(0, ...candidates.map((c) => c.length));
   }
 
   const selectedChannels = channels.filter((c) => selected.has(c.id));
 
   // One check per selected channel that actually declares a caption limit — each using
-  // the caption that would be published to THAT platform, not the generic display caption.
+  // the worst-case caption that could actually get published to THAT platform, not the
+  // generic display caption.
   const captionChecks = selectedChannels
     .map((c) => {
       const limit = maxCaptionChars(c.platform);
-      return limit === null ? null : { channel: c as ChannelLite | null, limit, length: selectCaptionForPlatform(c.platform).length };
+      return limit === null ? null : { channel: c as ChannelLite | null, limit, length: worstCaptionLengthForPlatform(c.platform) };
     })
     .filter((v): v is { channel: ChannelLite | null; limit: number; length: number } => v !== null);
 

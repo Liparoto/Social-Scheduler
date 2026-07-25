@@ -3,7 +3,8 @@ import { createPostWithPublications, getChannel, getPeriod, listTags } from "@/l
 import { zonedTimeToUtc } from "@/lib/time";
 import type { ContentKind, PostType } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
-import { describeChannel, incompatibleChannelsForPostType, maxCarousel } from "@/lib/platforms";
+import { incompatiblePostError } from "@/lib/platforms";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -44,25 +45,12 @@ export async function POST(req: NextRequest) {
 
   const postType: PostType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
 
-  const incompatible = incompatibleChannelsForPostType(postType, targetChannels);
-  if (incompatible.length > 0) {
-    return NextResponse.json(
-      { error: `${incompatible.map(describeChannel).join(", ")} can't publish a ${postType} post.` },
-      { status: 400 }
-    );
-  }
-
-  if (postType === "carousel") {
-    // The most permissive selected channel sets the ceiling here — the worker still
-    // enforces each channel's own limit independently per publication, so a Threads-only
-    // carousel shouldn't be capped at Instagram/Facebook's stricter number.
-    const limit = Math.max(...targetChannels.map((c) => maxCarousel(c.platform)));
-    if (assetIds.length > limit) {
-      return NextResponse.json(
-        { error: `A carousel can hold at most ${limit} images for the selected channels.` },
-        { status: 400 }
-      );
-    }
+  // The strictest selected channel is the one that matters — the worker still enforces
+  // each channel's own limit independently per publication, but accepting a count that's
+  // guaranteed to fail on ANY selected channel just defers a certain failure.
+  const compatError = incompatiblePostError(postType, assetIds.length, targetChannels);
+  if (compatError) {
+    return NextResponse.json({ error: compatError }, { status: 400 });
   }
 
   let scheduledUtc: string;
@@ -83,6 +71,14 @@ export async function POST(req: NextRequest) {
   const captionVariants = parseCaptionVariants(body.caption_variants);
   if (captionVariants === "invalid") {
     return NextResponse.json({ error: "Invalid caption_variants." }, { status: 400 });
+  }
+
+  // Same check content/route.ts's PATCH does before saving — a caption that's fine to
+  // *look* at in the composer but too long for a targeted platform must not be allowed
+  // to schedule, or it just fails terminally at publish instead.
+  const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption);
+  if (captionError) {
+    return NextResponse.json({ error: captionError }, { status: 400 });
   }
 
   const periodLinks = parsePeriodLinks(body.period_links, getPeriod);

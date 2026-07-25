@@ -108,3 +108,58 @@ export function incompatibleChannelsForPostType<T extends ChannelLikeForCompat>(
 export function describeChannel(c: ChannelLikeForCompat): string {
   return `${c.account_name} (${platformLabel(c.platform)})`;
 }
+
+// ---- Post-type + asset-count / channel compatibility -----------------------------
+// incompatibleChannelsForPostType above only ever gated 'text' vs. supportsText — every
+// route that also needs to gate carousel size against maxCarousel used to hand-roll its
+// own check, and one of those hand-rolled checks used Math.max (the MOST permissive
+// selected channel) instead of Math.min (the strictest), which let a route accept a
+// carousel guaranteed to fail on at least one of its own targets. This widened version
+// is the one place that knows both rules, so every route enforces them identically.
+export type PostCompatReason = "text" | "carousel";
+
+export interface PostCompatIssue<T extends ChannelLikeForCompat = ChannelLikeForCompat> {
+  channel: T;
+  reason: PostCompatReason;
+}
+
+export function incompatibleChannelsForPost<T extends ChannelLikeForCompat>(
+  postType: string,
+  assetCount: number,
+  channels: T[]
+): PostCompatIssue<T>[] {
+  const out: PostCompatIssue<T>[] = [];
+  for (const c of channels) {
+    if (postType === "text") {
+      if (!supportsText(c.platform)) out.push({ channel: c, reason: "text" });
+      continue;
+    }
+    if (postType === "carousel" && assetCount > maxCarousel(c.platform)) {
+      out.push({ channel: c, reason: "carousel" });
+    }
+  }
+  return out;
+}
+
+/**
+ * Renders incompatibleChannelsForPost's issues as one 400-ready message in the style the
+ * routes already used ("<channel> can't publish a <type> post."), naming every offending
+ * channel and, for a carousel, its actual limit. Returns null when everything fits.
+ */
+export function incompatiblePostError<T extends ChannelLikeForCompat>(
+  postType: string,
+  assetCount: number,
+  channels: T[]
+): string | null {
+  const issues = incompatibleChannelsForPost(postType, assetCount, channels);
+  if (issues.length === 0) return null;
+  return issues
+    .map((issue) =>
+      issue.reason === "text"
+        ? `${describeChannel(issue.channel)} can't publish a text post.`
+        : `${describeChannel(issue.channel)} allows at most ${maxCarousel(
+            issue.channel.platform
+          )} images per carousel (this post has ${assetCount}).`
+    )
+    .join(" ");
+}

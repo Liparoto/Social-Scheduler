@@ -14,26 +14,9 @@ import {
 } from "@/lib/queries";
 import type { ContentKind, ContentStatus, PeriodMode } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
-import { maxCaptionChars, platformLabel } from "@/lib/platforms";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
-
-/** Mirrors worker/publisher.py's _select_caption (minus rotation, which doesn't matter
- *  for a length check): platform-specific variant if present, else the generic ("Any")
- *  one, else the post's base caption. */
-function selectCaptionForPlatform(
-  platform: string,
-  variants: { platform: string | null; body: string }[],
-  fallback: string | null
-): string {
-  if (variants.length > 0) {
-    const specific = variants.find((v) => v.platform === platform);
-    if (specific) return specific.body;
-    const generic = variants.find((v) => v.platform === null);
-    if (generic) return generic.body;
-  }
-  return fallback ?? "";
-}
 
 /**
  * Save a post's content-model fields in one call: kind/status/cooldown, target
@@ -191,25 +174,12 @@ export async function PATCH(
   const effectiveTargetIds = targetChannelIds ?? getPostTargets(postId);
   const effectiveVariants =
     captionVariants ?? getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
-  const overLimit: { platform: string; length: number; limit: number }[] = [];
-  for (const cid of effectiveTargetIds) {
-    const channel = getChannel(cid);
-    if (!channel) continue; // already rejected above if it came from this request
-    const limit = maxCaptionChars(channel.platform);
-    if (limit === null) continue;
-    const caption = selectCaptionForPlatform(channel.platform, effectiveVariants, post.caption);
-    if (caption.length > limit) {
-      overLimit.push({ platform: channel.platform, length: caption.length, limit });
-    }
-  }
-  if (overLimit.length > 0) {
-    const names = overLimit
-      .map((v) => `${platformLabel(v.platform)} (${v.length}/${v.limit})`)
-      .join(", ");
-    return NextResponse.json(
-      { error: `Caption is over the limit for: ${names}.` },
-      { status: 400 }
-    );
+  const effectiveChannels = effectiveTargetIds
+    .map((cid) => getChannel(cid))
+    .filter((c): c is NonNullable<typeof c> => !!c); // already rejected above if it came from this request
+  const captionError = captionLimitError(effectiveChannels, effectiveVariants, post.caption);
+  if (captionError) {
+    return NextResponse.json({ error: captionError }, { status: 400 });
   }
 
   // All validated — now write.

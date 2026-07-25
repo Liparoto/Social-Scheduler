@@ -3,11 +3,12 @@ import {
   bulkCreatePublications,
   getChannel,
   getPost,
+  getPostAssets,
   IncompatiblePostTargetError,
   type BulkEntry,
 } from "@/lib/queries";
 import { intervalSlots } from "@/lib/scheduling";
-import { describeChannel, incompatibleChannelsForPostType } from "@/lib/platforms";
+import { incompatiblePostError } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
@@ -45,12 +46,13 @@ export async function POST(
   }
   const targetChannels = channels.map((c) => c!);
 
-  const incompatible = incompatibleChannelsForPostType(post.post_type, targetChannels);
-  if (incompatible.length > 0) {
-    return NextResponse.json(
-      { error: `${incompatible.map(describeChannel).join(", ")} can't publish a ${post.post_type} post.` },
-      { status: 400 }
-    );
+  // This route used to check text-compatibility only — a carousel's size against each
+  // target's maxCarousel was never checked at all, so an oversized carousel could be
+  // scheduled here and fail terminally at publish.
+  const assetCount = getPostAssets(postId).length;
+  const compatError = incompatiblePostError(post.post_type, assetCount, targetChannels);
+  if (compatError) {
+    return NextResponse.json({ error: compatError }, { status: 400 });
   }
 
   const entries: BulkEntry[] = [];
