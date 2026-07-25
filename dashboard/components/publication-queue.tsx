@@ -10,6 +10,12 @@ import { formatInTz, tzAbbrev } from "@/lib/format";
 
 type StatusFilter = "all" | PublicationStatus;
 
+// getPublicationsOverview (dashboard/lib/queries.ts) doesn't select post_metrics.impressions
+// yet, so m_impressions isn't on PublicationRow — this narrows it locally so a Threads row
+// without wired data renders "—" instead of failing to typecheck. Wiring the column through
+// queries.ts is out of scope for this change.
+type ThreadsRow = PublicationRow & { m_impressions?: number | null };
+
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "All statuses" },
   { value: "scheduled", label: "Scheduled" },
@@ -174,6 +180,16 @@ export function PublicationQueue({
                           {p.m_reach != null ? (
                             <span title="Reach">◎ {p.m_reach}</span>
                           ) : null}
+                        </p>
+                      ) : p.channel_platform === "threads" ? (
+                        // Threads has neither "reach" nor "saves" as a concept — omitting
+                        // them entirely (rather than showing an always-empty slot) is the
+                        // same call already made for Facebook's reach above.
+                        <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
+                          <span title="Views">👁 {(p as ThreadsRow).m_impressions ?? "—"}</span>
+                          <span title="Likes">♥ {p.m_likes ?? "—"}</span>
+                          <span title="Replies">💬 {p.m_comments ?? "—"}</span>
+                          <span title="Reposts">↻ {p.m_shares ?? "—"}</span>
                         </p>
                       ) : (
                         <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">

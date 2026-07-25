@@ -3,6 +3,9 @@
 // instead of nine — and an unrecognised value degrades visibly rather than silently
 // reading as Instagram or Facebook.
 
+// supportsText / maxCarousel / maxCaptionChars mirror worker/clients.py's PLATFORM_CAPS.
+// The worker is authoritative and re-validates every publish against its own copy — this
+// copy exists only to shape the composer (disable/hint fields before a request is ever sent).
 export const PLATFORMS = [
   {
     value: "instagram",
@@ -11,6 +14,9 @@ export const PLATFORMS = [
     accountIdLabel: "IG user id",
     // Instagram published via a linked Facebook Page stores that Page id separately.
     usesLinkedPage: true,
+    supportsText: false,
+    maxCarousel: 10,
+    maxCaptionChars: null,
   },
   {
     value: "facebook",
@@ -18,6 +24,19 @@ export const PLATFORMS = [
     badge: "FB",
     accountIdLabel: "Page id",
     usesLinkedPage: false,
+    supportsText: false,
+    maxCarousel: 10,
+    maxCaptionChars: null,
+  },
+  {
+    value: "threads",
+    label: "Threads",
+    badge: "TH",
+    accountIdLabel: "Threads user id",
+    usesLinkedPage: false,
+    supportsText: true,
+    maxCarousel: 20,
+    maxCaptionChars: 500,
   },
 ] as const;
 
@@ -45,4 +64,14 @@ export function accountIdLabel(value: string): string {
 
 export function usesLinkedPage(value: string): boolean {
   return BY_VALUE.get(value)?.usesLinkedPage ?? false;
+}
+
+// Default false is the safe direction: worst case the composer is over-cautious about an
+// unrecognised platform, rather than offering a text post to something that can't publish one.
+export function supportsText(value: string): boolean {
+  return BY_VALUE.get(value)?.supportsText ?? false;
+}
+
+export function maxCaptionChars(value: string): number | null {
+  return BY_VALUE.get(value)?.maxCaptionChars ?? null;
 }
