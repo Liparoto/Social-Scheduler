@@ -19,12 +19,27 @@ from .graph_api import GraphClient
 
 FACEBOOK_BASE = "https://graph.facebook.com"
 
+# Every platform this worker has an adapter for. Adding one here without also adding it to
+# publisher._PUBLISHERS, preflight._CHECKS and metrics._FETCHERS fails
+# test_platform_dispatch.py — which is the point.
+SUPPORTED_PLATFORMS = ("instagram", "facebook")
+
+
+class UnknownPlatform(Exception):
+    """A channel names a platform this worker has no adapter for."""
+
 
 def base_url_for(platform: str, config: Config) -> str:
-    """The Graph API base URL to use for a channel on `platform`."""
+    """The Graph API base URL to use for a channel on `platform`.
+
+    Raises UnknownPlatform rather than guessing. Falling back to the install's configured
+    base is how an unrecognised platform ends up quietly talking to Instagram's API.
+    """
     if platform == "facebook":
         return FACEBOOK_BASE
-    return config.graph_base
+    if platform == "instagram":
+        return config.graph_base
+    raise UnknownPlatform(platform)
 
 
 class ClientRegistry:

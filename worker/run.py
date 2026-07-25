@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 
 from . import db
-from .clients import ClientRegistry
+from .clients import ClientRegistry, UnknownPlatform
 from .config import Config, dry_run_active, kill_switch_active, load_env
 from .logging_setup import configure_logging
 
@@ -113,7 +113,13 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
                     logger.warning("KILL_SWITCH flipped mid-batch — stopping.")
                 break
             channel = db.get_channel(conn, pub["channel_id"])
-            pub_client = pick_client(channel["platform"]) if channel else client
+            try:
+                pub_client = pick_client(channel["platform"]) if channel else client
+            except UnknownPlatform:
+                # No adapter for this platform. Hand it to publish_one anyway: it validates
+                # the platform and marks this ONE publication terminally failed, so the rest
+                # of the batch still goes out.
+                pub_client = client
             publish_one(conn, pub, config, pub_client, dry_run=dry_run,
                         asset_base_url=asset_base_url, now=now,
                         logger=logger, sleep_fn=sleep_fn)
@@ -152,8 +158,8 @@ def main() -> int:
     config = Config.from_env()
     logger = configure_logging(config.database_path.parent / "logs")
     registry = ClientRegistry(config)
-    # Default client for code paths that don't know a platform yet; per-publication
-    # selection happens inside run_once via client_for.
+    # Fallback for code paths that don't know a platform yet; every publication and
+    # metrics fetch re-resolves its own client from the channel's platform below.
     client = registry.for_platform("instagram")
 
     if "--once" in sys.argv:

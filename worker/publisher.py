@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import db
+from .clients import SUPPORTED_PLATFORMS
 from .config import Config
 
 MIN_CAROUSEL = 2
@@ -96,7 +97,11 @@ def _resolve_url(asset, asset_base_url: str | None) -> str | None:
     return None
 
 
-def _validate(post, assets, dry_run: bool, asset_base_url: str | None) -> None:
+def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str) -> None:
+    if platform not in _PUBLISHERS:
+        raise _NonRetryable(
+            f"unsupported platform '{platform}' — this worker has no adapter for it"
+        )
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
@@ -211,6 +216,34 @@ def _publish_fb_multi(client, plan, token) -> str:
     )
 
 
+def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
+    if plan["post_type"] == "single":
+        return _publish_single(client, plan, token, config, sleep_fn)
+    return _publish_carousel(client, plan, token, config, sleep_fn)
+
+
+def _publish_facebook(client, plan, token, config, sleep_fn) -> str:
+    if plan["post_type"] == "single":
+        return _publish_fb_single(client, plan, token)
+    return _publish_fb_multi(client, plan, token)
+
+
+# Publish entry point per platform. Uniform signature so the dispatch below is a lookup,
+# not a chain of ifs whose final `else` silently means "Instagram".
+_PUBLISHERS = {
+    "instagram": _publish_instagram,
+    "facebook": _publish_facebook,
+}
+
+# Platforms exposing a runtime publish quota to read before posting. Facebook Pages have
+# no content_publishing_limit endpoint; never substitute a hardcoded number.
+_QUOTA_GATED = ("instagram",)
+
+assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
+    "publisher._PUBLISHERS and clients.SUPPORTED_PLATFORMS disagree"
+)
+
+
 def _mark_failure(conn, pub, config, now, error: str, terminal: bool) -> PublishOutcome:
     attempts = pub["attempt_count"] + 1
     if terminal or attempts >= config.max_attempts:
@@ -251,7 +284,7 @@ def publish_one(
     # 1. Load + validate. Bad data/config is a terminal (non-retryable) failure.
     try:
         channel, post, assets = _load_targets(conn, pub)
-        _validate(post, assets, dry_run, asset_base_url)
+        _validate(post, assets, dry_run, asset_base_url, channel["platform"])
         used_count = conn.execute(
             "SELECT COUNT(*) FROM publications WHERE post_id=? AND channel_id=? AND status='posted'",
             (pub["post_id"], pub["channel_id"]),
@@ -279,7 +312,7 @@ def publish_one(
     # 3. Rate-limit gate: read Meta's REAL quota, cache it, refuse if exhausted.
     #    Instagram only — Facebook Pages expose no content_publishing_limit endpoint,
     #    and inventing a hardcoded number here would be worse than not gating.
-    if plan["platform"] == "instagram":
+    if plan["platform"] in _QUOTA_GATED:
         try:
             usage, total, duration = client.get_content_publishing_limit(ig, token)
             db.record_publish_limit(conn, channel["id"], usage, total, duration, _iso(now))
@@ -299,15 +332,7 @@ def publish_one(
     # 4. Publish for real.
     db.update_publication(conn, pub["id"], status="publishing", updated_at=_iso(now))
     try:
-        if plan["platform"] == "facebook":
-            if plan["post_type"] == "single":
-                media_id = _publish_fb_single(client, plan, token)
-            else:
-                media_id = _publish_fb_multi(client, plan, token)
-        elif plan["post_type"] == "single":
-            media_id = _publish_single(client, plan, token, config, sleep_fn)
-        else:
-            media_id = _publish_carousel(client, plan, token, config, sleep_fn)
+        media_id = _PUBLISHERS[plan["platform"]](client, plan, token, config, sleep_fn)
     except Exception as exc:  # noqa: BLE001 — transient publish error, retry with backoff
         log(f"publish failed: {exc}")
         return _mark_failure(conn, pub, config, now, f"publish: {exc}", terminal=False)
