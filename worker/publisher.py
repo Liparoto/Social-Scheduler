@@ -238,15 +238,23 @@ def _publish_fb_multi(client, plan, token) -> str:
 
 
 def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
-    if plan["post_type"] == "single":
+    post_type = plan["post_type"]
+    if post_type == "single":
         return _publish_single(client, plan, token, config, sleep_fn)
-    return _publish_carousel(client, plan, token, config, sleep_fn)
+    elif post_type == "carousel":
+        return _publish_carousel(client, plan, token, config, sleep_fn)
+    else:
+        raise _NonRetryable(f"instagram adapter has no publish path for post_type '{post_type}'")
 
 
 def _publish_facebook(client, plan, token, config, sleep_fn) -> str:
-    if plan["post_type"] == "single":
+    post_type = plan["post_type"]
+    if post_type == "single":
         return _publish_fb_single(client, plan, token)
-    return _publish_fb_multi(client, plan, token)
+    elif post_type == "carousel":
+        return _publish_fb_multi(client, plan, token)
+    else:
+        raise _NonRetryable(f"facebook adapter has no publish path for post_type '{post_type}'")
 
 
 def _publish_threads(client, plan, token, config, sleep_fn) -> str:
@@ -263,7 +271,7 @@ def _publish_threads(client, plan, token, config, sleep_fn) -> str:
             user, token, media_type="IMAGE",
             image_url=plan["asset_urls"][0], text=plan["caption"],
         )
-    else:
+    elif post_type == "carousel":
         children = []
         for url in plan["asset_urls"]:
             child = client.create_threads_container(
@@ -277,6 +285,8 @@ def _publish_threads(client, plan, token, config, sleep_fn) -> str:
         container = client.create_threads_container(
             user, token, media_type="CAROUSEL", children=children, text=plan["caption"]
         )
+    else:
+        raise _NonRetryable(f"threads adapter has no publish path for post_type '{post_type}'")
 
     _poll_until_finished(
         client, container, token, config, sleep_fn,
@@ -422,6 +432,13 @@ def publish_one(
     db.update_publication(conn, pub["id"], status="publishing", updated_at=_iso(now))
     try:
         media_id = _PUBLISHERS[plan["platform"]](client, plan, token, config, sleep_fn)
+    except _NonRetryable as exc:
+        # An adapter that can't handle this post_type at all (e.g. a future post_type
+        # SUPPORTED_POST_TYPES accepts but this platform's publish function doesn't
+        # branch on) is bad data/config, not a transient error — fail terminally like
+        # every other unsupported combination, never silently retry it.
+        log(f"publish failed (non-retryable): {exc}")
+        return _mark_failure(conn, pub, config, now, str(exc), terminal=True)
     except Exception as exc:  # noqa: BLE001 — transient publish error, retry with backoff
         log(f"publish failed: {exc}")
         return _mark_failure(conn, pub, config, now, f"publish: {exc}", terminal=False)

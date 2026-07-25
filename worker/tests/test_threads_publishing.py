@@ -150,6 +150,37 @@ def test_threads_dry_run_makes_no_calls(conn, config, make_publication):
     assert client.calls == []
 
 
+def test_threads_unhandled_post_type_fails_terminally_naming_the_type(
+    conn, config, make_publication, monkeypatch
+):
+    """Guard against the bare-`else` trap: SUPPORTED_POST_TYPES growing (e.g. to add
+    'reel') must not make _publish_threads silently treat an unhandled post_type as a
+    carousel. Simulate that future state by making validation accept a post_type the
+    publisher still doesn't branch on, and confirm it fails terminally and visibly
+    instead of publishing the wrong thing. 'reel' is used because it is already an
+    allowed value in the posts.post_type CHECK constraint (reserved for a future
+    phase), so it can be written to the DB without a schema change.
+    """
+    import worker.publisher as publisher_mod
+
+    monkeypatch.setattr(publisher_mod, "SUPPORTED_POST_TYPES", ("single", "carousel", "text", "reel"))
+    client = FakeGraphClient(threads_limit=(0, 250, 86400))
+    pub = make_publication(platform="threads", post_type="single", n_assets=1)
+    conn.execute("UPDATE posts SET post_type = 'reel' WHERE id = ?", (pub["post_id"],))
+    conn.commit()
+    pub = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+
+    out = publish_one(conn, pub, config, client, dry_run=False)
+
+    assert out.result == "failed"
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "failed"
+    assert row["next_retry_at"] is None
+    assert "reel" in row["last_error"]
+    # It must never have gotten far enough to actually publish anything.
+    assert "threads_publish" not in _call_kinds(client)
+
+
 def test_threads_preflight_uses_threads_quota_not_instagrams(conn):
     from worker.preflight import check_channels
 
@@ -215,11 +246,46 @@ def test_threads_metrics_map_to_our_columns(conn, config, make_publication):
 
 
 def test_threads_metrics_failure_is_nonfatal(conn, config, make_publication):
+    """One publication's insights call blowing up must not stop the run: the failing
+    publication gets no post_metrics row, but a healthy publication in the same run
+    still gets fetched and recorded.
+    """
     now = datetime.now(timezone.utc)
-    pub = _posted_threads_pub(conn, make_publication, now)
-    client = FakeGraphClient(fail_on=["threads_insights"])
+    failing_pub = _posted_threads_pub(conn, make_publication, now)
+    healthy_pub = make_publication(platform="threads", post_type="single", n_assets=1, now=now)
+    conn.execute(
+        """UPDATE publications
+              SET status='posted', is_dry_run=0, remote_post_id='threads_2',
+                  published_at=?
+            WHERE id=?""",
+        (now.isoformat(), healthy_pub["id"]),
+    )
+    conn.commit()
+    healthy_pub = conn.execute(
+        "SELECT * FROM publications WHERE id = ?", (healthy_pub["id"],)
+    ).fetchone()
 
-    assert run_metrics(conn, config, client, now) == 0
+    client = FakeGraphClient()
+    # FakeGraphClient's fail_on is all-or-nothing per call kind, with no per-media_id
+    # switch (unlike fail_child_index for carousel children). Wrap it so only the
+    # failing publication's own remote_post_id raises, proving the run continues past
+    # it to fetch the healthy one.
+    failing_media_id = failing_pub["remote_post_id"]
+    real_get_threads_insights = client.get_threads_insights
+
+    def selective_get_threads_insights(media_id, token, metrics):
+        if media_id == failing_media_id:
+            client.calls.append(("threads_insights", media_id))
+            raise RuntimeError("threads insights boom")
+        return real_get_threads_insights(media_id, token, metrics)
+
+    client.get_threads_insights = selective_get_threads_insights
+
+    assert run_metrics(conn, config, client, now) == 1
+
     assert conn.execute(
-        "SELECT COUNT(*) FROM post_metrics WHERE publication_id = ?", (pub["id"],)
+        "SELECT COUNT(*) FROM post_metrics WHERE publication_id = ?", (failing_pub["id"],)
     ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM post_metrics WHERE publication_id = ?", (healthy_pub["id"],)
+    ).fetchone()[0] == 1

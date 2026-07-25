@@ -183,7 +183,7 @@ class FakeGraphClient:
             kind = "threads_image"
             value = image_url
         self.calls.append((kind, value))
-        if kind in self.fail_on or "create" in self.fail_on:
+        if kind in self.fail_on:
             raise RuntimeError("threads create container boom")
         self._n += 1
         return f"threads-cont-{self._n}"
