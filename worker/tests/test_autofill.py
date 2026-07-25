@@ -273,6 +273,34 @@ def test_text_post_not_selected_for_instagram_channel(conn):
     assert p not in picks(conn, ch, 10)
 
 
+def test_caption_over_telegram_limit_skipped_but_selected_for_instagram(conn):
+    """A caption fine for Instagram (no enforced limit) but over Telegram's 1024-char
+    single-image limit must never be auto-queued to the Telegram channel — queuing it
+    would fail terminally at publish every time, and being evergreen it would keep
+    getting re-selected forever. The same post must still be selectable for Instagram,
+    which has no caption_chars entry for 'single' (so nothing to enforce there)."""
+    tg = make_channel(conn, platform="telegram")
+    ig = make_channel(conn, platform="instagram")
+    p = make_post(conn)  # single image, no channel target yet
+    conn.execute("UPDATE posts SET caption=? WHERE id=?", ("x" * 1400, p))
+    target(conn, p, tg)
+    target(conn, p, ig)
+    conn.commit()
+    assert p not in picks(conn, tg, 10)
+    assert p in picks(conn, ig, 10)
+
+
+def test_caption_within_telegram_limit_is_selected(conn):
+    """The gate must not over-trigger: a caption within Telegram's limit is still
+    selectable there."""
+    tg = make_channel(conn, platform="telegram")
+    p = make_post(conn)
+    conn.execute("UPDATE posts SET caption=? WHERE id=?", ("short caption", p))
+    target(conn, p, tg)
+    conn.commit()
+    assert p in picks(conn, tg, 10)
+
+
 def test_blackout_overrides_eligibility(conn):
     ch = make_channel(conn)
     p = make_post(conn, ch)

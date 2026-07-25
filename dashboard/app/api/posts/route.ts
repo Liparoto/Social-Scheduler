@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
   // Same check content/route.ts's PATCH does before saving — a caption that's fine to
   // *look* at in the composer but too long for a targeted platform must not be allowed
   // to schedule, or it just fails terminally at publish instead.
-  const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption);
+  const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption, postType);
   if (captionError) {
     return NextResponse.json({ error: captionError }, { status: 400 });
   }

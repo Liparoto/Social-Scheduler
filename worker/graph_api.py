@@ -17,9 +17,12 @@ import json
 
 import requests
 
+from .redact import redact
+
 
 class GraphAPIError(Exception):
-    """Raised when the Graph API returns a non-OK response."""
+    """Raised when the Graph API returns a non-OK response, or the underlying request
+    fails at the network layer. Never carries an unredacted access_token."""
 
 
 class GraphClient:
@@ -36,15 +39,24 @@ class GraphClient:
 
     # -- low-level helpers ---------------------------------------------------------
     def _post(self, path: str, data: dict) -> dict:
-        resp = self.session.post(f"{self.base}/{path}", data=data, timeout=self.timeout)
+        try:
+            resp = self.session.post(f"{self.base}/{path}", data=data, timeout=self.timeout)
+        except requests.RequestException as exc:
+            # `from None`: exc's own str() carries the unredacted access_token (it's a
+            # query param on the request URL) — never let it survive into a traceback
+            # via __cause__. The redacted message above already carries what's useful.
+            raise GraphAPIError(f"POST {path} -> request failed: {redact(str(exc))}") from None
         if not resp.ok:
-            raise GraphAPIError(f"POST {path} -> {resp.status_code}: {resp.text}")
+            raise GraphAPIError(f"POST {path} -> {resp.status_code}: {redact(resp.text)}")
         return resp.json()
 
     def _get(self, path: str, params: dict) -> dict:
-        resp = self.session.get(f"{self.base}/{path}", params=params, timeout=self.timeout)
+        try:
+            resp = self.session.get(f"{self.base}/{path}", params=params, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise GraphAPIError(f"GET {path} -> request failed: {redact(str(exc))}") from None
         if not resp.ok:
-            raise GraphAPIError(f"GET {path} -> {resp.status_code}: {resp.text}")
+            raise GraphAPIError(f"GET {path} -> {resp.status_code}: {redact(resp.text)}")
         return resp.json()
 
     # -- publishing flow -----------------------------------------------------------

@@ -169,15 +169,16 @@ export async function PATCH(
 
   // Cross-field check: whatever this post's targets and caption variants end up being
   // (this request's values where sent, the existing saved ones otherwise), does every
-  // targeted channel's actual caption length fit its platform's limit? Threads' 500-char
-  // cap is the only one today, but this reads any platform's maxCaptionChars.
+  // targeted channel's actual caption length fit its platform's limit for this post's
+  // type? This route doesn't change post_type/assets, so post.post_type (unaffected by
+  // this request) is the right postType to check against.
   const effectiveTargetIds = targetChannelIds ?? getPostTargets(postId);
   const effectiveVariants =
     captionVariants ?? getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
   const effectiveChannels = effectiveTargetIds
     .map((cid) => getChannel(cid))
     .filter((c): c is NonNullable<typeof c> => !!c); // already rejected above if it came from this request
-  const captionError = captionLimitError(effectiveChannels, effectiveVariants, post.caption);
+  const captionError = captionLimitError(effectiveChannels, effectiveVariants, post.caption, post.post_type);
   if (captionError) {
     return NextResponse.json({ error: captionError }, { status: 400 });
   }

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import requests
+
 from worker import db
+from worker.graph_api import GraphClient
 from worker.publisher import publish_one
 from worker.tests.conftest import FakeGraphClient
 
@@ -313,3 +316,58 @@ def test_facebook_multi_photo_mid_carousel_child_failure_leaves_it_retryable(
     assert row["last_error"] is not None
     assert "child 3" in row["last_error"]
     assert row["next_retry_at"] is not None
+
+
+# ---- Credential redaction (end to end) -------------------------------------------
+# A DNS blip or connection failure during a real publish must never persist the
+# access_token to publications.last_error — the dashboard renders that column directly
+# on the Overview page. This exercises the REAL GraphClient (not the FakeGraphClient
+# used everywhere else in this file) wired to a session that fails at the network layer,
+# through publish_one's real error handling and _mark_failure's real DB write, then reads
+# the value back from the database exactly like a human checking the dashboard would.
+TOKEN_VALUE = "EAAB-super-secret-real-meta-access-token"
+
+
+class NetworkFailureSession:
+    """Mimics a genuine requests.ConnectionError: its message embeds the full request
+    URL, access_token and all, exactly like the real requests library does on a DNS
+    failure or connection refusal."""
+
+    def get(self, url, params=None, timeout=None):
+        token = (params or {}).get("access_token", "")
+        raise requests.ConnectionError(
+            f"HTTPSConnectionPool(host='graph.facebook.com', port=443): Max retries "
+            f"exceeded with url: {url}?access_token={token} "
+            f"(Caused by NewConnectionError('...: Name or service not known'))"
+        )
+
+    def post(self, url, data=None, timeout=None):
+        token = (data or {}).get("access_token", "")
+        raise requests.ConnectionError(
+            f"HTTPSConnectionPool(host='graph.facebook.com', port=443): Max retries "
+            f"exceeded with url: {url}?access_token={token} "
+            f"(Caused by NewConnectionError('...: Name or service not known'))"
+        )
+
+
+def test_network_failure_during_publish_never_persists_the_token_to_last_error(
+    conn, config, make_publication, monkeypatch
+):
+    # Force the publication's channel token to the known secret value so we can assert
+    # on it precisely (make_publication always inserts "tok-123").
+    pub = make_publication(post_type="single", n_assets=1)
+    conn.execute(
+        "UPDATE channels SET access_token = ? WHERE id = ?", (TOKEN_VALUE, pub["channel_id"])
+    )
+    conn.commit()
+    pub = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+
+    real_client = GraphClient(config.graph_version, session=NetworkFailureSession())
+    out = publish_one(conn, pub, config, real_client, dry_run=False, now=NOW)
+
+    assert out.result == "retry_scheduled"  # transient network error -> retryable
+    row = _reload(conn, pub["id"])
+    assert row["last_error"] is not None
+    assert TOKEN_VALUE not in row["last_error"]
+    # still tells a human what actually went wrong
+    assert "graph.facebook.com" in row["last_error"] or "connection" in row["last_error"].lower()

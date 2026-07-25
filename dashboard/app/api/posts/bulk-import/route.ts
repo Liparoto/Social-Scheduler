@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createDraftPostsBulk, getAsset, getChannel, getPeriod, listTags } from "@/lib/queries";
 import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -55,6 +56,24 @@ export async function POST(req: NextRequest) {
       }
     }
     targetChannelIds = body.target_channel_ids;
+  }
+
+  // Same check the other creation routes make. Each item becomes its own 'single' post
+  // with its own caption as the (only) generic variant — if target_channel_ids is set
+  // and content_status ends up "ready", this post is immediately autofill-eligible, so
+  // an over-limit caption must be rejected here rather than silently created and left
+  // for autofill to skip forever.
+  if (targetChannelIds) {
+    const targetChannels = targetChannelIds.map((cid) => getChannel(cid)!);
+    for (const item of items) {
+      const captionError = captionLimitError(targetChannels, [], item.caption, "single");
+      if (captionError) {
+        return NextResponse.json(
+          { error: `Asset ${item.asset_id}: ${captionError}` },
+          { status: 400 }
+        );
+      }
+    }
   }
 
   const validTagIds = new Set(listTags().map((t) => t.id));

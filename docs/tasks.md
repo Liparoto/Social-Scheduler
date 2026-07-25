@@ -514,6 +514,57 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
         first-party Accounts Center feature and does NOT imply API access to a profile. A Page is
         the only route; a Page need not be a business (Digital Creator etc. is fine).
       - Undecided: which Page the first real post targets.
+- [x] **Discord + Telegram adapters (publish only) — DONE 2026-07-25.** Fourth and fifth
+      platforms, registered in every platform registry (`clients._BASE_URLS`/
+      `_API_VERSIONS`/`PLATFORM_CAPS`/`_CLIENT_FACTORIES`, `publisher._PUBLISHERS`/
+      `_QUOTA_GATED`, `preflight._CHECKS`, `metrics._FETCHERS`), each guarded by an
+      assert against `SUPPORTED_PLATFORMS`. No new tables —
+      `migrations/0009_discord_telegram.sql` only widened `channels.platform`'s check
+      constraint.
+      - **Discord:** publish is a single POST to the webhook URL. Text is `content`
+        (≤2000 chars); images go multipart as `payload_json` + `files[0]`...`files[9]`
+        (≤10 attachments). The webhook URL is both address and secret, so a Discord
+        channel has **no account id** — the dashboard asks for exactly one field.
+      - **Telegram:** `sendMessage` / `sendPhoto` / `sendMediaGroup` under
+        `api.telegram.org/bot{token}/...`. Text ≤4096 chars, but only **1024** once a
+        photo is attached; albums are 2–10 items. Needs the bot token plus the channel
+        (`@name` or numeric chat id).
+      - **Neither platform opens the cloudflared tunnel** — both upload file bytes
+        directly in the request, unlike Meta which must fetch a public URL
+        (`PLATFORM_CAPS.uploads_media_bytes = True` for both).
+      - **Neither platform has metrics or a publish-quota endpoint.** Their
+        `metrics._FETCHERS` entry is explicitly `None` (not merely absent), and
+        `publisher._QUOTA_GATED` is `False` for both — posted rows show no metrics
+        strip, and auto-fill's "prefer top performers" ranking scores every
+        Discord/Telegram post as 0, same standing gap as Facebook/Threads, until the
+        BPP work below revisits the ranking formula.
+      - **Preflight:** Discord does a read-only `GET` on the webhook URL; Telegram does
+        `getMe` then `getChat` — the second is what catches "the bot isn't a channel
+        admin," the mistake people actually make.
+      - **Credential redaction:** all four Meta/Discord/Telegram clients now redact
+        credentials from error text before it can reach `publications.last_error` (and
+        therefore the dashboard) — the bot token and webhook URL both live in the
+        request URL, so an un-redacted network error would otherwise have leaked them.
+      - Full suite green (304 passing); dashboard `tsc` clean. Dry-run verified
+        end-to-end (text/image/album, both platforms) against a **copy** of the real
+        database — confirmed each reports `dry_run` with the right platform and post
+        type, and that no tunnel opens; the copy was deleted afterward and the real
+        database's row counts + `PRAGMA foreign_key_check` were confirmed unchanged
+        before and after. Setup guide: `docs/other-platforms-setup.md` (linked from
+        `docs/meta-setup.md` and `readme.md`). Verified facts: `reference.md`.
+      - **Owner-gated follow-up:** a real post to each still needs the owner to create
+        a Discord webhook URL and promote a Telegram bot to admin on a real channel —
+        not attempted here, same pattern as the Facebook/Threads real-post items above.
+      - **Known gap #1 — no delete-channel UI.** Removing a channel currently requires
+        raw SQL; there's no dashboard control for it yet (pre-existing gap, not
+        Discord/Telegram-specific, but noticed while adding these two).
+      - **Known gap #2 — image aspect ratio (open decision, not a bug).** Discord and
+        Telegram currently receive the **Instagram-conformed** image derivative
+        (cropped/padded to the 4:5–1.91:1 range) even though neither platform
+        constrains aspect ratio, so a post to either could show a needlessly
+        letterboxed/cropped image versus what was originally uploaded. Flagging for a
+        future decision rather than fixing now — may need its own "platform-native
+        derivative" concept in the image-conformance pipeline.
 - [ ] Reels/video (async container, status polling, `video_url`).
 - [ ] Stories.
 - [ ] First-comment automation (post-publish comment endpoint).

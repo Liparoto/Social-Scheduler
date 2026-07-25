@@ -96,3 +96,7 @@ a real Instagram account and publish. Verify credentials anytime with
 
 > Requires an Instagram **professional** (Business/Creator) account. For your own accounts,
 > Meta **Standard Access + Development mode** is sufficient — no App Review needed.
+
+Discord and Telegram channels don't need any of the Meta setup above — see
+**`docs/other-platforms-setup.md`** instead. Setup is shorter for both: no public URL or
+tunnel is needed, since the worker uploads the image bytes directly.

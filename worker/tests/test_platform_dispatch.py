@@ -58,13 +58,14 @@ def _force_platform(conn, channel_id: int, platform: str) -> None:
 
 def test_all_registries_cover_exactly_the_supported_platforms():
     """The guard that makes adding a platform mechanical: miss a registry, fail here."""
-    from worker.clients import PLATFORM_CAPS, _API_VERSIONS, _BASE_URLS
+    from worker.clients import PLATFORM_CAPS, _API_VERSIONS, _BASE_URLS, _CLIENT_FACTORIES
     from worker.metrics import _FETCHERS
     from worker.preflight import _CHECKS
     from worker.publisher import _PUBLISHERS, _QUOTA_GATED, _QUOTA_READERS
 
     assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), "clients base-url registry out of sync"
     assert set(_API_VERSIONS) == set(SUPPORTED_PLATFORMS), "clients API-version registry out of sync"
+    assert set(_CLIENT_FACTORIES) == set(SUPPORTED_PLATFORMS), "clients client-factory registry out of sync"
     assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), "publisher registry out of sync"
     assert set(_CHECKS) == set(SUPPORTED_PLATFORMS), "preflight registry out of sync"
     assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), "metrics registry out of sync"
@@ -88,6 +89,26 @@ def test_neither_meta_platform_claims_text_support():
     assert PLATFORM_CAPS["instagram"].supports_text is False
     assert PLATFORM_CAPS["facebook"].supports_text is False
     assert PLATFORM_CAPS["instagram"].max_carousel == 10
+
+
+def test_caption_limits_are_declared_per_post_type():
+    from worker.clients import PLATFORM_CAPS
+
+    # Threads' 500 applies to every type it supports; Meta declares no limit at all.
+    assert PLATFORM_CAPS["threads"].caption_limit("text") == 500
+    assert PLATFORM_CAPS["threads"].caption_limit("single") == 500
+    assert PLATFORM_CAPS["instagram"].caption_limit("single") is None
+    # An unknown post type must not invent a limit.
+    assert PLATFORM_CAPS["threads"].caption_limit("reel") is None
+
+
+def test_meta_platforms_do_not_upload_bytes_themselves():
+    from worker.clients import PLATFORM_CAPS
+
+    # Meta fetches media from a public URL, which is what the tunnel exists for.
+    for platform in ("instagram", "facebook", "threads"):
+        assert PLATFORM_CAPS[platform].uploads_media_bytes is False
+        assert PLATFORM_CAPS[platform].uses_account_id is True
 
 
 def test_an_unsupported_platform_fails_terminally_and_visibly(

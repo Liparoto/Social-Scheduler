@@ -83,7 +83,7 @@ export function PostEditor({
   async function save() {
     setError(null);
     setNotice(null);
-    const overLimit = overLimitCaptionVariants(captions);
+    const overLimit = overLimitCaptionVariants(captions, post.post_type);
     if (overLimit.length > 0) {
       setError(
         `Caption is over the limit for: ${overLimit
@@ -187,7 +187,7 @@ export function PostEditor({
 
       {/* Caption variants */}
       <section className={card}>
-        <CaptionVariantsEditor value={captions} onChange={setCaptions} />
+        <CaptionVariantsEditor value={captions} onChange={setCaptions} postType={post.post_type} />
       </section>
 
       {/* Targets */}

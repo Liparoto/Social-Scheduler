@@ -3,6 +3,10 @@
 A step-by-step to connect your **own** Instagram professional account and publish one
 real post — staying in **Development mode**, no App Review, no paid tools.
 
+> Looking for **Discord** or **Telegram** instead? Those aren't part of Meta at all —
+> see **`docs/other-platforms-setup.md`**, a much shorter setup with no public URL or
+> tunnel required.
+
 > Verified against Meta docs on 2026-07-22 (API v25.0). Meta iterates the dashboard
 > wording, so exact button labels may differ slightly; the panel locations are stable.
 > Items marked ⚠ couldn't be pinned to a single authoritative page.

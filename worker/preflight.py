@@ -28,9 +28,10 @@ from __future__ import annotations
 import sys
 
 from . import db
-from .clients import ClientRegistry
+from .clients import PLATFORM_CAPS, ClientRegistry
 from .config import Config
 from .graph_api import GraphAPIError
+from .redact import redact
 
 
 def _check_facebook(client, ch, name, print_fn) -> None:
@@ -62,12 +63,37 @@ def _check_threads(client, ch, name, print_fn) -> None:
     )
 
 
+def _check_discord(client, ch, name, print_fn) -> None:
+    """A plain GET on the webhook URL — the URL IS the credential, so this proves
+    reachability without publishing anything. Never print the URL itself, only what
+    Discord reports the webhook is named."""
+    info = client.get_webhook(ch["access_token"])
+    webhook_name = info.get("name", ch["account_name"])
+    print_fn(
+        f"  ✓ {name}: webhook OK — reachable ({webhook_name}; webhooks have no publish quota)"
+    )
+
+
+def _check_telegram(client, ch, name, print_fn) -> None:
+    """getMe proves the bot token is valid; getChat proves the bot can actually see the
+    target chat (a valid token alone doesn't guarantee that). Neither publishes anything
+    or exposes a publish quota — Telegram's Bot API has none."""
+    client.get_me(ch["access_token"])
+    chat = client.get_chat(ch["access_token"], ch["remote_account_id"])
+    title = chat.get("title") or chat.get("username") or ch["account_name"]
+    print_fn(
+        f"  ✓ {name}: token OK — chat reachable ({title}; no publish quota)"
+    )
+
+
 # One check per platform. A bare `else` here is how a Facebook Page got preflighted
 # against Instagram's quota endpoint; an unknown platform must be reported, not guessed.
 _CHECKS = {
     "instagram": _check_instagram,
     "facebook": _check_facebook,
     "threads": _check_threads,
+    "discord": _check_discord,
+    "telegram": _check_telegram,
 }
 
 
@@ -84,7 +110,12 @@ def check_channels(rows, registry: ClientRegistry, *, print_fn=print) -> bool:
             print_fn(f"  ✗ {name}: no access token set")
             all_ok = False
             continue
-        if not ch["remote_account_id"]:
+        caps = PLATFORM_CAPS.get(ch["platform"])
+        # Discord's webhook URL is both address and secret, so it has no separate
+        # account id to require — only platforms that actually use one (caps.uses_account_id,
+        # or an unrecognised platform where we can't yet tell) are checked for it.
+        needs_account_id = caps is None or caps.uses_account_id
+        if needs_account_id and not ch["remote_account_id"]:
             print_fn(f"  ✗ {name}: no account id set")
             all_ok = False
             continue
@@ -99,10 +130,10 @@ def check_channels(rows, registry: ClientRegistry, *, print_fn=print) -> bool:
         try:
             check(registry.for_platform(ch["platform"]), ch, name, print_fn)
         except GraphAPIError as exc:
-            print_fn(f"  ✗ {name}: {exc}")
+            print_fn(f"  ✗ {name}: {redact(str(exc))}")
             all_ok = False
         except Exception as exc:  # noqa: BLE001
-            print_fn(f"  ✗ {name}: {exc}")
+            print_fn(f"  ✗ {name}: {redact(str(exc))}")
             all_ok = False
     return all_ok
 

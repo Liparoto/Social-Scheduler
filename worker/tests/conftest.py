@@ -212,9 +212,118 @@ class FakeGraphClient:
         return dict(self.threads_insights)
 
 
+class FakeDiscordClient:
+    """Same method surface as DiscordClient; records calls, no network."""
+
+    def __init__(self, fail_on=None, webhook_info=None):
+        self.calls = []
+        self.fail_on = set(fail_on or [])
+        self.webhook_info = webhook_info if webhook_info is not None else {
+            "id": "wh-1", "name": "Test Webhook", "channel_id": "chan-1",
+        }
+        self._n = 0
+
+    def send_message(self, webhook_url, *, content=None, files=None):
+        kind = "discord_files" if files else "discord_text"
+        self.calls.append((kind, content, list(files) if files else None))
+        if kind in self.fail_on or "discord_send" in self.fail_on:
+            raise RuntimeError("discord send boom")
+        self._n += 1
+        return {"id": f"discord-msg-{self._n}"}
+
+    def get_webhook(self, webhook_url):
+        self.calls.append(("discord_webhook", webhook_url))
+        if "discord_webhook" in self.fail_on:
+            raise RuntimeError(f"discord webhook boom: {webhook_url}")
+        return dict(self.webhook_info)
+
+    def get_webhook_limit(self, webhook_url):
+        """Discord has no real publish-quota endpoint — this exists only so a test can
+        prove the publisher never calls it. Records the call before returning/raising so
+        a future regression that wires Discord into quota-gating shows up here instead
+        of silently vanishing into publish_one's swallowed exception handling."""
+        self.calls.append(("discord_limit", webhook_url))
+        if "discord_limit" in self.fail_on:
+            raise RuntimeError("discord has no quota endpoint")
+        return (0, 0, 0)
+
+
+class FakeTelegramClient:
+    """Same method surface as TelegramClient; records calls, no network."""
+
+    def __init__(self, fail_on=None, chat_info=None):
+        self.calls = []
+        self.fail_on = set(fail_on or [])
+        self.chat_info = chat_info if chat_info is not None else {
+            "id": -100123, "title": "Test Channel",
+        }
+        self._n = 0
+
+    def send_message(self, token, chat_id, text):
+        self.calls.append(("tg_message", chat_id, text))
+        if "tg_message" in self.fail_on:
+            raise RuntimeError("telegram message boom")
+        self._n += 1
+        return {"message_id": self._n}
+
+    def send_photo(self, token, chat_id, photo, caption=None):
+        self.calls.append(("tg_photo", chat_id, photo))
+        if "tg_photo" in self.fail_on:
+            raise RuntimeError("telegram photo boom")
+        self._n += 1
+        return {"message_id": self._n}
+
+    def send_media_group(self, token, chat_id, photos, caption=None):
+        self.calls.append(("tg_media_group", chat_id, list(photos)))
+        if "tg_media_group" in self.fail_on:
+            raise RuntimeError("telegram media group boom")
+        first = self._n + 1
+        self._n += len(photos)
+        return [{"message_id": first + i} for i in range(len(photos))]
+
+    def get_me(self, token):
+        self.calls.append(("tg_getme", None))
+        if "tg_getme" in self.fail_on:
+            raise RuntimeError("telegram getMe boom")
+        return {"id": 999, "is_bot": True, "username": "testbot"}
+
+    def get_chat(self, token, chat_id):
+        self.calls.append(("tg_getchat", chat_id))
+        if "tg_getchat" in self.fail_on:
+            # Shaped like the real client's exception text (the token embedded in the
+            # request URL path, e.g. from a raised ConnectionError/HTTPError) rather than
+            # a string that could never contain the credential — this is what proves
+            # redact() is actually doing something for this test.
+            raise RuntimeError(
+                f"telegram getChat boom: url=https://api.telegram.org/bot{token}/getChat"
+            )
+        return dict(self.chat_info)
+
+    def get_bot_limit(self, token):
+        """Telegram's Bot API has no real publish-quota endpoint — this exists only so a
+        test can prove the publisher never calls it. Records the call before returning/
+        raising so a future regression that wires Telegram into quota-gating shows up
+        here instead of silently vanishing into publish_one's swallowed exception
+        handling."""
+        self.calls.append(("tg_limit", token))
+        if "tg_limit" in self.fail_on:
+            raise RuntimeError("telegram has no quota endpoint")
+        return (0, 0, 0)
+
+
 @pytest.fixture
 def fake_client():
     return FakeGraphClient()
+
+
+@pytest.fixture
+def fake_discord_client():
+    return FakeDiscordClient()
+
+
+@pytest.fixture
+def fake_telegram_client():
+    return FakeTelegramClient()
 
 
 @pytest.fixture
@@ -224,24 +333,39 @@ def make_publication(conn):
     def _make(post_type="single", n_assets=1, public_url="https://assets.test/a.jpg",
               scheduled_offset_min=-1, with_token=True, now=None,
               platform="instagram", remote_account_id=None):
-        if remote_account_id is None:
+        # Discord has no account id at all (the webhook URL is both address and secret),
+        # so its remote_account_id stays None even when the caller doesn't pass one —
+        # every other platform gets a sensible per-platform default.
+        if remote_account_id is None and platform != "discord":
             if platform == "facebook":
                 remote_account_id = "PAGE1"
             elif platform == "threads":
                 remote_account_id = "THREADS1"
+            elif platform == "telegram":
+                remote_account_id = "@testchannel"
             else:
                 remote_account_id = "178414"
         if platform == "facebook":
             account_name = "Test FB Page"
         elif platform == "threads":
             account_name = "Test Threads"
+        elif platform == "discord":
+            account_name = "Test Discord"
+        elif platform == "telegram":
+            account_name = "Test Telegram"
         else:
             account_name = "Test IG"
+        if not with_token:
+            access_token = None
+        elif platform == "discord":
+            # A fake webhook URL — Discord's credential IS the address, not a separate token.
+            access_token = "https://discord.com/api/webhooks/12345/faketoken"
+        else:
+            access_token = "tok-123"
         cur = conn.execute(
             """INSERT INTO channels (platform, account_name, remote_account_id, access_token)
                VALUES (?, ?, ?, ?)""",
-            (platform, account_name, remote_account_id,
-             "tok-123" if with_token else None),
+            (platform, account_name, remote_account_id, access_token),
         )
         channel_id = cur.lastrowid
         cur = conn.execute(

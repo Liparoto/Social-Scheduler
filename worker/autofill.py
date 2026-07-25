@@ -22,6 +22,7 @@ from . import db
 from .clients import PLATFORM_CAPS
 from .config import Config
 from .periods import in_season, local_date, period_from_row
+from .publisher import _select_caption
 from .scheduling import parse_iso, parse_weekly_cadence, weekly_date_slots
 from .time_of_day import band_times, post_bands, resolve_slot_time
 
@@ -80,6 +81,7 @@ def select_candidates(conn, channel_id: int, now):
         f"""
         SELECT
           p.id AS post_id,
+          p.post_type AS post_type,
           p.content_kind AS content_kind,
           p.cooldown_days AS cooldown_days,
           (SELECT MAX(pub.published_at) FROM publications pub
@@ -128,8 +130,39 @@ def _post_periods(conn, post_id: int):
     return green, blackout
 
 
+def _caption_too_long_for_channel(conn, channel, post_id: int, post_type: str) -> bool:
+    """True when the caption this candidate would actually publish with on `channel`
+    exceeds that channel's platform's caption limit for this post_type.
+
+    Uses the SAME caption resolution the publisher uses at publish time
+    (publisher._select_caption: platform-specific variant, else generic, else the
+    post's base caption — rotated by how many times this post/channel pair has already
+    posted) so this gate can't drift from what would actually be selected and sent.
+    Mirroring instead of approximating matters here: a candidate that looks fine under a
+    naive "just check post.caption" reading can still be the over-limit variant once
+    rotation picks it.
+
+    An evergreen post over a channel's limit must never be queued in the first place —
+    once queued, the worker fails it terminally every retry, and evergreen content keeps
+    getting re-selected, so it fails forever with nothing in the UI having warned.
+    """
+    caps = PLATFORM_CAPS.get(channel["platform"])
+    if caps is None:
+        return False
+    limit = caps.caption_limit(post_type)
+    if limit is None:
+        return False
+    used_count = conn.execute(
+        "SELECT COUNT(*) FROM publications WHERE post_id=? AND channel_id=? AND status='posted'",
+        (post_id, channel["id"]),
+    ).fetchone()[0]
+    caption = _select_caption(conn, post_id, channel["platform"], used_count)
+    return caption is not None and len(caption) > limit
+
+
 def eligible_candidates(conn, channel, now, limit: int):
-    """Apply cooldown, one-time, and period gates to the SQL candidates; return <= limit."""
+    """Apply cooldown, one-time, period, and caption-length gates to the SQL candidates;
+    return <= limit."""
     reuse_default = channel["reuse_min_age_days"]
     today_local = local_date(now, channel["timezone"])
     out = []
@@ -144,6 +177,10 @@ def eligible_candidates(conn, channel, now, limit: int):
                 continue  # still within cooldown
         green, blackout = _post_periods(conn, r["post_id"])
         if not in_season(green, blackout, today_local):
+            continue
+        if _caption_too_long_for_channel(conn, channel, r["post_id"], r["post_type"]):
+            # Over this channel's limit: never queue it here to fail terminally later.
+            # Other channels (e.g. Instagram, no caption limit) still get to select it.
             continue
         out.append(r)
         if len(out) >= limit:

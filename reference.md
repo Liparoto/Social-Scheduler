@@ -203,6 +203,79 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
   `worker/tests/test_clients.py::test_threads_resolves_to_its_own_api_version_through_the_registry`.
   Re-check `THREADS_API_VERSION` periodically against live docs, same as `META_GRAPH_VERSION`.
 
+### Discord webhook publishing (verified against code 2026-07-25)
+- **Not a Meta/Graph API at all.** Discord webhooks are a single POST endpoint per
+  channel: **the webhook URL itself is the credential** — there is no separate token
+  parameter and no account id. Never interpolate the webhook URL into an exception
+  message or log line; `worker/discord_api.py` runs every error string through
+  `redact()` before raising, since a `requests.RequestException`'s own `str()` embeds
+  the request URL.
+- **Text-only:** `POST <webhook_url>` with JSON body `{"content": "..."}`.
+- **With attachments:** switch to `multipart/form-data` — one part named `payload_json`
+  carrying the same JSON payload (`{"content": ...}`), plus one part per file named
+  `files[0]`, `files[1]`, ... `files[n]`. A request must carry at least one of
+  `content` or `files`.
+- **Empty-body 204 is normal.** Discord replies with an empty 204 (not JSON) for a
+  successful webhook post unless the webhook is asked to wait for the message, so
+  response parsing must be defensive (`resp.json()` can raise `ValueError` on an empty
+  body) rather than assuming a body is always present.
+- **Preflight:** a plain `GET` on the webhook URL returns the webhook object (`id`,
+  `name`, `channel_id`). This is read-only and proves reachability without posting
+  anything — used as the preflight check instead of any publish-quota call, because
+  webhooks have no publish quota to read.
+- **Limits:** 2000 characters per message; up to 10 file attachments per message.
+- **No metrics, no quota endpoint.** `worker/metrics.py`'s `_FETCHERS["discord"]` is
+  explicitly `None` (not merely absent) — a Discord post's row shows no metrics strip,
+  by design, not by omission.
+- **Uploads bytes directly — no tunnel.** `PLATFORM_CAPS["discord"].uploads_media_bytes
+  = True`, so `run.py`'s `_pub_needs_tunnel` check returns `False` for Discord
+  publications regardless of whether the asset has a stored `public_url`; the worker
+  never opens cloudflared for a Discord-only batch.
+
+### Telegram Bot API publishing (verified against code 2026-07-25)
+- **Base host:** `https://api.telegram.org/bot<token>/<method>`. The bot token lives in
+  the URL **path**, not a header or body field — far easier to leak by accident than a
+  normal credential. `worker/telegram_api.py` redacts the token out of every URL and
+  error string before it can be raised or logged.
+- **`{"ok": false}` on HTTP 200 — the real gotcha.** Telegram's success signal is the
+  `ok` field in the JSON response body, **not the HTTP status code**: a request can
+  come back `200 OK` with `{"ok": false, "description": "..."}` in the body (e.g. the
+  bot isn't an admin of the target chat). The client checks `resp.ok` **and**
+  `body.get("ok")` together — checking the status code alone would treat this as
+  success.
+- **Methods used:**
+  - `getMe` — verifies the bot token is valid (preflight only, no chat needed).
+  - `getChat` — verifies the bot can actually see `chat_id` (preflight; catches "bot
+    exists but was never added to the channel or isn't an admin", the mistake people
+    actually make — see `docs/other-platforms-setup.md`).
+  - `sendMessage` — text-only post: `{"chat_id": ..., "text": ...}`.
+  - `sendPhoto` — single image: `{"chat_id": ..., "caption": ...}` + a `photo` file
+    part.
+  - `sendMediaGroup` — album (2–10 photos): `media` is a JSON-encoded list of
+    `{"type": "photo", "media": "attach://file0"}`-style objects, one per photo, with
+    the caption set only on the **first** item; each `attach://<name>` refers to a
+    same-named multipart file part (`files={"file0": ..., "file1": ..., ...}`) rather
+    than a URL — this `attach://` naming is how Telegram matches a media-list entry to
+    its uploaded bytes in the same request.
+- **Limits:** 4096 characters for a text-only message, but only **1024** once a photo
+  is attached (`sendPhoto`/`sendMediaGroup` caption limit) — a caption that fits a text
+  post can still be rejected once media is attached. Albums need 2–10 items.
+- **No metrics, no quota endpoint.** Same as Discord: `_FETCHERS["telegram"]` is
+  explicitly `None`, and the Bot API has no publish-quota call to read, so
+  `publisher._QUOTA_GATED["telegram"]` is `False` (a real absence of an endpoint, not
+  an oversight).
+- **Uploads bytes directly — no tunnel.** Same as Discord:
+  `PLATFORM_CAPS["telegram"].uploads_media_bytes = True`, so Telegram publications never
+  trigger the cloudflared tunnel.
+
+### Schema note (Discord/Telegram)
+No new tables. `migrations/0009_discord_telegram.sql` widened `channels.platform`'s
+check constraint to accept `'discord'` and `'telegram'` alongside the existing
+platforms — that is the only schema change either platform needed. Both are registered
+in every platform registry (`clients._BASE_URLS`/`_API_VERSIONS`/`PLATFORM_CAPS`/
+`_CLIENT_FACTORIES`, `publisher._PUBLISHERS`/`_QUOTA_GATED`, `preflight._CHECKS`,
+`metrics._FETCHERS`), each guarded by an assert against `SUPPORTED_PLATFORMS`.
+
 ### Open items to resolve at implementation time
 1. Confirm the **actual** `quota_total` per account at runtime (50 vs 100).
 2. Confirm the exact **Facebook Page** publish + metrics endpoints when we build that adapter
