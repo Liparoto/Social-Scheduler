@@ -216,6 +216,52 @@ def test_discord_metrics_are_skipped_but_other_publications_still_process(
     assert len(dc_rows) == 0
 
 
+def test_discord_manual_refresh_flag_is_cleared_after_one_skipped_attempt(
+    conn, config, fake_client, fake_discord_client
+):
+    """A manually-flagged Discord publication must still be selected once (so the flag
+    clears), even though Discord has no metrics endpoint and gets skipped every cycle
+    when picked up automatically. Before the fix, the platform exclusion in
+    publications_needing_metrics applied to the manual arm too, so this row was never
+    selected at all, the flag was never cleared, and 'Refresh all metrics' would
+    re-flag + re-skip it forever (violating docs/design-metrics-refresh.md's
+    one-attempt-then-clear contract)."""
+    dc_channel = conn.execute(
+        "INSERT INTO channels (platform, account_name, remote_account_id, access_token) "
+        "VALUES ('discord','Disc',NULL,'https://discord.com/api/webhooks/1/tok')"
+    ).lastrowid
+    dc_post = conn.execute("INSERT INTO posts (post_type) VALUES ('single')").lastrowid
+    published_at = NOW.isoformat()
+    dc_pub = conn.execute(
+        """INSERT INTO publications
+             (post_id, channel_id, scheduled_at, status, published_at, remote_post_id,
+              is_dry_run, metrics_refresh_requested_at)
+           VALUES (?,?,?, 'posted', ?, 'discord-msg-1', 0, ?)""",
+        (dc_post, dc_channel, published_at, published_at, published_at),
+    ).lastrowid
+    conn.commit()
+
+    def client_for(platform):
+        return fake_discord_client
+
+    fetched = run_metrics(conn, config, fake_client, NOW, client_for=client_for)
+
+    assert fetched == 0
+    assert fake_discord_client.calls == []
+    row = conn.execute(
+        "SELECT metrics_refresh_requested_at FROM publications WHERE id = ?", (dc_pub,)
+    ).fetchone()
+    assert row["metrics_refresh_requested_at"] is None
+    rows = conn.execute(
+        "SELECT * FROM post_metrics WHERE publication_id = ?", (dc_pub,)
+    ).fetchall()
+    assert len(rows) == 0
+
+    # Run again — the flag is already clear, so it must NOT be re-selected.
+    fetched2 = run_metrics(conn, config, fake_client, NOW, client_for=client_for)
+    assert fetched2 == 0
+
+
 def test_discord_dry_run_makes_zero_calls(conn, config, fake_discord_client, make_publication):
     pub = make_publication(platform="discord", post_type="text", n_assets=0)
 
@@ -328,7 +374,7 @@ def test_telegram_never_makes_a_quota_call(conn, config, fake_telegram_client, m
     publish_one(conn, pub, config, fake_telegram_client, dry_run=False)
 
     kinds = {kind for kind, *_ in fake_telegram_client.calls}
-    assert "limit" not in kinds
+    assert "limit" not in kinds and "tg_limit" not in kinds
 
 
 def test_telegram_preflight_reports_ok_via_getme_then_getchat(

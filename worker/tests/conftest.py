@@ -234,8 +234,18 @@ class FakeDiscordClient:
     def get_webhook(self, webhook_url):
         self.calls.append(("discord_webhook", webhook_url))
         if "discord_webhook" in self.fail_on:
-            raise RuntimeError("discord webhook boom")
+            raise RuntimeError(f"discord webhook boom: {webhook_url}")
         return dict(self.webhook_info)
+
+    def get_webhook_limit(self, webhook_url):
+        """Discord has no real publish-quota endpoint — this exists only so a test can
+        prove the publisher never calls it. Records the call before returning/raising so
+        a future regression that wires Discord into quota-gating shows up here instead
+        of silently vanishing into publish_one's swallowed exception handling."""
+        self.calls.append(("discord_limit", webhook_url))
+        if "discord_limit" in self.fail_on:
+            raise RuntimeError("discord has no quota endpoint")
+        return (0, 0, 0)
 
 
 class FakeTelegramClient:
@@ -280,8 +290,25 @@ class FakeTelegramClient:
     def get_chat(self, token, chat_id):
         self.calls.append(("tg_getchat", chat_id))
         if "tg_getchat" in self.fail_on:
-            raise RuntimeError("telegram getChat boom")
+            # Shaped like the real client's exception text (the token embedded in the
+            # request URL path, e.g. from a raised ConnectionError/HTTPError) rather than
+            # a string that could never contain the credential — this is what proves
+            # redact() is actually doing something for this test.
+            raise RuntimeError(
+                f"telegram getChat boom: url=https://api.telegram.org/bot{token}/getChat"
+            )
         return dict(self.chat_info)
+
+    def get_bot_limit(self, token):
+        """Telegram's Bot API has no real publish-quota endpoint — this exists only so a
+        test can prove the publisher never calls it. Records the call before returning/
+        raising so a future regression that wires Telegram into quota-gating shows up
+        here instead of silently vanishing into publish_one's swallowed exception
+        handling."""
+        self.calls.append(("tg_limit", token))
+        if "tg_limit" in self.fail_on:
+            raise RuntimeError("telegram has no quota endpoint")
+        return (0, 0, 0)
 
 
 @pytest.fixture

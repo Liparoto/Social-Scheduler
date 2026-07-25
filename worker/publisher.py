@@ -344,10 +344,7 @@ def _publish_discord(client, plan, token, config, sleep_fn) -> str:
     post_type = plan["post_type"]
     if post_type == "text":
         result = client.send_message(token, content=caption)
-    elif post_type == "single":
-        files = [_read_asset(p) for p in plan["asset_paths"]]
-        result = client.send_message(token, content=caption, files=files)
-    elif post_type == "carousel":
+    elif post_type in ("single", "carousel"):
         files = [_read_asset(p) for p in plan["asset_paths"]]
         result = client.send_message(token, content=caption, files=files)
     else:

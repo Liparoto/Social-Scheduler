@@ -57,7 +57,7 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
     exclude_clause = ""
     if no_metrics_platforms:
         placeholders = ",".join("?" for _ in no_metrics_platforms)
-        exclude_clause = f"AND ch.platform NOT IN ({placeholders})"
+        exclude_clause = f"ch.platform NOT IN ({placeholders}) AND "
     return conn.execute(
         f"""
         SELECT pub.* FROM publications pub
@@ -67,18 +67,23 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
           AND pub.remote_post_id IS NOT NULL
           AND pub.remote_post_id != 'DRYRUN'
           AND pub.published_at IS NOT NULL
-          {exclude_clause}
           AND (
-            -- Automatic refresh: within the age window AND past the interval gate.
+            -- Automatic refresh: within the age window, past the interval gate, AND on
+            -- a platform that actually has a metrics endpoint (excluding Discord/
+            -- Telegram here, rather than in the WHERE clause overall, keeps a
+            -- manually-flagged row on those platforms selectable below — it must still
+            -- be picked up once so run_metrics' finally block can clear the flag).
             (
-              pub.published_at >= ?
+              {exclude_clause}pub.published_at >= ?
               AND NOT EXISTS (
                 SELECT 1 FROM post_metrics pm
                 WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
               )
             )
             -- Manual refresh: user-initiated + one-shot, so it overrides BOTH the age
-            -- window and the interval gate (else the flag would never clear).
+            -- window and the interval gate (else the flag would never clear) AND the
+            -- platform exclusion above (else a Discord/Telegram flag would never clear
+            -- either).
             OR pub.metrics_refresh_requested_at IS NOT NULL
           )
         """,

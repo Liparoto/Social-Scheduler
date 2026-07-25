@@ -31,6 +31,7 @@ from . import db
 from .clients import PLATFORM_CAPS, ClientRegistry
 from .config import Config
 from .graph_api import GraphAPIError
+from .redact import redact
 
 
 def _check_facebook(client, ch, name, print_fn) -> None:
@@ -129,10 +130,10 @@ def check_channels(rows, registry: ClientRegistry, *, print_fn=print) -> bool:
         try:
             check(registry.for_platform(ch["platform"]), ch, name, print_fn)
         except GraphAPIError as exc:
-            print_fn(f"  ✗ {name}: {exc}")
+            print_fn(f"  ✗ {name}: {redact(str(exc))}")
             all_ok = False
         except Exception as exc:  # noqa: BLE001
-            print_fn(f"  ✗ {name}: {exc}")
+            print_fn(f"  ✗ {name}: {redact(str(exc))}")
             all_ok = False
     return all_ok
 
