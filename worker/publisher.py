@@ -21,7 +21,7 @@ from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
 from .config import Config
 
 MIN_CAROUSEL = 2
-SUPPORTED_POST_TYPES = ("single", "carousel")
+SUPPORTED_POST_TYPES = ("single", "carousel", "text")
 
 
 def _utcnow() -> datetime:
@@ -96,7 +96,8 @@ def _resolve_url(asset, asset_base_url: str | None) -> str | None:
     return None
 
 
-def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str) -> None:
+def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,
+              caption: str | None = None) -> None:
     if platform not in _PUBLISHERS:
         raise _NonRetryable(
             f"unsupported platform '{platform}' — this worker has no adapter for it"
@@ -113,6 +114,21 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         raise _NonRetryable(
             f"carousel needs {MIN_CAROUSEL}-{caps.max_carousel} assets, has {len(assets)}"
         )
+    if post_type == "text":
+        if not caps.supports_text:
+            raise _NonRetryable(f"{platform} cannot publish text-only posts")
+        if assets:
+            raise _NonRetryable(
+                f"a text post must have no assets, has {len(assets)}"
+            )
+        if not (caption or "").strip():
+            raise _NonRetryable("a text post needs a caption")
+    if caps.max_caption_chars is not None and caption is not None:
+        if len(caption) > caps.max_caption_chars:
+            raise _NonRetryable(
+                f"caption is {len(caption)} characters; {platform} allows "
+                f"{caps.max_caption_chars}"
+            )
     if not dry_run:
         missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]
         if missing:
@@ -297,12 +313,12 @@ def publish_one(
     # 1. Load + validate. Bad data/config is a terminal (non-retryable) failure.
     try:
         channel, post, assets = _load_targets(conn, pub)
-        _validate(post, assets, dry_run, asset_base_url, channel["platform"])
         used_count = conn.execute(
             "SELECT COUNT(*) FROM publications WHERE post_id=? AND channel_id=? AND status='posted'",
             (pub["post_id"], pub["channel_id"]),
         ).fetchone()[0]
         caption = _select_caption(conn, post["id"], channel["platform"], used_count)
+        _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption)
         plan = _build_plan(channel, post, assets, asset_base_url, caption)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
