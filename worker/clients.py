@@ -44,6 +44,20 @@ assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), (
     "clients._BASE_URLS and clients.SUPPORTED_PLATFORMS disagree"
 )
 
+# API-version resolver per platform. Threads versions its Graph API independently of the
+# Instagram/Facebook epoch (currently v1.0 vs v25.0+), so it cannot share the install-wide
+# `Config.graph_version` the way IG/FB do — a registry, like _BASE_URLS, so a new platform
+# can't silently inherit the wrong version.
+_API_VERSIONS: dict[str, Callable[[Config], str]] = {
+    "facebook": lambda config: config.graph_version,
+    "instagram": lambda config: config.graph_version,
+    "threads": lambda config: config.threads_api_version,
+}
+
+assert set(_API_VERSIONS) == set(SUPPORTED_PLATFORMS), (
+    "clients._API_VERSIONS and clients.SUPPORTED_PLATFORMS disagree"
+)
+
 
 @dataclass(frozen=True)
 class PlatformCaps:
@@ -86,18 +100,35 @@ def base_url_for(platform: str, config: Config) -> str:
     return resolver(config)
 
 
+def api_version_for(platform: str, config: Config) -> str:
+    """The Graph API version to use for a channel on `platform`.
+
+    Raises UnknownPlatform rather than guessing, same reasoning as base_url_for.
+    """
+    resolver = _API_VERSIONS.get(platform)
+    if resolver is None:
+        raise UnknownPlatform(platform)
+    return resolver(config)
+
+
 class ClientRegistry:
-    """Lazily builds and caches one Graph client per base URL."""
+    """Lazily builds and caches one Graph client per (base URL, API version) pair.
+
+    Caching on base URL alone would be wrong now that platforms can share a base URL but
+    need different versions — it would hand back a client built for the wrong version.
+    """
 
     def __init__(self, config: Config, factory: Callable[[str, str], object] | None = None) -> None:
         self._config = config
         self._factory = factory or (
             lambda version, base_url: GraphClient(version, base_url=base_url)
         )
-        self._cache: dict[str, object] = {}
+        self._cache: dict[tuple[str, str], object] = {}
 
     def for_platform(self, platform: str):
         base = base_url_for(platform, self._config)
-        if base not in self._cache:
-            self._cache[base] = self._factory(self._config.graph_version, base)
-        return self._cache[base]
+        version = api_version_for(platform, self._config)
+        key = (base, version)
+        if key not in self._cache:
+            self._cache[key] = self._factory(version, base)
+        return self._cache[key]

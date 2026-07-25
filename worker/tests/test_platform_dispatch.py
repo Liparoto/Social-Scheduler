@@ -58,12 +58,13 @@ def _force_platform(conn, channel_id: int, platform: str) -> None:
 
 def test_all_registries_cover_exactly_the_supported_platforms():
     """The guard that makes adding a platform mechanical: miss a registry, fail here."""
-    from worker.clients import PLATFORM_CAPS, _BASE_URLS
+    from worker.clients import PLATFORM_CAPS, _API_VERSIONS, _BASE_URLS
     from worker.metrics import _FETCHERS
     from worker.preflight import _CHECKS
     from worker.publisher import _PUBLISHERS, _QUOTA_GATED, _QUOTA_READERS
 
     assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), "clients base-url registry out of sync"
+    assert set(_API_VERSIONS) == set(SUPPORTED_PLATFORMS), "clients API-version registry out of sync"
     assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), "publisher registry out of sync"
     assert set(_CHECKS) == set(SUPPORTED_PLATFORMS), "preflight registry out of sync"
     assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), "metrics registry out of sync"

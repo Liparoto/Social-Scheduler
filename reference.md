@@ -192,19 +192,16 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
     named column.
   - `reach` and `saves` have no Threads source metric and stay `NULL` on Threads rows — this
     mirrors Facebook Pages' incomplete metric set (see above) rather than Instagram's full one.
-- ⚠ **Version-path discrepancy, worth resolving before relying on this in production:** the
-  Threads adapter's code comments (and its unit tests, which construct a client directly
-  against `v1.0`) describe the host as `https://graph.threads.net/v1.0` — Threads versions its
-  API independently of the Instagram/Facebook Graph API epoch. In practice, though, the
-  running worker never sets a Threads-specific version: `ClientRegistry.for_platform` builds
-  every platform's client with the single install-wide `Config.graph_version`
-  (`META_GRAPH_VERSION`, default `v25.0`, shared with Instagram/Facebook), and `clients.THREADS_BASE`
-  only supplies the host, not a version. So today a real Threads publish call would go to
-  `https://graph.threads.net/v25.0/...`, not `/v1.0` — untested against Meta's live API and
-  possibly wrong, since `v25.0` is not a version Threads is known to publish. Confirm Threads'
-  actual current version against live docs and either set `META_GRAPH_VERSION=v1.0` (or
-  whatever's current) for an install running a Threads channel, or give Threads its own
-  version constant in `clients.py`, before a real Threads post is attempted.
+- **API version is resolved per platform, not install-wide.** Threads versions its API
+  independently of the Instagram/Facebook Graph API epoch, so it does not share
+  `Config.graph_version`. `clients._API_VERSIONS` resolves Instagram and Facebook to
+  `config.graph_version` (`META_GRAPH_VERSION`, default `v25.0`) and Threads to its own
+  `config.threads_api_version` (`THREADS_API_VERSION`, default `v1.0`). `ClientRegistry`
+  caches clients on the resolved `(base_url, version)` pair (not base URL alone), so a real
+  Threads call correctly hits `https://graph.threads.net/v1.0/...` while Instagram/Facebook
+  keep hitting the install's configured `v25.0` — verified by
+  `worker/tests/test_clients.py::test_threads_resolves_to_its_own_api_version_through_the_registry`.
+  Re-check `THREADS_API_VERSION` periodically against live docs, same as `META_GRAPH_VERSION`.
 
 ### Open items to resolve at implementation time
 1. Confirm the **actual** `quota_total` per account at runtime (50 vs 100).
@@ -212,8 +209,8 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
    (out of scope for the first IG-only milestone; verify against live docs then).
 3. Confirm current **video/Reels** required params against live docs when we build that
    adapter.
-4. **Threads API version** — resolve the `v1.0` vs shared-`META_GRAPH_VERSION` discrepancy
-   above before a real Threads post.
+4. ~~Threads API version~~ — resolved: Threads now resolves its own `THREADS_API_VERSION`
+   (default `v1.0`) via `clients._API_VERSIONS`, independent of `META_GRAPH_VERSION`.
 
 ---
 

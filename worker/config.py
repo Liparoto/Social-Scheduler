@@ -84,6 +84,11 @@ class Config:
     # renames insight metrics without warning, so this is configurable rather than
     # hardcoded into the fetch call.
     threads_insight_metrics: str = "views,likes,replies,reposts,quotes"
+    # Threads versions its Graph API independently of the Instagram/Facebook epoch
+    # (currently v1.0, vs graph_version's v25.0+), so it cannot share graph_version.
+    # Configurable rather than hardcoded — same reasoning as threads_insight_metrics:
+    # Meta can bump this without notice.
+    threads_api_version: str = "v1.0"
     # Publish delivery: Meta downloads images from a public URL, so at publish time the
     # worker serves the local asset store on 127.0.0.1:<asset_port> and exposes it via a
     # short-lived tunnel. See docs/design-publish-delivery.md.
@@ -130,6 +135,7 @@ class Config:
             threads_insight_metrics=os.environ.get(
                 "THREADS_INSIGHT_METRICS", "views,likes,replies,reposts,quotes"
             ),
+            threads_api_version=os.environ.get("THREADS_API_VERSION", "v1.0"),
             asset_port=int(os.environ.get("ASSET_PORT", "8787")),
             cloudflared_path=os.environ.get("CLOUDFLARED_PATH", "cloudflared"),
             tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),

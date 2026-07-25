@@ -468,21 +468,21 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       sums `reach + saves`, and Threads never provides either, so it scores every Threads
       post as 0 and recycling falls back to age/staleness order until the BPP work (Phase 6+
       backlog) revisits the ranking formula.
-      **Open item carried into `reference.md`:** the adapter's code comments and tests
-      describe Threads as versioned at `https://graph.threads.net/v1.0`, but at runtime the
-      client is built with the shared, install-wide `META_GRAPH_VERSION` (default `v25.0`) —
-      there's no Threads-specific version override today. Confirm Threads' actual current
-      API version against live docs and fix the mismatch (env override or a dedicated
-      constant) before a real Threads post is attempted.
+      **Version mismatch resolved:** Threads now resolves its API version independently via
+      `clients._API_VERSIONS` / `config.threads_api_version` (env override
+      `THREADS_API_VERSION`, default `v1.0`), instead of sharing the install-wide
+      `META_GRAPH_VERSION`. `ClientRegistry` caches on the resolved `(base_url, version)`
+      pair so Instagram/Facebook keep hitting the install's configured `v25.0` while Threads
+      correctly hits `v1.0`. See `reference.md` for details.
 - [~] Real-post verification (owner, Threads) — **PARKED 2026-07-24**, mirrors the Facebook
       item above: code is done, reviewed, and dry-run verified (a Threads text post and a
       Threads image post both correctly plan and report `dry_run` with
       `plan["platform"] == "threads"`). What remains is entirely Meta-side account plumbing —
       adding the Threads product to the Meta app, authorizing via Threads Login (its own
       OAuth flow — not Facebook Login), and obtaining a long-lived token and Threads user id
-      per `docs/meta-setup.md`. No real post has been attempted. Resolve the version-path
-      open item above before the first real post, since an untested version string could
-      make every Threads call fail against the live API.
+      per `docs/meta-setup.md`. No real post has been attempted. The version-path issue above
+      is now resolved (Threads runs on its own `v1.0` via `THREADS_API_VERSION`, overridable
+      if Meta bumps it), so the first real post is no longer expected to fail on that front.
 - [~] Real-post verification (owner) — **PARKED 2026-07-24**, to resume alongside other
       platform connections. Code is done, reviewed, merged and dry-run verified; what remains is
       Meta-side account plumbing only. State when parked:
