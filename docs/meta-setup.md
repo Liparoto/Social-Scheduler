@@ -210,9 +210,18 @@ library if you want to tidy up.
 **Important: Threads Login is its own separate thing.** Even though Threads is a Meta
 product, it does **not** reuse your Instagram or Facebook setup. It's a different login
 flow, with its own product to add in the App Dashboard and its own permissions
-(`threads_basic`, `threads_content_publish`). And the id you'll get for your account — the
-**Threads user id** — is a different number from your **Instagram user id**, even if it's
-the same account "underneath." Don't reuse the IG id anywhere in this section.
+(`threads_basic`, `threads_content_publish`).
+
+**About the Threads user id.** Meta's documentation does **not** state whether it is the same
+number as your Instagram user id for a linked account — it simply tells you to ask the API for
+it. So don't assume either way, and don't copy your IG id across. Get the real one with a single
+call using your Threads token:
+```
+curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=YOUR_THREADS_TOKEN"
+```
+Whatever `id` comes back is what this section means by "Threads user id". (Verified 2026-07-25:
+`GET /me?fields=id,username` on `graph.threads.net` is the documented way to obtain it; Meta
+publishes no statement relating it to Instagram identifiers.)
 
 1. **Add the Threads product to your app.** developers.facebook.com/apps → your app →
    **Dashboard** → find **Threads** in the product list → **Set up**. (If your app was
@@ -235,10 +244,13 @@ the same account "underneath." Don't reuse the IG id anywhere in this section.
    The returned `access_token` is valid ~60 days. Refresh it before expiry the same way you
    would an Instagram token, using Threads' own refresh endpoint — ask me if you want the
    exact call when you're closer to that date.
-4. **Find your Threads user id.** The same token-generation panel that gave you the token
-   also shows the account's **Threads user id** — a long number, separate from any
-   Instagram or Facebook id you already have on file. Note it; you'll need it in the next
-   step, not the IG user id.
+4. **Find your Threads user id.** The token-generation panel usually shows it, but the
+   reliable way is to ask the API with the token you just made:
+   ```
+   curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=YOUR_THREADS_TOKEN"
+   ```
+   Use the `id` it returns. Check the `username` matches the account you meant to connect —
+   that one line confirms both the token and the id in a single call.
 5. **Add the channel in the dashboard.** **Channels → Add channel**:
    - Platform: **Threads**
    - Account name: whatever label helps you tell it apart (e.g. `Liparoto Threads`)
