@@ -8,6 +8,8 @@ proof of reachability:
   * Facebook Pages — a plain node read (id, name). Pages have no
     content_publishing_limit endpoint, so this instead proves the Page token and
     Page id are valid and the Page is reachable. There is no publish quota to report.
+  * Threads — the threads_publishing_limit endpoint, same idea as Instagram's check
+    but via its own quota method.
   * Any other platform — reported as unchecked (no adapter), never silently checked
     against another platform's endpoint.
 
@@ -50,11 +52,22 @@ def _check_instagram(client, ch, name, print_fn) -> None:
     )
 
 
+def _check_threads(client, ch, name, print_fn) -> None:
+    usage, total, duration = client.get_threads_publishing_limit(
+        ch["remote_account_id"], ch["access_token"]
+    )
+    hours = (duration or 0) // 3600
+    print_fn(
+        f"  ✓ {name}: token OK — published {usage}/{total} in the last {hours}h window"
+    )
+
+
 # One check per platform. A bare `else` here is how a Facebook Page got preflighted
 # against Instagram's quota endpoint; an unknown platform must be reported, not guessed.
 _CHECKS = {
     "instagram": _check_instagram,
     "facebook": _check_facebook,
+    "threads": _check_threads,
 }
 
 

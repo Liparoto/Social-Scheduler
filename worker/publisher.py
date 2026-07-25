@@ -172,12 +172,17 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     }
 
 
-def _poll_until_finished(client, container_id, token, config, sleep_fn) -> None:
+def _poll_until_finished(client, container_id, token, config, sleep_fn, status_fn=None) -> None:
     """Poll a container's status_code until FINISHED. Small images are usually ready
     immediately; carousels/video need this. ERROR/EXPIRED are terminal failures.
+
+    status_fn lets other platforms reuse this same poll loop against their own status
+    call (e.g. Threads' get_threads_container_status, whose field is named `status`
+    rather than Instagram's `status_code`) without duplicating the loop.
     """
+    status_fn = status_fn or client.get_container_status
     for _ in range(config.status_poll_max_tries):
-        status = client.get_container_status(container_id, token)
+        status = status_fn(container_id, token)
         if status == "FINISHED":
             return
         if status in ("ERROR", "EXPIRED"):
@@ -244,11 +249,48 @@ def _publish_facebook(client, plan, token, config, sleep_fn) -> str:
     return _publish_fb_multi(client, plan, token)
 
 
+def _publish_threads(client, plan, token, config, sleep_fn) -> str:
+    """Container -> publish, like Instagram, but text posts need no media at all."""
+    user = plan["account_id"]
+    post_type = plan["post_type"]
+
+    if post_type == "text":
+        container = client.create_threads_container(
+            user, token, media_type="TEXT", text=plan["caption"]
+        )
+    elif post_type == "single":
+        container = client.create_threads_container(
+            user, token, media_type="IMAGE",
+            image_url=plan["asset_urls"][0], text=plan["caption"],
+        )
+    else:
+        children = []
+        for url in plan["asset_urls"]:
+            child = client.create_threads_container(
+                user, token, media_type="IMAGE", image_url=url, is_carousel_item=True
+            )
+            _poll_until_finished(
+                client, child, token, config, sleep_fn,
+                status_fn=client.get_threads_container_status,
+            )
+            children.append(child)
+        container = client.create_threads_container(
+            user, token, media_type="CAROUSEL", children=children, text=plan["caption"]
+        )
+
+    _poll_until_finished(
+        client, container, token, config, sleep_fn,
+        status_fn=client.get_threads_container_status,
+    )
+    return client.publish_threads_container(user, container, token)
+
+
 # Publish entry point per platform. Uniform signature so the dispatch below is a lookup,
 # not a chain of ifs whose final `else` silently means "Instagram".
 _PUBLISHERS = {
     "instagram": _publish_instagram,
     "facebook": _publish_facebook,
+    "threads": _publish_threads,
 }
 
 # Whether each platform exposes a runtime publish quota to read before posting. An
@@ -260,9 +302,22 @@ _PUBLISHERS = {
 #   * facebook  — Facebook Pages have no content_publishing_limit endpoint, so there is
 #                 nothing to read; inventing a hardcoded number would be worse than not
 #                 gating.
+#   * threads   — has its own threads_publishing_limit endpoint (250 published posts per
+#                 rolling 24h, per Meta's docs — read live, never hardcoded); must be
+#                 gated like Instagram.
 _QUOTA_GATED = {
     "instagram": True,
     "facebook": False,
+    "threads": True,
+}
+
+# The quota-reading call differs per gated platform (Instagram and Threads expose the same
+# (usage, total, duration) shape but through different endpoints/methods), so the gate looks
+# up which method to call here rather than hardcoding Instagram's. Only platforms that are
+# actually gated belong here — see the assertion below.
+_QUOTA_READERS = {
+    "instagram": lambda c, acct, tok: c.get_content_publishing_limit(acct, tok),
+    "threads": lambda c, acct, tok: c.get_threads_publishing_limit(acct, tok),
 }
 
 assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
@@ -270,6 +325,9 @@ assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
 )
 assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), (
     "publisher._QUOTA_GATED and clients.SUPPORTED_PLATFORMS disagree"
+)
+assert set(_QUOTA_READERS) == {p for p, gated in _QUOTA_GATED.items() if gated}, (
+    "publisher._QUOTA_READERS must have exactly the platforms _QUOTA_GATED marks True"
 )
 
 
@@ -339,11 +397,13 @@ def publish_one(
     ig = plan["account_id"]
 
     # 3. Rate-limit gate: read Meta's REAL quota, cache it, refuse if exhausted.
-    #    Instagram only — Facebook Pages expose no content_publishing_limit endpoint,
-    #    and inventing a hardcoded number here would be worse than not gating.
+    #    Only platforms _QUOTA_GATED marks True — Facebook Pages expose no
+    #    content_publishing_limit endpoint, and inventing a hardcoded number here would
+    #    be worse than not gating. Which method to call is per-platform (_QUOTA_READERS)
+    #    since Instagram and Threads expose the same shape through different endpoints.
     if _QUOTA_GATED.get(plan["platform"]):
         try:
-            usage, total, duration = client.get_content_publishing_limit(ig, token)
+            usage, total, duration = _QUOTA_READERS[plan["platform"]](client, ig, token)
             db.record_publish_limit(conn, channel["id"], usage, total, duration, _iso(now))
             if usage is not None and total is not None and usage >= total:
                 retry_at = _iso(now + timedelta(seconds=config.rate_limit_backoff_seconds))

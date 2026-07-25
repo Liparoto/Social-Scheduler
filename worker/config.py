@@ -80,6 +80,10 @@ class Config:
     # 2026-06-15 and keeps renaming them, so this is configurable and read as
     # best-effort: if the name is invalid we store null instead of failing.
     fb_post_insight_metrics: str = "post_total_media_view_unique"
+    # Threads insight metric names, same reasoning as fb_post_insight_metrics: Meta
+    # renames insight metrics without warning, so this is configurable rather than
+    # hardcoded into the fetch call.
+    threads_insight_metrics: str = "views,likes,replies,reposts,quotes"
     # Publish delivery: Meta downloads images from a public URL, so at publish time the
     # worker serves the local asset store on 127.0.0.1:<asset_port> and exposes it via a
     # short-lived tunnel. See docs/design-publish-delivery.md.
@@ -122,6 +126,9 @@ class Config:
             metrics_min_interval_hours=int(os.environ.get("METRICS_MIN_INTERVAL_HOURS", "6")),
             fb_post_insight_metrics=os.environ.get(
                 "FB_POST_INSIGHT_METRICS", "post_total_media_view_unique"
+            ),
+            threads_insight_metrics=os.environ.get(
+                "THREADS_INSIGHT_METRICS", "views,likes,replies,reposts,quotes"
             ),
             asset_port=int(os.environ.get("ASSET_PORT", "8787")),
             cloudflared_path=os.environ.get("CLOUDFLARED_PATH", "cloudflared"),

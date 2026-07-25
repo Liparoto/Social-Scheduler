@@ -19,11 +19,12 @@ from .config import Config
 from .graph_api import GraphClient
 
 FACEBOOK_BASE = "https://graph.facebook.com"
+THREADS_BASE = "https://graph.threads.net"
 
 # Every platform this worker has an adapter for. Adding one here without also adding it to
 # clients._BASE_URLS, publisher._PUBLISHERS, publisher._QUOTA_GATED, preflight._CHECKS and
 # metrics._FETCHERS fails test_platform_dispatch.py — which is the point.
-SUPPORTED_PLATFORMS = ("instagram", "facebook")
+SUPPORTED_PLATFORMS = ("instagram", "facebook", "threads")
 
 
 class UnknownPlatform(Exception):
@@ -36,6 +37,7 @@ class UnknownPlatform(Exception):
 _BASE_URLS: dict[str, Callable[[Config], str]] = {
     "facebook": lambda _config: FACEBOOK_BASE,
     "instagram": lambda config: config.graph_base,
+    "threads": lambda _config: THREADS_BASE,
 }
 
 assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), (
@@ -62,6 +64,9 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
     # Facebook Pages: attached_media multi-photo posts cap at 10. No text-only format
     # here either — a Page status update is a different product surface we don't publish.
     "facebook": PlatformCaps(supports_text=False, max_carousel=10, max_caption_chars=None),
+    # Threads: text-first. 500-character text limit, 2-20 carousel children,
+    # 250 API-published posts per rolling 24h (verified 2026-07-25).
+    "threads": PlatformCaps(supports_text=True, max_carousel=20, max_caption_chars=500),
 }
 
 assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), (

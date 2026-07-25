@@ -61,7 +61,7 @@ def test_all_registries_cover_exactly_the_supported_platforms():
     from worker.clients import PLATFORM_CAPS, _BASE_URLS
     from worker.metrics import _FETCHERS
     from worker.preflight import _CHECKS
-    from worker.publisher import _PUBLISHERS, _QUOTA_GATED
+    from worker.publisher import _PUBLISHERS, _QUOTA_GATED, _QUOTA_READERS
 
     assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), "clients base-url registry out of sync"
     assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), "publisher registry out of sync"
@@ -69,6 +69,8 @@ def test_all_registries_cover_exactly_the_supported_platforms():
     assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), "metrics registry out of sync"
     assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), "quota-gate declaration out of sync"
     assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), "capability registry out of sync"
+    gated = {p for p, gated in _QUOTA_GATED.items() if gated}
+    assert set(_QUOTA_READERS) == gated, "quota-reader registry must match _QUOTA_GATED==True"
 
 
 def test_platform_caps_are_declared_for_every_supported_platform():
