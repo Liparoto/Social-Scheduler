@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { PLATFORMS, accountIdLabel, usesLinkedPage } from "@/lib/platforms";
+import { PLATFORMS, accountIdLabel, usesAccountId, usesLinkedPage } from "@/lib/platforms";
 
 const field =
   "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
@@ -117,17 +117,19 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
             onChange={(e) => set("timezone", e.target.value)}
           />
         </div>
-        <div>
-          <label className={label}>
-            {accountIdLabel(form.platform)}
-          </label>
-          <input
-            className={field}
-            placeholder="17841400000000000"
-            value={form.remote_account_id}
-            onChange={(e) => set("remote_account_id", e.target.value)}
-          />
-        </div>
+        {usesAccountId(form.platform) ? (
+          <div>
+            <label className={label}>
+              {accountIdLabel(form.platform)}
+            </label>
+            <input
+              className={field}
+              placeholder="17841400000000000"
+              value={form.remote_account_id}
+              onChange={(e) => set("remote_account_id", e.target.value)}
+            />
+          </div>
+        ) : null}
         {usesLinkedPage(form.platform) ? (
           <div>
             <label className={label}>Linked Facebook Page id (optional)</label>
@@ -140,11 +142,17 @@ export function ChannelForm({ defaultTimezone }: { defaultTimezone: string }) {
           </div>
         ) : null}
         <div className="sm:col-span-2">
-          <label className={label}>Access token</label>
+          <label className={label}>
+            {usesAccountId(form.platform) ? "Access token" : "Webhook URL"}
+          </label>
           <input
             className={field}
             type="password"
-            placeholder="Long-lived token — stored locally, never logged"
+            placeholder={
+              usesAccountId(form.platform)
+                ? "Long-lived token — stored locally, never logged"
+                : "The full Discord webhook URL — this is the whole credential, stored locally, never logged"
+            }
             value={form.access_token}
             onChange={(e) => set("access_token", e.target.value)}
           />

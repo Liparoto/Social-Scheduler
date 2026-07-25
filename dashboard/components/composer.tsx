@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
-import { platformLabel, supportsText, maxCaptionChars, PLATFORMS } from "@/lib/platforms";
+import { platformLabel, supportsText, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
 import type { Period, PeriodMode, Tag } from "@/lib/types";
 import type { ConformMode } from "@/lib/conform";
@@ -102,7 +102,7 @@ export function Composer({
   // generic display caption.
   const captionChecks = selectedChannels
     .map((c) => {
-      const limit = maxCaptionChars(c.platform);
+      const limit = captionLimit(c.platform, postType);
       return limit === null ? null : { channel: c as ChannelLite | null, limit, length: worstCaptionLengthForPlatform(c.platform) };
     })
     .filter((v): v is { channel: ChannelLite | null; limit: number; length: number } => v !== null);
@@ -110,7 +110,7 @@ export function Composer({
   // With nothing selected yet in text-only mode, fall back to the strictest limit among
   // text-capable platforms so the counter is still meaningful before a channel is picked.
   const fallbackLimits = PLATFORMS.filter((p) => p.supportsText)
-    .map((p): number | null => p.maxCaptionChars)
+    .map((p): number | null => captionLimit(p.value, postType))
     .filter((n): n is number => n !== null);
   const fallbackCheck =
     captionChecks.length === 0 && textOnly && fallbackLimits.length > 0
@@ -444,7 +444,7 @@ export function Composer({
 
         {/* Caption + first comment */}
         <section className="rounded-card border border-border bg-surface p-5 space-y-4">
-          <CaptionVariantsEditor value={variants} onChange={setVariants} />
+          <CaptionVariantsEditor value={variants} onChange={setVariants} postType={postType} />
           {worstCaptionCheck ? (
             <p
               className={`text-xs ${

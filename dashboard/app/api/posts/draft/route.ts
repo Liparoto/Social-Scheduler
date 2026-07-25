@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (targetChannels.length > 0) {
-    const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption);
+    const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption, postType);
     if (captionError) {
       return NextResponse.json({ error: captionError }, { status: 400 });
     }

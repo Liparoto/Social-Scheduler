@@ -2,7 +2,7 @@
 // over caller-supplied channels/variants with no DB access, and the composer (a client
 // component) needs captionsForPlatform to keep its live counter's rotation-awareness in
 // sync with what the create routes and content/route.ts actually enforce.
-import { maxCaptionChars, platformLabel, type ChannelLikeForCompat } from "./platforms";
+import { captionLimit, platformLabel, type ChannelLikeForCompat } from "./platforms";
 
 export interface CaptionVariantLike {
   platform: string | null;
@@ -39,17 +39,20 @@ export interface CaptionOverLimit {
 /**
  * For each distinct platform among the given channels, finds the longest caption that
  * platform would actually publish (see captionsForPlatform) and reports it if it's over
- * that platform's maxCaptionChars. One entry per offending platform, worst variant only.
+ * that platform's caption limit for this post's postType (see captionLimit — Telegram's
+ * limit depends on whether media is attached). One entry per offending platform, worst
+ * variant only.
  */
 export function overLimitCaptionsForChannels<T extends ChannelLikeForCompat>(
   channels: T[],
   variants: CaptionVariantLike[],
-  fallback: string | null
+  fallback: string | null,
+  postType: string
 ): CaptionOverLimit[] {
   const platforms = Array.from(new Set(channels.map((c) => c.platform)));
   const out: CaptionOverLimit[] = [];
   for (const platform of platforms) {
-    const limit = maxCaptionChars(platform);
+    const limit = captionLimit(platform, postType);
     if (limit === null) continue;
     const candidates = captionsForPlatform(platform, variants, fallback);
     const worstLength = Math.max(...candidates.map((c) => c.length));
@@ -65,9 +68,10 @@ export function overLimitCaptionsForChannels<T extends ChannelLikeForCompat>(
 export function captionLimitError<T extends ChannelLikeForCompat>(
   channels: T[],
   variants: CaptionVariantLike[],
-  fallback: string | null
+  fallback: string | null,
+  postType: string
 ): string | null {
-  const overLimit = overLimitCaptionsForChannels(channels, variants, fallback);
+  const overLimit = overLimitCaptionsForChannels(channels, variants, fallback, postType);
   if (overLimit.length === 0) return null;
   const names = overLimit
     .map((v) => `${platformLabel(v.platform)} (${v.length}/${v.limit})`)

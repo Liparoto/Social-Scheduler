@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { accountIdLabel } from "@/lib/platforms";
+import { accountIdLabel, usesAccountId } from "@/lib/platforms";
 
 /**
  * Update a channel's credentials (IG user id + access token). Tokens expire / get
@@ -62,30 +62,45 @@ export function ChannelCredentials({
 
       {open ? (
         <div className="mt-3 space-y-2.5">
+          {usesAccountId(platform) ? (
+            <label className="block text-xs text-ink-soft">
+              <span className="mb-1 block">
+                {accountIdLabel(platform)}
+              </span>
+              <input
+                className={field}
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                placeholder="1784140000..."
+              />
+            </label>
+          ) : null}
           <label className="block text-xs text-ink-soft">
             <span className="mb-1 block">
-              {accountIdLabel(platform)}
-            </span>
-            <input
-              className={field}
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-              placeholder="1784140000..."
-            />
-          </label>
-          <label className="block text-xs text-ink-soft">
-            <span className="mb-1 block">
-              New access token{" "}
-              {/* The "IGAA…" prefix is Instagram's; Threads and Page tokens look different,
-                  so don't tell someone their valid token looks wrong. */}
-              <span className="text-faint">(long — leave blank to keep the current one)</span>
+              {usesAccountId(platform) ? (
+                <>
+                  New access token{" "}
+                  {/* The "IGAA…" prefix is Instagram's; Threads and Page tokens look different,
+                      so don't tell someone their valid token looks wrong. */}
+                  <span className="text-faint">(long — leave blank to keep the current one)</span>
+                </>
+              ) : (
+                <>
+                  New webhook URL{" "}
+                  <span className="text-faint">(the whole credential — leave blank to keep the current one)</span>
+                </>
+              )}
             </span>
             <input
               className={field}
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              placeholder="Paste the freshly generated token"
+              placeholder={
+                usesAccountId(platform)
+                  ? "Paste the freshly generated token"
+                  : "Paste the full Discord webhook URL"
+              }
             />
           </label>
           <div className="flex items-center gap-3">

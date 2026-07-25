@@ -3,9 +3,18 @@
 // instead of nine — and an unrecognised value degrades visibly rather than silently
 // reading as Instagram or Facebook.
 
-// supportsText / maxCarousel / maxCaptionChars mirror worker/clients.py's PLATFORM_CAPS.
+// supportsText / maxCarousel / captionChars mirror worker/clients.py's PLATFORM_CAPS.
 // The worker is authoritative and re-validates every publish against its own copy — this
 // copy exists only to shape the composer (disable/hint fields before a request is ever sent).
+//
+// captionChars is per-post-type (not a single number) because Telegram's limit depends on
+// whether media is attached: 4096 chars for a text-only message, 1024 once a photo/carousel
+// is attached. A single maxCaptionChars would either wrongly reject a long text post or
+// wrongly accept a too-long media caption. Empty {} means "no known limit enforced here"
+// (Instagram/Facebook — same as the old `null`).
+//
+// usesAccountId is false only for Discord: its credential is a webhook URL, which is both
+// the address and the secret, so there is no separate account id to collect.
 export const PLATFORMS = [
   {
     value: "instagram",
@@ -14,9 +23,10 @@ export const PLATFORMS = [
     accountIdLabel: "IG user id",
     // Instagram published via a linked Facebook Page stores that Page id separately.
     usesLinkedPage: true,
+    usesAccountId: true,
     supportsText: false,
     maxCarousel: 10,
-    maxCaptionChars: null,
+    captionChars: {},
   },
   {
     value: "facebook",
@@ -24,9 +34,10 @@ export const PLATFORMS = [
     badge: "FB",
     accountIdLabel: "Page id",
     usesLinkedPage: false,
+    usesAccountId: true,
     supportsText: false,
     maxCarousel: 10,
-    maxCaptionChars: null,
+    captionChars: {},
   },
   {
     value: "threads",
@@ -34,9 +45,33 @@ export const PLATFORMS = [
     badge: "TH",
     accountIdLabel: "Threads user id",
     usesLinkedPage: false,
+    usesAccountId: true,
     supportsText: true,
     maxCarousel: 20,
-    maxCaptionChars: 500,
+    captionChars: { text: 500, single: 500, carousel: 500 },
+  },
+  {
+    value: "discord",
+    label: "Discord",
+    badge: "DC",
+    accountIdLabel: "N/A",
+    usesLinkedPage: false,
+    // Its only credential is a webhook URL — no separate account id field at all.
+    usesAccountId: false,
+    supportsText: true,
+    maxCarousel: 10,
+    captionChars: { text: 2000, single: 2000, carousel: 2000 },
+  },
+  {
+    value: "telegram",
+    label: "Telegram",
+    badge: "TG",
+    accountIdLabel: "Channel (@name or chat id)",
+    usesLinkedPage: false,
+    usesAccountId: true,
+    supportsText: true,
+    maxCarousel: 10,
+    captionChars: { text: 4096, single: 1024, carousel: 1024 },
   },
 ] as const;
 
@@ -66,14 +101,25 @@ export function usesLinkedPage(value: string): boolean {
   return BY_VALUE.get(value)?.usesLinkedPage ?? false;
 }
 
+// Default true is the safe direction for an unrecognised platform: it asks for an account
+// id it might not need rather than silently dropping one it does.
+export function usesAccountId(value: string): boolean {
+  return BY_VALUE.get(value)?.usesAccountId ?? true;
+}
+
 // Default false is the safe direction: worst case the composer is over-cautious about an
 // unrecognised platform, rather than offering a text post to something that can't publish one.
 export function supportsText(value: string): boolean {
   return BY_VALUE.get(value)?.supportsText ?? false;
 }
 
-export function maxCaptionChars(value: string): number | null {
-  return BY_VALUE.get(value)?.maxCaptionChars ?? null;
+// Per-post-type lookup — replaces the old single-number maxCaptionChars. Telegram is why:
+// 4096 chars for a text post, 1024 once a photo/carousel is attached. Returns null when the
+// platform has no known limit for that post type (Instagram/Facebook today, any post type
+// not in a platform's captionChars map otherwise).
+export function captionLimit(platform: string, postType: string): number | null {
+  const chars = BY_VALUE.get(platform)?.captionChars as Record<string, number> | undefined;
+  return chars?.[postType] ?? null;
 }
 
 // Default 10 (Instagram/Facebook's value) is the safe direction for an unrecognised

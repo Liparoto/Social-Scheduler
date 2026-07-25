@@ -162,7 +162,14 @@ export function PublicationQueue({
                         </span>
                       ) : null}
                     </span>
-                    {p.status === "posted" && p.m_fetched_at ? (
+                    {p.status === "posted" &&
+                    (p.channel_platform === "discord" || p.channel_platform === "telegram") ? (
+                      // Discord and Telegram have no metrics at all — rendering nothing here
+                      // (rather than an always-empty strip or a perpetual "metrics pending…")
+                      // is the same call already made for Facebook's reach and Threads' missing
+                      // metric fields above.
+                      null
+                    ) : p.status === "posted" && p.m_fetched_at ? (
                       p.channel_platform === "facebook" ? (
                         <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
                           <span title="Reactions">♥ {p.m_likes ?? "—"}</span>

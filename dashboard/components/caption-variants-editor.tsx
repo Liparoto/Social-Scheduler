@@ -1,6 +1,6 @@
 "use client";
 
-import { PLATFORMS, maxCaptionChars, platformLabel } from "@/lib/platforms";
+import { PLATFORMS, captionLimit, platformLabel } from "@/lib/platforms";
 
 export interface CaptionVariantDraft {
   platform: string;
@@ -9,14 +9,16 @@ export interface CaptionVariantDraft {
 
 /** Variants whose own selected platform has a caption limit they're over. Callers (the
  * composer, the library editor) use this to block a save/submit — a per-row counter
- * alone doesn't stop the click. */
+ * alone doesn't stop the click. `postType` matters because Telegram's limit depends on
+ * whether media is attached (4096 chars text-only, 1024 once a photo/carousel is attached). */
 export function overLimitCaptionVariants(
-  variants: CaptionVariantDraft[]
+  variants: CaptionVariantDraft[],
+  postType: string
 ): { platform: string; length: number; limit: number }[] {
   const out: { platform: string; length: number; limit: number }[] = [];
   for (const v of variants) {
     if (!v.platform || !v.body.trim()) continue;
-    const limit = maxCaptionChars(v.platform);
+    const limit = captionLimit(v.platform, postType);
     if (limit !== null && v.body.length > limit) {
       out.push({ platform: v.platform, length: v.body.length, limit });
     }
@@ -30,9 +32,11 @@ const fieldCls =
 export function CaptionVariantsEditor({
   value,
   onChange,
+  postType,
 }: {
   value: CaptionVariantDraft[];
   onChange: (v: CaptionVariantDraft[]) => void;
+  postType: string;
 }) {
   function update(i: number, patch: Partial<CaptionVariantDraft>) {
     onChange(value.map((v, idx) => (idx === i ? { ...v, ...patch } : v)));
@@ -55,7 +59,7 @@ export function CaptionVariantsEditor({
       </p>
       <div className="space-y-3">
         {value.map((v, i) => {
-          const limit = v.platform ? maxCaptionChars(v.platform) : null;
+          const limit = v.platform ? captionLimit(v.platform, postType) : null;
           const over = limit !== null && v.body.length > limit;
           return (
             <div key={i} className="space-y-2">
