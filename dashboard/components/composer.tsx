@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor } from "@/lib/format";
-import { platformLabel } from "@/lib/platforms";
+import { platformLabel, supportsText, maxCaptionChars, PLATFORMS } from "@/lib/platforms";
 import type { Period, PeriodMode, Tag } from "@/lib/types";
 import type { ConformMode } from "@/lib/conform";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -45,6 +45,7 @@ export function Composer({
   const [variants, setVariants] = useState<CaptionVariantDraft[]>([{ platform: "", body: "" }]);
   const [firstComment, setFirstComment] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [textOnly, setTextOnly] = useState(false);
   const [timezone, setTimezone] = useState(defaultTimezone);
   const [scheduledLocal, setScheduledLocal] = useState("");
   const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
@@ -71,7 +72,31 @@ export function Composer({
     mode,
   }));
 
-  const postType = assets.length > 1 ? "carousel" : assets.length === 1 ? "single" : "—";
+  const postType = textOnly
+    ? "text"
+    : assets.length > 1
+    ? "carousel"
+    : assets.length === 1
+    ? "single"
+    : "—";
+
+  // Strictest caption limit among the currently-selected channels. With nothing selected
+  // yet, fall back to the strictest limit among text-capable platforms so the counter is
+  // still meaningful before a channel is picked.
+  const selectedChannels = channels.filter((c) => selected.has(c.id));
+  const selectedLimits = selectedChannels
+    .map((c) => maxCaptionChars(c.platform))
+    .filter((n): n is number => n !== null);
+  const fallbackLimits = PLATFORMS.filter((p) => p.supportsText)
+    .map((p): number | null => p.maxCaptionChars)
+    .filter((n): n is number => n !== null);
+  const captionLimit =
+    selectedLimits.length > 0
+      ? Math.min(...selectedLimits)
+      : fallbackLimits.length > 0
+      ? Math.min(...fallbackLimits)
+      : null;
+  const overCaptionLimit = textOnly && captionLimit !== null && caption.length > captionLimit;
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -126,6 +151,8 @@ export function Composer({
   }
 
   function toggleChannel(id: number) {
+    const channel = channels.find((c) => c.id === id);
+    if (textOnly && channel && !supportsText(channel.platform)) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -134,13 +161,34 @@ export function Composer({
     });
   }
 
+  function toggleTextOnly(next: boolean) {
+    setTextOnly(next);
+    if (next) {
+      // Deselect any already-selected channel that can't take a text-only post — leaving
+      // it selected-but-disabled would submit a target that cannot work.
+      setSelected((prev) => {
+        const filtered = new Set<number>();
+        prev.forEach((id) => {
+          const channel = channels.find((c) => c.id === id);
+          if (channel && supportsText(channel.platform)) filtered.add(id);
+        });
+        return filtered;
+      });
+    }
+  }
+
   const anyApprovalNeeded = channels.some(
     (c) => selected.has(c.id) && c.requires_approval
   );
 
   async function submit() {
     setError(null);
-    if (assets.length === 0) return setError("Add at least one image.");
+    if (textOnly) {
+      if (!caption.trim()) return setError("Write a caption for the text post.");
+      if (overCaptionLimit) return setError(`Caption is over the ${captionLimit}-character limit.`);
+    } else if (assets.length === 0) {
+      return setError("Add at least one image.");
+    }
     if (selected.size === 0) return setError("Select at least one channel.");
     if (!scheduledLocal) return setError("Pick a date and time.");
 
@@ -150,7 +198,8 @@ export function Composer({
       body: JSON.stringify({
         caption,
         first_comment: firstComment,
-        asset_ids: assets.map((a) => a.id),
+        post_type: textOnly ? "text" : undefined,
+        asset_ids: textOnly ? [] : assets.map((a) => a.id),
         channel_ids: Array.from(selected),
         scheduled_local: scheduledLocal,
         timezone,
@@ -170,6 +219,7 @@ export function Composer({
 
   async function saveDraft() {
     setError(null);
+    if (textOnly) return setError("Text-only posts can't be saved to the library yet.");
     if (assets.length === 0) return setError("Add at least one image to save a draft.");
     const res = await fetch("/api/posts/draft", {
       method: "POST",
@@ -206,110 +256,131 @@ export function Composer({
     <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
       {/* ---- Builder ---- */}
       <div className="space-y-6">
-        {/* Images */}
-        <section className="rounded-card border border-border bg-surface p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-display text-sm font-semibold text-ink">
-              Images
-              <span className="data ml-2 text-xs font-normal text-faint">{postType}</span>
-            </h3>
-            <button
-              onClick={() => fileInput.current?.click()}
-              className="rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-surface-sunken"
-            >
-              {uploading ? "Uploading…" : "Add images"}
-            </button>
-            <input
-              ref={fileInput}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              hidden
-              onChange={(e) => onFiles(e.target.files)}
-            />
+        {/* Text only toggle */}
+        <section className="flex items-center justify-between rounded-card border border-border bg-surface p-4">
+          <div>
+            <h3 className="font-display text-sm font-semibold text-ink">Text only</h3>
+            <p className="text-xs text-muted">
+              Write a caption with no image — only channels that support text posts can be
+              picked.
+            </p>
           </div>
-
-          {assets.length === 0 ? (
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                onFiles(e.dataTransfer.files);
-              }}
-              className="rounded-lg border border-dashed border-border-strong px-4 py-10 text-center text-sm text-muted"
-            >
-              Drag images here, or use <span className="text-ink-soft">Add images</span>.
-              <br />
-              <span className="text-xs text-faint">
-                Dedup is by content — the same file won&rsquo;t be stored twice.
-              </span>
-            </div>
-          ) : (
-            <div>
-              <p className="mb-2 text-xs text-muted">
-                Drag to reorder — this is the carousel order.
-              </p>
-              <ul className="flex flex-wrap gap-3">
-                {assets.map((a, i) => (
-                  <li
-                    key={a.id}
-                    draggable
-                    onDragStart={() => (dragIndex.current = i)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => {
-                      if (dragIndex.current !== null) move(dragIndex.current, i);
-                      dragIndex.current = null;
-                    }}
-                    className="group relative"
-                  >
-                    <span className="data absolute left-1 top-1 z-10 rounded bg-ink/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                      {i + 1}
-                    </span>
-                    <button
-                      onClick={() => removeAsset(a.id)}
-                      className="absolute right-1 top-1 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-ink/75 text-xs text-white group-hover:flex"
-                      aria-label="Remove image"
-                    >
-                      ×
-                    </button>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`/api/media/${a.id}?variant=thumb`}
-                      alt={a.name}
-                      className="h-24 w-24 cursor-grab rounded-lg border border-border object-cover active:cursor-grabbing"
-                    />
-                    {a.needsReview ? (
-                      <ConformControl
-                        assetId={a.id}
-                        conformMode={a.conformMode}
-                        needsReview={a.needsReview}
-                      />
-                    ) : null}
-                    <div className="mt-1 flex justify-center gap-1">
-                      <button
-                        onClick={() => move(i, i - 1)}
-                        disabled={i === 0}
-                        className="rounded px-1 text-xs text-muted hover:text-ink disabled:opacity-30"
-                        aria-label="Move left"
-                      >
-                        ←
-                      </button>
-                      <button
-                        onClick={() => move(i, i + 1)}
-                        disabled={i === assets.length - 1}
-                        className="rounded px-1 text-xs text-muted hover:text-ink disabled:opacity-30"
-                        aria-label="Move right"
-                      >
-                        →
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {notice ? <p className="mt-3 text-xs text-brand-strong">{notice}</p> : null}
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-ink-soft">
+            <input
+              type="checkbox"
+              checked={textOnly}
+              onChange={(e) => toggleTextOnly(e.target.checked)}
+            />
+            {textOnly ? "On" : "Off"}
+          </label>
         </section>
+
+        {/* Images */}
+        {!textOnly ? (
+          <section className="rounded-card border border-border bg-surface p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-display text-sm font-semibold text-ink">
+                Images
+                <span className="data ml-2 text-xs font-normal text-faint">{postType}</span>
+              </h3>
+              <button
+                onClick={() => fileInput.current?.click()}
+                className="rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-surface-sunken"
+              >
+                {uploading ? "Uploading…" : "Add images"}
+              </button>
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                hidden
+                onChange={(e) => onFiles(e.target.files)}
+              />
+            </div>
+
+            {assets.length === 0 ? (
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  onFiles(e.dataTransfer.files);
+                }}
+                className="rounded-lg border border-dashed border-border-strong px-4 py-10 text-center text-sm text-muted"
+              >
+                Drag images here, or use <span className="text-ink-soft">Add images</span>.
+                <br />
+                <span className="text-xs text-faint">
+                  Dedup is by content — the same file won&rsquo;t be stored twice.
+                </span>
+              </div>
+            ) : (
+              <div>
+                <p className="mb-2 text-xs text-muted">
+                  Drag to reorder — this is the carousel order.
+                </p>
+                <ul className="flex flex-wrap gap-3">
+                  {assets.map((a, i) => (
+                    <li
+                      key={a.id}
+                      draggable
+                      onDragStart={() => (dragIndex.current = i)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => {
+                        if (dragIndex.current !== null) move(dragIndex.current, i);
+                        dragIndex.current = null;
+                      }}
+                      className="group relative"
+                    >
+                      <span className="data absolute left-1 top-1 z-10 rounded bg-ink/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                        {i + 1}
+                      </span>
+                      <button
+                        onClick={() => removeAsset(a.id)}
+                        className="absolute right-1 top-1 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-ink/75 text-xs text-white group-hover:flex"
+                        aria-label="Remove image"
+                      >
+                        ×
+                      </button>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`/api/media/${a.id}?variant=thumb`}
+                        alt={a.name}
+                        className="h-24 w-24 cursor-grab rounded-lg border border-border object-cover active:cursor-grabbing"
+                      />
+                      {a.needsReview ? (
+                        <ConformControl
+                          assetId={a.id}
+                          conformMode={a.conformMode}
+                          needsReview={a.needsReview}
+                        />
+                      ) : null}
+                      <div className="mt-1 flex justify-center gap-1">
+                        <button
+                          onClick={() => move(i, i - 1)}
+                          disabled={i === 0}
+                          className="rounded px-1 text-xs text-muted hover:text-ink disabled:opacity-30"
+                          aria-label="Move left"
+                        >
+                          ←
+                        </button>
+                        <button
+                          onClick={() => move(i, i + 1)}
+                          disabled={i === assets.length - 1}
+                          className="rounded px-1 text-xs text-muted hover:text-ink disabled:opacity-30"
+                          aria-label="Move right"
+                        >
+                          →
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {notice ? <p className="mt-3 text-xs text-brand-strong">{notice}</p> : null}
+          </section>
+        ) : null}
 
         {/* Content kind */}
         <section className="rounded-card border border-border bg-surface p-5">
@@ -338,6 +409,17 @@ export function Composer({
         {/* Caption + first comment */}
         <section className="rounded-card border border-border bg-surface p-5 space-y-4">
           <CaptionVariantsEditor value={variants} onChange={setVariants} />
+          {textOnly ? (
+            <p
+              className={`text-xs ${
+                overCaptionLimit ? "font-medium text-accent-strong" : "text-muted"
+              }`}
+            >
+              {caption.length}
+              {captionLimit !== null ? ` / ${captionLimit}` : ""} characters
+              {overCaptionLimit ? " — over the limit for a selected channel." : ""}
+            </p>
+          ) : null}
           <div>
             <label className={label}>
               First comment{" "}
@@ -365,32 +447,44 @@ export function Composer({
           <div className="grid gap-2 sm:grid-cols-2">
             {channels.map((c) => {
               const on = selected.has(c.id);
+              const disabled = textOnly && !supportsText(c.platform);
               const color = channelColor(c.id);
               return (
                 <button
                   key={c.id}
                   onClick={() => toggleChannel(c.id)}
+                  disabled={disabled}
                   className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                    on ? "border-transparent" : "border-border hover:bg-surface-sunken"
+                    disabled
+                      ? "cursor-not-allowed border-border opacity-50"
+                      : on
+                      ? "border-transparent"
+                      : "border-border hover:bg-surface-sunken"
                   }`}
-                  style={on ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined}
+                  style={
+                    on && !disabled
+                      ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` }
+                      : undefined
+                  }
                 >
                   <span
                     className="flex h-4 w-4 shrink-0 items-center justify-center rounded"
                     style={{
-                      backgroundColor: on ? color.dot : "transparent",
-                      border: on ? "none" : "1.5px solid var(--color-border-strong)",
+                      backgroundColor: on && !disabled ? color.dot : "transparent",
+                      border: on && !disabled ? "none" : "1.5px solid var(--color-border-strong)",
                     }}
                   >
-                    {on ? <span className="text-[10px] text-white">✓</span> : null}
+                    {on && !disabled ? <span className="text-[10px] text-white">✓</span> : null}
                   </span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-ink">
                       {c.account_name}
                     </span>
                     <span className="data block text-[11px] text-muted">
-                      {platformLabel(c.platform)}
-                      {c.requires_approval ? " · needs approval" : ""}
+                      {disabled
+                        ? `${platformLabel(c.platform)} can't post text-only`
+                        : platformLabel(c.platform)}
+                      {!disabled && c.requires_approval ? " · needs approval" : ""}
                     </span>
                   </span>
                 </button>
@@ -512,7 +606,7 @@ export function Composer({
 
         <button
           onClick={submit}
-          disabled={submitting}
+          disabled={submitting || overCaptionLimit}
           className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
         >
           {submitting ? "Scheduling…" : "Schedule post"}
@@ -543,7 +637,7 @@ export function Composer({
         </div>
         <button
           onClick={saveDraft}
-          disabled={submitting}
+          disabled={submitting || textOnly}
           className="w-full rounded-lg border border-border-strong bg-surface px-4 py-2 text-sm font-medium text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
         >
           Save to library

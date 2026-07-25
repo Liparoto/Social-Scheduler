@@ -12,8 +12,20 @@ export async function POST(req: NextRequest) {
   const channelIds: number[] = Array.isArray(body.channel_ids) ? body.channel_ids : [];
   const localTime: string = body.scheduled_local; // "YYYY-MM-DDTHH:mm"
   const timeZone: string = body.timezone || "UTC";
+  const isText: boolean = body.post_type === "text";
+  const caption: string = (body.caption || "").trim();
 
-  if (assetIds.length === 0) {
+  if (isText) {
+    if (assetIds.length > 0) {
+      return NextResponse.json(
+        { error: "A text-only post can't have images." },
+        { status: 400 }
+      );
+    }
+    if (!caption) {
+      return NextResponse.json({ error: "Write a caption for the text post." }, { status: 400 });
+    }
+  } else if (assetIds.length === 0) {
     return NextResponse.json({ error: "Add at least one image." }, { status: 400 });
   }
   if (channelIds.length === 0) {
@@ -28,7 +40,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const postType: PostType = assetIds.length > 1 ? "carousel" : "single";
+  const postType: PostType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
   if (postType === "carousel" && assetIds.length > 10) {
     return NextResponse.json(
       { error: "A carousel can hold at most 10 images." },
@@ -68,7 +80,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { postId, publicationIds } = createPostWithPublications({
-    caption: (body.caption || "").trim(),
+    caption,
     first_comment: (body.first_comment || "").trim(),
     post_type: postType,
     asset_ids: assetIds,

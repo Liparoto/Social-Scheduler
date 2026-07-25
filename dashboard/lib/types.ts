@@ -9,7 +9,7 @@ export interface Tag {
   name: string;
   kind: TagKind;
 }
-export type PostType = "single" | "carousel" | "reel" | "story";
+export type PostType = "single" | "carousel" | "reel" | "story" | "text";
 export type PostStatus = "draft" | "scheduled" | "posted" | "failed";
 export type PublicationStatus =
   | "scheduled"
