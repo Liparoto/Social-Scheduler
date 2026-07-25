@@ -54,7 +54,7 @@ def test_text_only_send_posts_json_content_with_no_files_part():
     out = c.send_message(WEBHOOK_URL, content="hello world")
 
     url, data, files, json_body = c.session.posts[0]
-    assert url == WEBHOOK_URL
+    assert url == WEBHOOK_URL + "?wait=true"
     assert json_body == {"content": "hello world"}
     assert data is None
     assert files is None
@@ -66,7 +66,7 @@ def test_one_image_send_uses_multipart_with_payload_json_and_files0():
     c.send_message(WEBHOOK_URL, content="caption", files=[("a.jpg", b"bytes-a")])
 
     url, data, files, json_body = c.session.posts[0]
-    assert url == WEBHOOK_URL
+    assert url == WEBHOOK_URL + "?wait=true"
     assert json_body is None
     assert data is not None
     import json as jsonlib
@@ -128,6 +128,33 @@ def test_send_message_requires_content_or_files():
     c = client()
     with pytest.raises(ValueError):
         c.send_message(WEBHOOK_URL)
+
+
+def test_send_message_appends_wait_true_so_discord_returns_the_real_message():
+    """A real Discord webhook POST replies 204 (empty body) by default — appending
+    `wait=true` is what makes Discord return the created message object with its real
+    id, instead of publisher._publish_discord falling back to the "posted" marker for
+    every single publication."""
+    c = client([FakeResponse({"id": "msg-real-id"})])
+    c.send_message(WEBHOOK_URL, content="hi")
+    url, *_ = c.session.posts[0]
+    assert url == f"{WEBHOOK_URL}?wait=true"
+
+
+def test_send_message_appends_wait_true_with_ampersand_when_url_already_has_a_query():
+    c = client([FakeResponse({"id": "msg-x"})])
+    url_with_query = WEBHOOK_URL + "?thread_id=999"
+    c.send_message(url_with_query, content="hi")
+    posted_url, *_ = c.session.posts[0]
+    assert posted_url == url_with_query + "&wait=true"
+
+
+def test_get_webhook_url_is_unmodified():
+    """wait=true only matters for send_message (a message create); get_webhook fetches
+    the webhook object itself and must not be mutated."""
+    c = client([FakeResponse({"id": "wh-1", "name": "bot", "channel_id": "chan-1"})])
+    c.get_webhook(WEBHOOK_URL)
+    assert c.session.gets[0] == WEBHOOK_URL
 
 
 class RaisingSession:

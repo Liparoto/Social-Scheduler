@@ -44,10 +44,22 @@ class TelegramClient:
         except requests.RequestException as exc:
             # The token lives in the URL path, and exc's own str() embeds that URL (e.g.
             # a ConnectionError repeats the request URL) — redact before it's raised.
+            # `from None` suppresses the chain so exc's own (unredacted) str() can't leak
+            # back out via __cause__ in a traceback.
             raise TelegramAPIError(
                 f"POST {redact(url)} -> request failed: {redact(str(exc))}"
-            ) from exc
-        body = resp.json()
+            ) from None
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            # A non-JSON response (e.g. an HTML 502 from an intermediary CDN) must not
+            # escape as a raw JSONDecodeError — make this defensive like Discord's
+            # _parse, and keep the invariant that only TelegramAPIError leaves this
+            # client.
+            raise TelegramAPIError(
+                f"POST {redact(url)} -> {resp.status_code}: non-JSON response: "
+                f"{redact(resp.text)[:200]}"
+            ) from None
         if not resp.ok or not body.get("ok"):
             # A response body can, in principle, echo the token back — redact it too,
             # cheap insurance on top of always redacting the URL itself.

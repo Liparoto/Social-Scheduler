@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   bulkCreatePublications,
+  getCaptionVariants,
   getChannel,
   getPost,
   getPostAssets,
@@ -9,6 +10,7 @@ import {
 } from "@/lib/queries";
 import { intervalSlots } from "@/lib/scheduling";
 import { incompatiblePostError } from "@/lib/platforms";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -53,6 +55,17 @@ export async function POST(
   const compatError = incompatiblePostError(post.post_type, assetCount, targetChannels);
   if (compatError) {
     return NextResponse.json({ error: compatError }, { status: 400 });
+  }
+
+  // Same check content/route.ts's PATCH and the create routes already do — a caption
+  // that fits every channel this post is CURRENTLY targeted at can still be too long
+  // for a channel being added here (e.g. retargeting an evergreen IG post to Telegram).
+  // Skipping this check is exactly how a post ends up scheduled and then failing
+  // terminally, forever, on every autofill re-selection.
+  const variants = getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
+  const captionError = captionLimitError(targetChannels, variants, post.caption, post.post_type);
+  if (captionError) {
+    return NextResponse.json({ error: captionError }, { status: 400 });
   }
 
   const entries: BulkEntry[] = [];

@@ -20,6 +20,7 @@ from . import db
 from .clients import PLATFORM_CAPS, ClientRegistry, UnknownPlatform
 from .config import Config, dry_run_active, kill_switch_active, load_env
 from .logging_setup import configure_logging
+from .redact import redact
 
 # Imported eagerly, not lazily, so publisher's registry-vs-SUPPORTED_PLATFORMS asserts run
 # at startup. Imported inside run_once instead, a mismatch surfaces only once the first
@@ -113,7 +114,7 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
                     if pub["id"] in tunnel_needed_ids:
                         db.update_publication(
                             conn, pub["id"],
-                            last_error=f"publish endpoint unavailable: {exc}",
+                            last_error=redact(f"publish endpoint unavailable: {exc}"),
                             updated_at=now.isoformat(),
                         )
                 due = [pub for pub in due if pub["id"] not in tunnel_needed_ids]

@@ -148,3 +148,35 @@ def test_send_message_network_failure_raises_without_leaking_token():
     # still says something useful: it was a connection failure to Telegram's API
     assert "api.telegram.org" in message
     assert "ConnectionError" in message or "connection" in message.lower()
+
+
+class NonJsonResponse:
+    """A response whose body isn't JSON at all — e.g. an HTML 502 from an intermediary
+    CDN in front of Telegram's API — exactly like real `requests`, whose .json() raises
+    a (requests-wrapped) json.JSONDecodeError, a ValueError subclass, in that case."""
+
+    def __init__(self):
+        self.ok = False
+        self.status_code = 502
+        self.text = "<html><body>502 Bad Gateway</body></html>"
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
+class NonJsonSession:
+    def post(self, url, data=None, files=None, timeout=None):
+        return NonJsonResponse()
+
+
+def test_non_json_response_raises_telegram_api_error_not_raw_json_decode_error():
+    """resp.json() used to be called outside the try/except, so a non-JSON response
+    (e.g. an HTML error page) escaped as a raw ValueError/JSONDecodeError instead of the
+    client's own TelegramAPIError — breaking the invariant that only TelegramAPIError
+    ever leaves this client."""
+    c = TelegramClient(session=NonJsonSession())
+    with pytest.raises(TelegramAPIError) as excinfo:
+        c.send_message(TOKEN, "chat-1", "hi")
+    message = str(excinfo.value)
+    assert TOKEN not in message
+    assert "502" in message

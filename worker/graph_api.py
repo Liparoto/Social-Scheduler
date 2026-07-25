@@ -42,7 +42,10 @@ class GraphClient:
         try:
             resp = self.session.post(f"{self.base}/{path}", data=data, timeout=self.timeout)
         except requests.RequestException as exc:
-            raise GraphAPIError(f"POST {path} -> request failed: {redact(str(exc))}") from exc
+            # `from None`: exc's own str() carries the unredacted access_token (it's a
+            # query param on the request URL) — never let it survive into a traceback
+            # via __cause__. The redacted message above already carries what's useful.
+            raise GraphAPIError(f"POST {path} -> request failed: {redact(str(exc))}") from None
         if not resp.ok:
             raise GraphAPIError(f"POST {path} -> {resp.status_code}: {redact(resp.text)}")
         return resp.json()
@@ -51,7 +54,7 @@ class GraphClient:
         try:
             resp = self.session.get(f"{self.base}/{path}", params=params, timeout=self.timeout)
         except requests.RequestException as exc:
-            raise GraphAPIError(f"GET {path} -> request failed: {redact(str(exc))}") from exc
+            raise GraphAPIError(f"GET {path} -> request failed: {redact(str(exc))}") from None
         if not resp.ok:
             raise GraphAPIError(f"GET {path} -> {resp.status_code}: {redact(resp.text)}")
         return resp.json()

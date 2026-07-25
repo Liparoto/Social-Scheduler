@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { PublicationRow } from "@/lib/queries";
 import type { PublicationStatus, Platform } from "@/lib/types";
-import { PLATFORMS } from "@/lib/platforms";
+import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev } from "@/lib/format";
@@ -162,8 +162,7 @@ export function PublicationQueue({
                         </span>
                       ) : null}
                     </span>
-                    {p.status === "posted" &&
-                    (p.channel_platform === "discord" || p.channel_platform === "telegram") ? (
+                    {p.status === "posted" && !supportsMetrics(p.channel_platform) ? (
                       // Discord and Telegram have no metrics at all — rendering nothing here
                       // (rather than an always-empty strip or a perpetual "metrics pending…")
                       // is the same call already made for Facebook's reach and Threads' missing
@@ -228,6 +227,7 @@ export function PublicationQueue({
                       isHeld={p.is_held === 1}
                       scheduledAt={p.scheduled_at}
                       channelTimezone={p.channel_timezone}
+                      platform={p.channel_platform}
                     />
                   </td>
                 </tr>

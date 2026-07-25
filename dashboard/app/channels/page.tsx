@@ -1,6 +1,6 @@
 import { getChannels } from "@/lib/queries";
 import { config } from "@/lib/config";
-import { accountIdLabel } from "@/lib/platforms";
+import { accountIdLabel, usesAccountId } from "@/lib/platforms";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
@@ -25,8 +25,9 @@ export default function ChannelsPage() {
 
         {channels.length === 0 ? (
           <EmptyState title="No channels configured">
-            Add your first Instagram or Facebook account above. You&rsquo;ll need its account
-            id and a long-lived access token from your own Meta app.
+            Add your first account above — Instagram, Facebook, Threads, Discord, or
+            Telegram. Most need an account id and a long-lived access token; Discord
+            just needs a webhook URL.
           </EmptyState>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
@@ -53,11 +54,13 @@ export default function ChannelsPage() {
                       {c.timezone} · {tzAbbrev(c.timezone)}
                     </span>
                   </Row>
-                  <Row label={accountIdLabel(c.platform)}>
-                    <span className="data text-ink-soft">
-                      {c.remote_account_id || <span className="text-faint">not set</span>}
-                    </span>
-                  </Row>
+                  {usesAccountId(c.platform) ? (
+                    <Row label={accountIdLabel(c.platform)}>
+                      <span className="data text-ink-soft">
+                        {c.remote_account_id || <span className="text-faint">not set</span>}
+                      </span>
+                    </Row>
+                  ) : null}
                   <Row label="Access token">
                     <span className="text-ink-soft">
                       {c.access_token ? (

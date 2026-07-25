@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   bulkCreatePublications,
+  getCaptionVariants,
   getChannel,
   getPost,
   getPostAssets,
@@ -9,6 +10,7 @@ import {
 } from "@/lib/queries";
 import { intervalSlots } from "@/lib/scheduling";
 import { incompatiblePostError } from "@/lib/platforms";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -61,6 +63,14 @@ export async function POST(req: NextRequest) {
     const compatError = incompatiblePostError(post!.post_type, assetCount, targetChannels);
     if (compatError) {
       return NextResponse.json({ error: compatError }, { status: 400 });
+    }
+    // Same reasoning as [id]/schedule/route.ts: this route creates real publications
+    // immediately, so a caption too long for one of the selected channels must be
+    // rejected here rather than scheduled and left to fail terminally at publish time.
+    const variants = getCaptionVariants(post!.id).map((v) => ({ platform: v.platform, body: v.body }));
+    const captionError = captionLimitError(targetChannels, variants, post!.caption, post!.post_type);
+    if (captionError) {
+      return NextResponse.json({ error: `Post ${post!.id}: ${captionError}` }, { status: 400 });
     }
   }
 

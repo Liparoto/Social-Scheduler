@@ -61,6 +61,17 @@ class DiscordClient:
         echoes the URL back in an error body."""
         raise DiscordAPIError(f"Discord request failed -> {resp.status_code}: {redact(resp.text)}")
 
+    @staticmethod
+    def _with_wait_true(webhook_url: str) -> str:
+        """Append `wait=true` so Discord returns the created message object instead of
+        an empty 204 body. Without it, every send_message's remote_post_id would be the
+        literal fallback marker "posted" (see publisher._publish_discord), never a real
+        message id — Discord's default `?wait=false` behavior. Appends with `&` when the
+        URL already carries a query string, `?` otherwise, so this never breaks a
+        webhook URL that already has one."""
+        sep = "&" if "?" in webhook_url else "?"
+        return f"{webhook_url}{sep}wait=true"
+
     def send_message(
         self,
         webhook_url: str,
@@ -75,19 +86,23 @@ class DiscordClient:
         if content is not None:
             payload["content"] = content
 
+        url = self._with_wait_true(webhook_url)
         try:
             if files:
                 data = {"payload_json": json.dumps(payload)}
                 file_parts = {f"files[{i}]": f for i, f in enumerate(files)}
                 resp = self.session.post(
-                    webhook_url, data=data, files=file_parts, timeout=self.timeout
+                    url, data=data, files=file_parts, timeout=self.timeout
                 )
             else:
-                resp = self.session.post(webhook_url, json=payload, timeout=self.timeout)
+                resp = self.session.post(url, json=payload, timeout=self.timeout)
         except requests.RequestException as exc:
             # The webhook URL IS the credential, and it lives inside exc's own str() (e.g.
             # a ConnectionError embeds the request URL) — never let that reach the message.
-            raise DiscordAPIError(f"Discord request failed: {redact(str(exc))}") from exc
+            # `from None` (not `from exc`) suppresses the chain: the redacted message
+            # already carries everything useful, and exc's own str() (still holding the
+            # raw URL) must never survive into a traceback via __cause__.
+            raise DiscordAPIError(f"Discord request failed: {redact(str(exc))}") from None
 
         if not resp.ok:
             self._fail(resp)
@@ -97,7 +112,7 @@ class DiscordClient:
         try:
             resp = self.session.get(webhook_url, timeout=self.timeout)
         except requests.RequestException as exc:
-            raise DiscordAPIError(f"Discord request failed: {redact(str(exc))}") from exc
+            raise DiscordAPIError(f"Discord request failed: {redact(str(exc))}") from None
         if not resp.ok:
             self._fail(resp)
         return self._parse(resp)

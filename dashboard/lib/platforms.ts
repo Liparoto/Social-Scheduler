@@ -27,6 +27,7 @@ export const PLATFORMS = [
     supportsText: false,
     maxCarousel: 10,
     captionChars: {},
+    supportsMetrics: true,
   },
   {
     value: "facebook",
@@ -38,6 +39,7 @@ export const PLATFORMS = [
     supportsText: false,
     maxCarousel: 10,
     captionChars: {},
+    supportsMetrics: true,
   },
   {
     value: "threads",
@@ -49,6 +51,7 @@ export const PLATFORMS = [
     supportsText: true,
     maxCarousel: 20,
     captionChars: { text: 500, single: 500, carousel: 500 },
+    supportsMetrics: true,
   },
   {
     value: "discord",
@@ -61,6 +64,8 @@ export const PLATFORMS = [
     supportsText: true,
     maxCarousel: 10,
     captionChars: { text: 2000, single: 2000, carousel: 2000 },
+    // A webhook has no insights/analytics API at all — there is nothing to ever fetch.
+    supportsMetrics: false,
   },
   {
     value: "telegram",
@@ -72,6 +77,8 @@ export const PLATFORMS = [
     supportsText: true,
     maxCarousel: 10,
     captionChars: { text: 4096, single: 1024, carousel: 1024 },
+    // The Bot API exposes no metrics/insights endpoint at all.
+    supportsMetrics: false,
   },
 ] as const;
 
@@ -111,6 +118,13 @@ export function usesAccountId(value: string): boolean {
 // unrecognised platform, rather than offering a text post to something that can't publish one.
 export function supportsText(value: string): boolean {
   return BY_VALUE.get(value)?.supportsText ?? false;
+}
+
+// Default true is the safe direction for an unrecognised platform: worst case it shows a
+// "Refresh metrics" button / metrics strip that never produces a number, rather than
+// hiding a real metrics capability an unrecognised platform might actually have.
+export function supportsMetrics(value: string): boolean {
+  return BY_VALUE.get(value)?.supportsMetrics ?? true;
 }
 
 // Per-post-type lookup — replaces the old single-number maxCaptionChars. Telegram is why:

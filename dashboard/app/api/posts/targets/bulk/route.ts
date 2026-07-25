@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bulkAddTargets, bulkRemoveTargets, getChannel } from "@/lib/queries";
+import {
+  bulkAddTargets,
+  bulkRemoveTargets,
+  getCaptionVariants,
+  getChannel,
+  getPost,
+} from "@/lib/queries";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -23,9 +30,30 @@ export async function POST(req: NextRequest) {
   if (action !== "add" && action !== "remove") {
     return NextResponse.json({ error: "action must be 'add' or 'remove'." }, { status: 400 });
   }
-  for (const channelId of channelIds) {
-    if (!getChannel(channelId)) {
-      return NextResponse.json({ error: `Unknown channel ${channelId}.` }, { status: 400 });
+  const channels = channelIds.map((cid) => getChannel(cid));
+  const unknownIdx = channels.findIndex((c) => !c);
+  if (unknownIdx !== -1) {
+    return NextResponse.json({ error: `Unknown channel ${channelIds[unknownIdx]}.` }, { status: 400 });
+  }
+  const targetChannels = channels.map((c) => c!);
+
+  // This is exactly the "recycle a good post to every channel" workflow the caption
+  // limit exists for: an evergreen post fine on Instagram can be fine to LOOK at when
+  // Telegram is added here, then autofill queues it and the worker fails it terminally
+  // forever, with nothing in the UI having warned. Only "add" can introduce a new,
+  // possibly-too-strict platform; "remove" can only relax constraints.
+  if (action === "add") {
+    for (const postId of postIds) {
+      const post = getPost(postId);
+      if (!post) continue; // unknown post ids are silently ignored elsewhere in this route today
+      const variants = getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
+      const captionError = captionLimitError(targetChannels, variants, post.caption, post.post_type);
+      if (captionError) {
+        return NextResponse.json(
+          { error: `Post ${postId}: ${captionError}` },
+          { status: 400 }
+        );
+      }
     }
   }
 

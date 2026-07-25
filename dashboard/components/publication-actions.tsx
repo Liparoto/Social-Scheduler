@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { PublicationStatus } from "@/lib/types";
+import { supportsMetrics } from "@/lib/platforms";
 
 // Split a UTC ISO instant into {date, time} strings in a given IANA timezone,
 // suitable for prefilling <input type="date"> / <input type="time">.
@@ -48,6 +49,7 @@ export function PublicationActions({
   isHeld = false,
   scheduledAt = null,
   channelTimezone = "UTC",
+  platform,
 }: {
   id: number;
   status: PublicationStatus;
@@ -56,6 +58,7 @@ export function PublicationActions({
   isHeld?: boolean;
   scheduledAt?: string | null;
   channelTimezone?: string;
+  platform?: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -307,7 +310,7 @@ export function PublicationActions({
     );
   }
 
-  if (status === "posted" && !isDryRun) {
+  if (status === "posted" && !isDryRun && (!platform || supportsMetrics(platform))) {
     return (
       <div className="flex flex-col items-end gap-1">
         <button
