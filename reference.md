@@ -148,12 +148,69 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
   (reach/impressions moving to "views"/"unique media viewers"), so reach is fetched best-effort
   via `FB_POST_INSIGHT_METRICS` and stored null when the name is rejected.
 
+### Threads publishing (verified 2026-07-25)
+- **Base host:** `https://graph.threads.net`. Endpoints below are relative to
+  `{base}/{version}/...` the same way IG/FB are — see the ⚠ note below on which version
+  actually gets used at runtime.
+- **Container → publish flow, same shape as Instagram's:**
+  1. `POST /{threads-user-id}/threads` — create a container. `media_type` is `TEXT`
+     (requires `text`, no `image_url`), `IMAGE` (requires `image_url`, `text` optional), or
+     `CAROUSEL` (requires `children`, a comma-separated list of child container ids;
+     `text` optional). Carousel children are created first as their own containers with
+     `is_carousel_item=true`, `media_type=IMAGE`, `image_url=...`.
+  2. `POST /{threads-user-id}/threads_publish` with `creation_id=<container id>`.
+- **Status field is `status`, not Instagram's `status_code`.** `GET /{container-id}?fields=status`
+  → poll until `FINISHED` before publishing (same polling discipline as IG carousels/video —
+  Threads containers are not guaranteed synchronous). `ERROR`/`EXPIRED` are terminal.
+- **Carousels: 2–20 children.** Below 2 or above 20 is rejected before any Graph API call is
+  made. (Contrast with Instagram's documented cap of 10 — the two platforms' limits are
+  independent; don't apply one to the other.)
+- **Text posts are a Threads-only capability** among this project's three platforms — neither
+  Instagram nor Facebook Pages can publish a post with no media, so `TEXT` containers have no
+  IG/FB equivalent. Max **500 characters**.
+- **Quota gate — `GET /{threads-user-id}/threads_publishing_limit`, fields
+  `quota_usage,config`** → `config.quota_total` (**250**), `config.quota_duration` (**86400s /
+  24h, rolling**). Unlike Facebook Pages, **Threads *is* gated at runtime** — the worker reads
+  this endpoint before every publish and defers (retries later) rather than posting once the
+  account hits `quota_usage >= quota_total`, the same pattern as Instagram's
+  `content_publishing_limit`, just a different endpoint name and number.
+- **Insights — two response envelopes, handled explicitly:** `GET /{media-id}/insights`
+  returns each metric either as `{"total_value": {"value": N}}` (Threads' lifetime-metric
+  shape) or `{"values": [{"value": N}]}` (Instagram/Facebook's shape). The client checks for
+  `total_value` first and falls back to `values[0]`, kept as Threads-only parsing so an IG/FB
+  envelope change can't regress from a Threads-specific fix, or vice versa.
+- **Metric → column mapping** (`THREADS_INSIGHT_METRICS`, default
+  `views,likes,replies,reposts,quotes`):
+  - `views` → `impressions`
+  - `likes` → `likes` (same column Instagram/Facebook use)
+  - `replies` → `comments`
+  - `reposts` → `shares`
+  - **`quotes` is deliberately left unmapped.** There is no `quotes` column, and folding it
+    into `shares` would silently inflate that number with a metric that means something
+    different (a quote-post is new content referencing the original, not a share of it). It's
+    preserved in the row's `raw_json` for anyone who wants it, but never aggregated into a
+    named column.
+  - `reach` and `saves` have no Threads source metric and stay `NULL` on Threads rows — this
+    mirrors Facebook Pages' incomplete metric set (see above) rather than Instagram's full one.
+- **API version is resolved per platform, not install-wide.** Threads versions its API
+  independently of the Instagram/Facebook Graph API epoch, so it does not share
+  `Config.graph_version`. `clients._API_VERSIONS` resolves Instagram and Facebook to
+  `config.graph_version` (`META_GRAPH_VERSION`, default `v25.0`) and Threads to its own
+  `config.threads_api_version` (`THREADS_API_VERSION`, default `v1.0`). `ClientRegistry`
+  caches clients on the resolved `(base_url, version)` pair (not base URL alone), so a real
+  Threads call correctly hits `https://graph.threads.net/v1.0/...` while Instagram/Facebook
+  keep hitting the install's configured `v25.0` — verified by
+  `worker/tests/test_clients.py::test_threads_resolves_to_its_own_api_version_through_the_registry`.
+  Re-check `THREADS_API_VERSION` periodically against live docs, same as `META_GRAPH_VERSION`.
+
 ### Open items to resolve at implementation time
 1. Confirm the **actual** `quota_total` per account at runtime (50 vs 100).
 2. Confirm the exact **Facebook Page** publish + metrics endpoints when we build that adapter
    (out of scope for the first IG-only milestone; verify against live docs then).
 3. Confirm current **video/Reels** required params against live docs when we build that
    adapter.
+4. ~~Threads API version~~ — resolved: Threads now resolves its own `THREADS_API_VERSION`
+   (default `v1.0`) via `clients._API_VERSIONS`, independent of `META_GRAPH_VERSION`.
 
 ---
 

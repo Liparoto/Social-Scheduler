@@ -17,12 +17,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import db
-from .clients import SUPPORTED_PLATFORMS
+from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS
 from .config import Config
 
 MIN_CAROUSEL = 2
-MAX_CAROUSEL = 10  # Graph API limit (see reference.md), NOT the app's 20.
-SUPPORTED_POST_TYPES = ("single", "carousel")
+SUPPORTED_POST_TYPES = ("single", "carousel", "text")
 
 
 def _utcnow() -> datetime:
@@ -97,11 +96,13 @@ def _resolve_url(asset, asset_base_url: str | None) -> str | None:
     return None
 
 
-def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str) -> None:
+def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,
+              caption: str | None = None) -> None:
     if platform not in _PUBLISHERS:
         raise _NonRetryable(
             f"unsupported platform '{platform}' — this worker has no adapter for it"
         )
+    caps = PLATFORM_CAPS[platform]
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
@@ -109,10 +110,25 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         )
     if post_type == "single" and len(assets) != 1:
         raise _NonRetryable(f"single post needs exactly 1 asset, has {len(assets)}")
-    if post_type == "carousel" and not (MIN_CAROUSEL <= len(assets) <= MAX_CAROUSEL):
+    if post_type == "carousel" and not (MIN_CAROUSEL <= len(assets) <= caps.max_carousel):
         raise _NonRetryable(
-            f"carousel needs {MIN_CAROUSEL}-{MAX_CAROUSEL} assets, has {len(assets)}"
+            f"carousel needs {MIN_CAROUSEL}-{caps.max_carousel} assets, has {len(assets)}"
         )
+    if post_type == "text":
+        if not caps.supports_text:
+            raise _NonRetryable(f"{platform} cannot publish text-only posts")
+        if assets:
+            raise _NonRetryable(
+                f"a text post must have no assets, has {len(assets)}"
+            )
+        if not (caption or "").strip():
+            raise _NonRetryable("a text post needs a caption")
+    if caps.max_caption_chars is not None and caption is not None:
+        if len(caption) > caps.max_caption_chars:
+            raise _NonRetryable(
+                f"caption is {len(caption)} characters; {platform} allows "
+                f"{caps.max_caption_chars}"
+            )
     if not dry_run:
         missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]
         if missing:
@@ -156,12 +172,17 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     }
 
 
-def _poll_until_finished(client, container_id, token, config, sleep_fn) -> None:
+def _poll_until_finished(client, container_id, token, config, sleep_fn, status_fn=None) -> None:
     """Poll a container's status_code until FINISHED. Small images are usually ready
     immediately; carousels/video need this. ERROR/EXPIRED are terminal failures.
+
+    status_fn lets other platforms reuse this same poll loop against their own status
+    call (e.g. Threads' get_threads_container_status, whose field is named `status`
+    rather than Instagram's `status_code`) without duplicating the loop.
     """
+    status_fn = status_fn or client.get_container_status
     for _ in range(config.status_poll_max_tries):
-        status = client.get_container_status(container_id, token)
+        status = status_fn(container_id, token)
         if status == "FINISHED":
             return
         if status in ("ERROR", "EXPIRED"):
@@ -217,15 +238,61 @@ def _publish_fb_multi(client, plan, token) -> str:
 
 
 def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
-    if plan["post_type"] == "single":
+    post_type = plan["post_type"]
+    if post_type == "single":
         return _publish_single(client, plan, token, config, sleep_fn)
-    return _publish_carousel(client, plan, token, config, sleep_fn)
+    elif post_type == "carousel":
+        return _publish_carousel(client, plan, token, config, sleep_fn)
+    else:
+        raise _NonRetryable(f"instagram adapter has no publish path for post_type '{post_type}'")
 
 
 def _publish_facebook(client, plan, token, config, sleep_fn) -> str:
-    if plan["post_type"] == "single":
+    post_type = plan["post_type"]
+    if post_type == "single":
         return _publish_fb_single(client, plan, token)
-    return _publish_fb_multi(client, plan, token)
+    elif post_type == "carousel":
+        return _publish_fb_multi(client, plan, token)
+    else:
+        raise _NonRetryable(f"facebook adapter has no publish path for post_type '{post_type}'")
+
+
+def _publish_threads(client, plan, token, config, sleep_fn) -> str:
+    """Container -> publish, like Instagram, but text posts need no media at all."""
+    user = plan["account_id"]
+    post_type = plan["post_type"]
+
+    if post_type == "text":
+        container = client.create_threads_container(
+            user, token, media_type="TEXT", text=plan["caption"]
+        )
+    elif post_type == "single":
+        container = client.create_threads_container(
+            user, token, media_type="IMAGE",
+            image_url=plan["asset_urls"][0], text=plan["caption"],
+        )
+    elif post_type == "carousel":
+        children = []
+        for url in plan["asset_urls"]:
+            child = client.create_threads_container(
+                user, token, media_type="IMAGE", image_url=url, is_carousel_item=True
+            )
+            _poll_until_finished(
+                client, child, token, config, sleep_fn,
+                status_fn=client.get_threads_container_status,
+            )
+            children.append(child)
+        container = client.create_threads_container(
+            user, token, media_type="CAROUSEL", children=children, text=plan["caption"]
+        )
+    else:
+        raise _NonRetryable(f"threads adapter has no publish path for post_type '{post_type}'")
+
+    _poll_until_finished(
+        client, container, token, config, sleep_fn,
+        status_fn=client.get_threads_container_status,
+    )
+    return client.publish_threads_container(user, container, token)
 
 
 # Publish entry point per platform. Uniform signature so the dispatch below is a lookup,
@@ -233,6 +300,7 @@ def _publish_facebook(client, plan, token, config, sleep_fn) -> str:
 _PUBLISHERS = {
     "instagram": _publish_instagram,
     "facebook": _publish_facebook,
+    "threads": _publish_threads,
 }
 
 # Whether each platform exposes a runtime publish quota to read before posting. An
@@ -244,9 +312,22 @@ _PUBLISHERS = {
 #   * facebook  — Facebook Pages have no content_publishing_limit endpoint, so there is
 #                 nothing to read; inventing a hardcoded number would be worse than not
 #                 gating.
+#   * threads   — has its own threads_publishing_limit endpoint (250 published posts per
+#                 rolling 24h, per Meta's docs — read live, never hardcoded); must be
+#                 gated like Instagram.
 _QUOTA_GATED = {
     "instagram": True,
     "facebook": False,
+    "threads": True,
+}
+
+# The quota-reading call differs per gated platform (Instagram and Threads expose the same
+# (usage, total, duration) shape but through different endpoints/methods), so the gate looks
+# up which method to call here rather than hardcoding Instagram's. Only platforms that are
+# actually gated belong here — see the assertion below.
+_QUOTA_READERS = {
+    "instagram": lambda c, acct, tok: c.get_content_publishing_limit(acct, tok),
+    "threads": lambda c, acct, tok: c.get_threads_publishing_limit(acct, tok),
 }
 
 assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
@@ -254,6 +335,9 @@ assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
 )
 assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), (
     "publisher._QUOTA_GATED and clients.SUPPORTED_PLATFORMS disagree"
+)
+assert set(_QUOTA_READERS) == {p for p, gated in _QUOTA_GATED.items() if gated}, (
+    "publisher._QUOTA_READERS must have exactly the platforms _QUOTA_GATED marks True"
 )
 
 
@@ -297,12 +381,12 @@ def publish_one(
     # 1. Load + validate. Bad data/config is a terminal (non-retryable) failure.
     try:
         channel, post, assets = _load_targets(conn, pub)
-        _validate(post, assets, dry_run, asset_base_url, channel["platform"])
         used_count = conn.execute(
             "SELECT COUNT(*) FROM publications WHERE post_id=? AND channel_id=? AND status='posted'",
             (pub["post_id"], pub["channel_id"]),
         ).fetchone()[0]
         caption = _select_caption(conn, post["id"], channel["platform"], used_count)
+        _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption)
         plan = _build_plan(channel, post, assets, asset_base_url, caption)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
@@ -323,11 +407,13 @@ def publish_one(
     ig = plan["account_id"]
 
     # 3. Rate-limit gate: read Meta's REAL quota, cache it, refuse if exhausted.
-    #    Instagram only — Facebook Pages expose no content_publishing_limit endpoint,
-    #    and inventing a hardcoded number here would be worse than not gating.
+    #    Only platforms _QUOTA_GATED marks True — Facebook Pages expose no
+    #    content_publishing_limit endpoint, and inventing a hardcoded number here would
+    #    be worse than not gating. Which method to call is per-platform (_QUOTA_READERS)
+    #    since Instagram and Threads expose the same shape through different endpoints.
     if _QUOTA_GATED.get(plan["platform"]):
         try:
-            usage, total, duration = client.get_content_publishing_limit(ig, token)
+            usage, total, duration = _QUOTA_READERS[plan["platform"]](client, ig, token)
             db.record_publish_limit(conn, channel["id"], usage, total, duration, _iso(now))
             if usage is not None and total is not None and usage >= total:
                 retry_at = _iso(now + timedelta(seconds=config.rate_limit_backoff_seconds))
@@ -346,6 +432,13 @@ def publish_one(
     db.update_publication(conn, pub["id"], status="publishing", updated_at=_iso(now))
     try:
         media_id = _PUBLISHERS[plan["platform"]](client, plan, token, config, sleep_fn)
+    except _NonRetryable as exc:
+        # An adapter that can't handle this post_type at all (e.g. a future post_type
+        # SUPPORTED_POST_TYPES accepts but this platform's publish function doesn't
+        # branch on) is bad data/config, not a transient error — fail terminally like
+        # every other unsupported combination, never silently retry it.
+        log(f"publish failed (non-retryable): {exc}")
+        return _mark_failure(conn, pub, config, now, str(exc), terminal=True)
     except Exception as exc:  # noqa: BLE001 — transient publish error, retry with backoff
         log(f"publish failed: {exc}")
         return _mark_failure(conn, pub, config, now, f"publish: {exc}", terminal=False)

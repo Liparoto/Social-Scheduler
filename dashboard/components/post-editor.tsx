@@ -14,7 +14,8 @@ import type {
   Tag,
 } from "@/lib/types";
 import { channelColor } from "@/lib/format";
-import { CaptionVariantsEditor } from "./caption-variants-editor";
+import { platformLabel } from "@/lib/platforms";
+import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
@@ -82,6 +83,15 @@ export function PostEditor({
   async function save() {
     setError(null);
     setNotice(null);
+    const overLimit = overLimitCaptionVariants(captions);
+    if (overLimit.length > 0) {
+      setError(
+        `Caption is over the limit for: ${overLimit
+          .map((v) => `${platformLabel(v.platform)} (${v.length}/${v.limit})`)
+          .join(", ")}.`
+      );
+      return;
+    }
     const body = {
       content_kind: kind,
       content_status: status,
@@ -149,8 +159,8 @@ export function PostEditor({
                 </div>
               ))
             ) : (
-              <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-xs text-faint">
-                no image
+              <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
+                {post.post_type === "text" ? "Text post" : "no image"}
               </div>
             )}
           </div>
@@ -216,7 +226,7 @@ export function PostEditor({
       <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
 
       {/* Scheduled sends (retarget/hold/remove/add) */}
-      <PostSendsPanel postId={post.id} sends={sends} channels={sendableChannels} />
+      <PostSendsPanel postId={post.id} postType={post.post_type} sends={sends} channels={sendableChannels} />
 
       {/* Content status + cooldown + save */}
       <section className={card}>

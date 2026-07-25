@@ -431,6 +431,58 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       `reach + saves`, both of which Facebook rarely/never provides, so it scores every FB
       post as 0 and recycling falls back to age/staleness order for FB until the planned
       best-performing-post work (see Phase 6+ backlog below) revisits the ranking formula.
+- [x] **Threads adapter (publish + metrics)** — third platform, registered in every platform
+      registry (`clients._BASE_URLS`/`PLATFORM_CAPS`, `publisher._PUBLISHERS`/`_QUOTA_GATED`/
+      `_QUOTA_READERS`, `preflight._CHECKS`, `metrics._FETCHERS`), each guarded by an assert
+      against `SUPPORTED_PLATFORMS` so a platform can't be added to one registry and
+      forgotten in another. No migration needed — `migrations/0008_platform_foundation.sql`
+      (an earlier sub-project) had already widened `channels.platform` and `posts.post_type`
+      to allow `'threads'` and `'text'`.
+      - **Publishing:** container → publish on `https://graph.threads.net`, same shape as
+        Instagram's flow but polling the container's **`status`** field (not IG's
+        `status_code`). Three post types: **TEXT** (max 500 chars, no media — the only
+        text-only format among the three platforms), **IMAGE**, and **CAROUSEL** (2–20
+        children; Instagram's own cap is 10, unrelated).
+      - **Quota:** Threads *is* gated at runtime, unlike Facebook — `GET
+        /{threads-user-id}/threads_publishing_limit` (250 published posts / rolling 24h),
+        read live before every publish, same pattern as Instagram's
+        `content_publishing_limit`.
+      - **Metrics:** `/{media-id}/insights`, configurable via `THREADS_INSIGHT_METRICS`
+        (default `views,likes,replies,reposts,quotes`), handling both Threads'
+        `total_value.value` envelope and IG/FB's `values[0].value` shape. Maps
+        `views→impressions`, `likes→likes`, `replies→comments`, `reposts→shares`;
+        **`quotes` is deliberately left unmapped** (no column — folding it into `shares`
+        would inflate that number) and lives only in `raw_json`. `reach`/`saves` stay null,
+        same gap as Facebook.
+      - **Composer:** a **"Text only"** toggle hides the image area, shows a live character
+        counter against the strictest limit among selected channels, and disables *and
+        deselects* channels that can't publish text (Instagram, Facebook). Text posts can be
+        saved to the library as drafts.
+      - **Worker independently enforces every rule** — a text post aimed at Instagram fails
+        terminally with a clear error even if it somehow reaches the database, it never
+        silently drops the text or guesses at an image.
+      - Full suite green (232 passing, dry-run-verified end to end); dashboard `tsc` clean.
+      Setup guide: `docs/meta-setup.md#adding-a-threads-account`. Verified facts:
+      `reference.md`.
+      **Known limitation:** same as Facebook — autofill's "prefer top performers" ranking
+      sums `reach + saves`, and Threads never provides either, so it scores every Threads
+      post as 0 and recycling falls back to age/staleness order until the BPP work (Phase 6+
+      backlog) revisits the ranking formula.
+      **Version mismatch resolved:** Threads now resolves its API version independently via
+      `clients._API_VERSIONS` / `config.threads_api_version` (env override
+      `THREADS_API_VERSION`, default `v1.0`), instead of sharing the install-wide
+      `META_GRAPH_VERSION`. `ClientRegistry` caches on the resolved `(base_url, version)`
+      pair so Instagram/Facebook keep hitting the install's configured `v25.0` while Threads
+      correctly hits `v1.0`. See `reference.md` for details.
+- [~] Real-post verification (owner, Threads) — **PARKED 2026-07-24**, mirrors the Facebook
+      item above: code is done, reviewed, and dry-run verified (a Threads text post and a
+      Threads image post both correctly plan and report `dry_run` with
+      `plan["platform"] == "threads"`). What remains is entirely Meta-side account plumbing —
+      adding the Threads product to the Meta app, authorizing via Threads Login (its own
+      OAuth flow — not Facebook Login), and obtaining a long-lived token and Threads user id
+      per `docs/meta-setup.md`. No real post has been attempted. The version-path issue above
+      is now resolved (Threads runs on its own `v1.0` via `THREADS_API_VERSION`, overridable
+      if Meta bumps it), so the first real post is no longer expected to fail on that front.
 - [~] Real-post verification (owner) — **PARKED 2026-07-24**, to resume alongside other
       platform connections. Code is done, reviewed, merged and dry-run verified; what remains is
       Meta-side account plumbing only. State when parked:

@@ -1,4 +1,4 @@
-"""Meta Graph API client for Instagram and Facebook Page content publishing.
+"""Meta Graph API client for Instagram, Facebook Page, and Threads content publishing.
 
 Implements the verified flow (see reference.md, checked against v25.0):
   * create a media container (POST /{ig-user-id}/media)
@@ -233,3 +233,119 @@ class GraphClient:
             {"metric": ",".join(metrics), "access_token": token},
         )
         return self._parse_insights(data)
+
+    # -- Threads publishing -----------------------------------------------------------
+    # Threads publishing is a container -> publish flow like Instagram's, built at
+    # https://graph.threads.net/v1.0 instead of graph.facebook.com. Two differences that
+    # are easy to get backwards:
+    #   * the container-status field is named `status`, not IG's `status_code`
+    #   * lifetime insight metrics come back as {"total_value": {"value": N}} rather than
+    #     IG/FB's {"values": [{"value": N}]} — handled by _parse_threads_insights below,
+    #     which stays separate from the shared _parse_insights so IG/FB behavior can't
+    #     regress from a Threads-only envelope change.
+    def create_threads_container(
+        self,
+        threads_user_id: str,
+        token: str,
+        *,
+        media_type: str,
+        text: str | None = None,
+        image_url: str | None = None,
+        is_carousel_item: bool = False,
+        children: list[str] | None = None,
+    ) -> str:
+        """Create a Threads media container. Returns the container id.
+
+        media_type is one of:
+          TEXT     - requires `text` (max 500 chars), no image_url
+          IMAGE    - requires `image_url`, `text` optional
+          CAROUSEL - requires `children` (2-20 container ids), `text` optional
+
+        Carousel children are created with is_carousel_item=True beforehand, then their
+        ids are passed as `children` to the CAROUSEL parent call.
+        """
+        data = {"media_type": media_type, "access_token": token}
+        if text is not None:
+            data["text"] = text
+        if image_url is not None:
+            data["image_url"] = image_url
+        if is_carousel_item:
+            data["is_carousel_item"] = "true"
+        if children is not None:
+            data["children"] = ",".join(children)
+        return self._post(f"{threads_user_id}/threads", data)["id"]
+
+    def get_threads_container_status(self, container_id: str, token: str) -> str:
+        """Poll until this returns FINISHED before publishing. Note the field name is
+        `status`, unlike Instagram's `status_code`.
+
+        Raises if the field is absent, matching Instagram's get_container_status — a
+        malformed response must fail fast rather than silently returning "" and burning
+        every retry (status_poll_max_tries x status_poll_interval, synchronously, inside
+        the batch loop) waiting for a value that will never arrive.
+        """
+        data = self._get(container_id, {"fields": "status", "access_token": token})
+        if "status" not in data:
+            raise GraphAPIError(
+                f"GET {container_id} -> response missing 'status' field"
+            )
+        return data["status"]
+
+    def publish_threads_container(
+        self, threads_user_id: str, creation_id: str, token: str
+    ) -> str:
+        return self._post(
+            f"{threads_user_id}/threads_publish",
+            {"creation_id": creation_id, "access_token": token},
+        )["id"]
+
+    def get_threads_publishing_limit(
+        self, threads_user_id: str, token: str
+    ) -> tuple[int | None, int | None, int | None]:
+        """Return (quota_usage, quota_total, quota_duration_seconds).
+
+        250 published posts per rolling 24h, per Meta's docs — but read it live rather
+        than hardcoding it, same reasoning as get_content_publishing_limit. Mirrors that
+        method's defensive parsing: `data` may be missing or empty, `config` may be
+        missing.
+        """
+        data = self._get(
+            f"{threads_user_id}/threads_publishing_limit",
+            {"fields": "quota_usage,config", "access_token": token},
+        )
+        entries = data.get("data") or [{}]
+        entry = entries[0]
+        cfg = entry.get("config", {}) or {}
+        return (
+            entry.get("quota_usage"),
+            cfg.get("quota_total"),
+            cfg.get("quota_duration"),
+        )
+
+    def get_threads_insights(
+        self, media_id: str, token: str, metrics: list[str]
+    ) -> dict:
+        """Fetch insight metrics (e.g. views, likes, replies, reposts, quotes) for a
+        published Threads post. Returns {metric_name: value}."""
+        data = self._get(
+            f"{media_id}/insights",
+            {"metric": ",".join(metrics), "access_token": token},
+        )
+        return self._parse_threads_insights(data)
+
+    @staticmethod
+    def _parse_threads_insights(data: dict) -> dict:
+        """Threads insights response shape:
+        {"data": [{"name": ..., "total_value": {"value": N}}, ...]}
+        for lifetime metrics, but some items instead carry the IG/FB-style
+        {"values": [{"value": N}]}. Prefer total_value when present.
+        """
+        out: dict = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            if "total_value" in item:
+                out[name] = (item.get("total_value") or {}).get("value")
+            else:
+                values = item.get("values") or [{}]
+                out[name] = values[0].get("value")
+        return out

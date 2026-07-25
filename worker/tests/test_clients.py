@@ -41,3 +41,65 @@ def test_registry_builds_one_client_per_base_and_caches_it(config):
     assert ig1 == ("client", "https://graph.instagram.com")
     assert fb == ("client", FACEBOOK_BASE)
     assert built == ["https://graph.instagram.com", FACEBOOK_BASE]
+
+
+def test_threads_resolves_to_its_own_api_version_through_the_registry(config):
+    """The bug this guards: ClientRegistry.for_platform used to build every platform's
+    client with the single install-wide config.graph_version. Threads' Graph API is
+    versioned independently (v1.0), so a real Threads call would 404 against v25.0. This
+    must go through ClientRegistry — a directly constructed GraphClient can't catch it."""
+    reg = ClientRegistry(config)
+
+    threads_client = reg.for_platform("threads")
+    ig_client = reg.for_platform("instagram")
+    fb_client = reg.for_platform("facebook")
+
+    assert threads_client.base == "https://graph.threads.net/v1.0"
+    assert ig_client.base == f"{config.graph_base}/{config.graph_version}"
+    assert fb_client.base == f"{FACEBOOK_BASE}/{config.graph_version}"
+
+
+def test_threads_api_version_env_override(config, monkeypatch):
+    monkeypatch.setenv("THREADS_API_VERSION", "v2.0")
+    from worker.config import Config as ConfigCls
+
+    fresh = ConfigCls.from_env()
+    assert fresh.threads_api_version == "v2.0"
+
+
+def test_threads_api_version_defaults_to_v1(config):
+    assert config.threads_api_version == "v1.0"
+
+
+def test_same_base_url_different_version_yields_different_client_instances(config):
+    """Prove the cache key fix: if two platforms shared a base URL but needed different
+    versions, the old base-URL-only cache key would silently hand back the wrong client."""
+    built = []
+
+    def factory(version, base_url):
+        client = object()
+        built.append((version, base_url, client))
+        return client
+
+    reg = ClientRegistry(config, factory=factory)
+
+    # Force instagram and threads to share a base URL, differing only by version.
+    from worker import clients as clients_mod
+
+    monkeypatch_targets = {
+        "instagram": lambda _config: "https://shared.example.com",
+        "threads": lambda _config: "https://shared.example.com",
+    }
+    original = dict(clients_mod._BASE_URLS)
+    clients_mod._BASE_URLS.update(monkeypatch_targets)
+    try:
+        ig_client = reg.for_platform("instagram")
+        threads_client = reg.for_platform("threads")
+        ig_client_again = reg.for_platform("instagram")
+    finally:
+        clients_mod._BASE_URLS.clear()
+        clients_mod._BASE_URLS.update(original)
+
+    assert ig_client is not threads_client   # same base, different version -> different client
+    assert ig_client is ig_client_again      # same platform, repeated call -> identical instance
+    assert len(built) == 2                   # threads was NOT served from instagram's cache slot

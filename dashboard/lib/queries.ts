@@ -15,6 +15,7 @@ import type {
   Tag,
 } from "./types";
 import type { Platform } from "./platforms";
+import { describeChannel, incompatibleChannelsForPostType } from "./platforms";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -295,6 +296,7 @@ export function createPostWithPublications(
 export interface CreateDraftInput extends ContentModelInput {
   caption: string;
   first_comment: string;
+  post_type?: PostType;
   asset_ids: number[];
   created_by?: string;
 }
@@ -305,7 +307,8 @@ export interface CreateDraftInput extends ContentModelInput {
  */
 export function createDraftPost(input: CreateDraftInput): number {
   const db = getDb();
-  const postType = input.asset_ids.length > 1 ? "carousel" : "single";
+  const postType: PostType =
+    input.post_type ?? (input.asset_ids.length > 1 ? "carousel" : "single");
   const tx = db.transaction((data: CreateDraftInput) => {
     const info = db
       .prepare(
@@ -480,10 +483,32 @@ export interface BulkEntry {
   status: "scheduled" | "pending_approval";
 }
 
+/** Thrown when a caller (route or otherwise) tries to target a channel that can't publish
+ *  the post's type — e.g. a text post at an Instagram channel. Every entry point that can
+ *  create publications should already have rejected this earlier with a 400; this is the
+ *  last line of defense in the one write path they all funnel through. */
+export class IncompatiblePostTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IncompatiblePostTargetError";
+  }
+}
+
 /** Create many publications atomically and flip their posts out of 'draft'. */
 export function bulkCreatePublications(entries: BulkEntry[]): number {
   if (entries.length === 0) return 0;
   const db = getDb();
+  for (const entry of entries) {
+    const post = getPost(entry.post_id);
+    const channel = getChannel(entry.channel_id);
+    if (!post || !channel) continue; // let the transaction below hit the FK constraint
+    const incompatible = incompatibleChannelsForPostType(post.post_type, [channel]);
+    if (incompatible.length > 0) {
+      throw new IncompatiblePostTargetError(
+        `${describeChannel(channel)} can't publish a ${post.post_type} post.`
+      );
+    }
+  }
   const tx = db.transaction((rows: BulkEntry[]) => {
     const insert = db.prepare(
       `INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by)
@@ -515,6 +540,7 @@ export interface PublicationRow extends Publication {
   m_likes: number | null;
   m_comments: number | null;
   m_shares: number | null;
+  m_impressions: number | null;
   m_fetched_at: string | null;
 }
 
@@ -531,12 +557,13 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT pa.asset_id FROM post_assets pa
             WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,
-         lm.reach      AS m_reach,
-         lm.saves      AS m_saves,
-         lm.likes      AS m_likes,
-         lm.comments   AS m_comments,
-         lm.shares     AS m_shares,
-         lm.fetched_at AS m_fetched_at
+         lm.reach       AS m_reach,
+         lm.saves       AS m_saves,
+         lm.likes       AS m_likes,
+         lm.comments    AS m_comments,
+         lm.shares      AS m_shares,
+         lm.impressions AS m_impressions,
+         lm.fetched_at  AS m_fetched_at
        FROM publications pub
        JOIN posts p    ON p.id = pub.post_id
        JOIN channels c ON c.id = pub.channel_id

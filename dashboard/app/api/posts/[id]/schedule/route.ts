@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bulkCreatePublications, getChannel, getPost, type BulkEntry } from "@/lib/queries";
+import {
+  bulkCreatePublications,
+  getChannel,
+  getPost,
+  getPostAssets,
+  IncompatiblePostTargetError,
+  type BulkEntry,
+} from "@/lib/queries";
 import { intervalSlots } from "@/lib/scheduling";
+import { incompatiblePostError } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
@@ -11,7 +19,8 @@ export async function POST(
 ) {
   const { id } = await params;
   const postId = Number(id);
-  if (!getPost(postId)) {
+  const post = getPost(postId);
+  if (!post) {
     return NextResponse.json({ error: "Post not found." }, { status: 404 });
   }
 
@@ -30,21 +39,40 @@ export async function POST(
     return NextResponse.json({ error: "Enter a time as HH:MM." }, { status: 400 });
   }
 
+  const channels = channelIds.map((cid) => getChannel(cid));
+  const unknownIdx = channels.findIndex((c) => !c);
+  if (unknownIdx !== -1) {
+    return NextResponse.json({ error: `Unknown channel ${channelIds[unknownIdx]}.` }, { status: 400 });
+  }
+  const targetChannels = channels.map((c) => c!);
+
+  // This route used to check text-compatibility only — a carousel's size against each
+  // target's maxCarousel was never checked at all, so an oversized carousel could be
+  // scheduled here and fail terminally at publish.
+  const assetCount = getPostAssets(postId).length;
+  const compatError = incompatiblePostError(post.post_type, assetCount, targetChannels);
+  if (compatError) {
+    return NextResponse.json({ error: compatError }, { status: 400 });
+  }
+
   const entries: BulkEntry[] = [];
-  for (const channelId of channelIds) {
-    const channel = getChannel(channelId);
-    if (!channel) {
-      return NextResponse.json({ error: `Unknown channel ${channelId}.` }, { status: 400 });
-    }
+  for (const channel of targetChannels) {
     const scheduledAt = intervalSlots(date, time, 1, 1, channel.timezone)[0];
     entries.push({
       post_id: postId,
-      channel_id: channelId,
+      channel_id: channel.id,
       scheduled_at: scheduledAt,
       status: channel.requires_approval ? "pending_approval" : "scheduled",
     });
   }
 
-  const created = bulkCreatePublications(entries);
-  return NextResponse.json({ created }, { status: 201 });
+  try {
+    const created = bulkCreatePublications(entries);
+    return NextResponse.json({ created }, { status: 201 });
+  } catch (err) {
+    if (err instanceof IncompatiblePostTargetError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
 }

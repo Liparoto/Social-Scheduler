@@ -3,6 +3,8 @@ import { createPostWithPublications, getChannel, getPeriod, listTags } from "@/l
 import { zonedTimeToUtc } from "@/lib/time";
 import type { ContentKind, PostType } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
+import { incompatiblePostError } from "@/lib/platforms";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -12,8 +14,20 @@ export async function POST(req: NextRequest) {
   const channelIds: number[] = Array.isArray(body.channel_ids) ? body.channel_ids : [];
   const localTime: string = body.scheduled_local; // "YYYY-MM-DDTHH:mm"
   const timeZone: string = body.timezone || "UTC";
+  const isText: boolean = body.post_type === "text";
+  const caption: string = (body.caption || "").trim();
 
-  if (assetIds.length === 0) {
+  if (isText) {
+    if (assetIds.length > 0) {
+      return NextResponse.json(
+        { error: "A text-only post can't have images." },
+        { status: 400 }
+      );
+    }
+    if (!caption) {
+      return NextResponse.json({ error: "Write a caption for the text post." }, { status: 400 });
+    }
+  } else if (assetIds.length === 0) {
     return NextResponse.json({ error: "Add at least one image." }, { status: 400 });
   }
   if (channelIds.length === 0) {
@@ -22,18 +36,21 @@ export async function POST(req: NextRequest) {
   if (!localTime) {
     return NextResponse.json({ error: "Pick a date and time." }, { status: 400 });
   }
-  for (const cid of channelIds) {
-    if (!getChannel(cid)) {
-      return NextResponse.json({ error: `Unknown channel ${cid}.` }, { status: 400 });
-    }
+  const channels = channelIds.map((cid) => getChannel(cid));
+  const unknownIdx = channels.findIndex((c) => !c);
+  if (unknownIdx !== -1) {
+    return NextResponse.json({ error: `Unknown channel ${channelIds[unknownIdx]}.` }, { status: 400 });
   }
+  const targetChannels = channels.map((c) => c!);
 
-  const postType: PostType = assetIds.length > 1 ? "carousel" : "single";
-  if (postType === "carousel" && assetIds.length > 10) {
-    return NextResponse.json(
-      { error: "A carousel can hold at most 10 images." },
-      { status: 400 }
-    );
+  const postType: PostType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
+
+  // The strictest selected channel is the one that matters — the worker still enforces
+  // each channel's own limit independently per publication, but accepting a count that's
+  // guaranteed to fail on ANY selected channel just defers a certain failure.
+  const compatError = incompatiblePostError(postType, assetIds.length, targetChannels);
+  if (compatError) {
+    return NextResponse.json({ error: compatError }, { status: 400 });
   }
 
   let scheduledUtc: string;
@@ -56,6 +73,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid caption_variants." }, { status: 400 });
   }
 
+  // Same check content/route.ts's PATCH does before saving — a caption that's fine to
+  // *look* at in the composer but too long for a targeted platform must not be allowed
+  // to schedule, or it just fails terminally at publish instead.
+  const captionError = captionLimitError(targetChannels, captionVariants ?? [], caption);
+  if (captionError) {
+    return NextResponse.json({ error: captionError }, { status: 400 });
+  }
+
   const periodLinks = parsePeriodLinks(body.period_links, getPeriod);
   if (periodLinks === "invalid") {
     return NextResponse.json({ error: "Invalid period_links." }, { status: 400 });
@@ -68,7 +93,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { postId, publicationIds } = createPostWithPublications({
-    caption: (body.caption || "").trim(),
+    caption,
     first_comment: (body.first_comment || "").trim(),
     post_type: postType,
     asset_ids: assetIds,

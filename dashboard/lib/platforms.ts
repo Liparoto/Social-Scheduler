@@ -3,6 +3,9 @@
 // instead of nine — and an unrecognised value degrades visibly rather than silently
 // reading as Instagram or Facebook.
 
+// supportsText / maxCarousel / maxCaptionChars mirror worker/clients.py's PLATFORM_CAPS.
+// The worker is authoritative and re-validates every publish against its own copy — this
+// copy exists only to shape the composer (disable/hint fields before a request is ever sent).
 export const PLATFORMS = [
   {
     value: "instagram",
@@ -11,6 +14,9 @@ export const PLATFORMS = [
     accountIdLabel: "IG user id",
     // Instagram published via a linked Facebook Page stores that Page id separately.
     usesLinkedPage: true,
+    supportsText: false,
+    maxCarousel: 10,
+    maxCaptionChars: null,
   },
   {
     value: "facebook",
@@ -18,6 +24,19 @@ export const PLATFORMS = [
     badge: "FB",
     accountIdLabel: "Page id",
     usesLinkedPage: false,
+    supportsText: false,
+    maxCarousel: 10,
+    maxCaptionChars: null,
+  },
+  {
+    value: "threads",
+    label: "Threads",
+    badge: "TH",
+    accountIdLabel: "Threads user id",
+    usesLinkedPage: false,
+    supportsText: true,
+    maxCarousel: 20,
+    maxCaptionChars: 500,
   },
 ] as const;
 
@@ -45,4 +64,102 @@ export function accountIdLabel(value: string): string {
 
 export function usesLinkedPage(value: string): boolean {
   return BY_VALUE.get(value)?.usesLinkedPage ?? false;
+}
+
+// Default false is the safe direction: worst case the composer is over-cautious about an
+// unrecognised platform, rather than offering a text post to something that can't publish one.
+export function supportsText(value: string): boolean {
+  return BY_VALUE.get(value)?.supportsText ?? false;
+}
+
+export function maxCaptionChars(value: string): number | null {
+  return BY_VALUE.get(value)?.maxCaptionChars ?? null;
+}
+
+// Default 10 (Instagram/Facebook's value) is the safe direction for an unrecognised
+// platform: it under-promises rather than letting an unknown platform look infinitely
+// permissive.
+export function maxCarousel(value: string): number {
+  return BY_VALUE.get(value)?.maxCarousel ?? 10;
+}
+
+// ---- Post-type / channel compatibility -------------------------------------------
+// The single place that decides "can this post_type go to this channel" client- and
+// server-side. Today only 'text' (caption, no media) is gated — every other post_type
+// carries assets and every platform we know about accepts images/carousels. The worker
+// (worker/publisher.py's _validate) is the real gate and re-checks this at publish
+// time; this exists purely so the UI/API can reject (or hide) the mistake before it
+// ever becomes a publication that dies terminally after being "scheduled".
+export interface ChannelLikeForCompat {
+  id: number;
+  platform: string;
+  account_name: string;
+}
+
+export function incompatibleChannelsForPostType<T extends ChannelLikeForCompat>(
+  postType: string,
+  channels: T[]
+): T[] {
+  if (postType !== "text") return [];
+  return channels.filter((c) => !supportsText(c.platform));
+}
+
+/** "Account name (Platform)" — the consistent way to name an offending channel in an error. */
+export function describeChannel(c: ChannelLikeForCompat): string {
+  return `${c.account_name} (${platformLabel(c.platform)})`;
+}
+
+// ---- Post-type + asset-count / channel compatibility -----------------------------
+// incompatibleChannelsForPostType above only ever gated 'text' vs. supportsText — every
+// route that also needs to gate carousel size against maxCarousel used to hand-roll its
+// own check, and one of those hand-rolled checks used Math.max (the MOST permissive
+// selected channel) instead of Math.min (the strictest), which let a route accept a
+// carousel guaranteed to fail on at least one of its own targets. This widened version
+// is the one place that knows both rules, so every route enforces them identically.
+export type PostCompatReason = "text" | "carousel";
+
+export interface PostCompatIssue<T extends ChannelLikeForCompat = ChannelLikeForCompat> {
+  channel: T;
+  reason: PostCompatReason;
+}
+
+export function incompatibleChannelsForPost<T extends ChannelLikeForCompat>(
+  postType: string,
+  assetCount: number,
+  channels: T[]
+): PostCompatIssue<T>[] {
+  const out: PostCompatIssue<T>[] = [];
+  for (const c of channels) {
+    if (postType === "text") {
+      if (!supportsText(c.platform)) out.push({ channel: c, reason: "text" });
+      continue;
+    }
+    if (postType === "carousel" && assetCount > maxCarousel(c.platform)) {
+      out.push({ channel: c, reason: "carousel" });
+    }
+  }
+  return out;
+}
+
+/**
+ * Renders incompatibleChannelsForPost's issues as one 400-ready message in the style the
+ * routes already used ("<channel> can't publish a <type> post."), naming every offending
+ * channel and, for a carousel, its actual limit. Returns null when everything fits.
+ */
+export function incompatiblePostError<T extends ChannelLikeForCompat>(
+  postType: string,
+  assetCount: number,
+  channels: T[]
+): string | null {
+  const issues = incompatibleChannelsForPost(postType, assetCount, channels);
+  if (issues.length === 0) return null;
+  return issues
+    .map((issue) =>
+      issue.reason === "text"
+        ? `${describeChannel(issue.channel)} can't publish a text post.`
+        : `${describeChannel(issue.channel)} allows at most ${maxCarousel(
+            issue.channel.platform
+          )} images per carousel (this post has ${assetCount}).`
+    )
+    .join(" ");
 }

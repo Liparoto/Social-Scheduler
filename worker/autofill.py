@@ -19,6 +19,7 @@ import json
 from datetime import timedelta
 
 from . import db
+from .clients import PLATFORM_CAPS
 from .config import Config
 from .periods import in_season, local_date, period_from_row
 from .scheduling import parse_iso, parse_weekly_cadence, weekly_date_slots
@@ -58,9 +59,23 @@ def select_candidates(conn, channel_id: int, now):
     """SQL-gated, ordered candidate posts for a channel. Cooldown/one-time/period gates
     are applied afterward in `eligible_candidates` (Python — clearer for date math).
 
-    Gates here: status ready, targets this channel, has assets, supported type, not already
-    queued. Ordered: never-posted first, then performance desc, then stalest, then oldest.
+    Gates here: status ready, targets this channel, supported type for this channel's
+    platform, not already queued. Ordered: never-posted first, then performance desc,
+    then stalest, then oldest.
+
+    Type eligibility is capability-driven, not a hardcoded type list: a single/carousel
+    post is eligible if it has at least one asset (unchanged); a text post is eligible
+    only if the channel's platform declares supports_text in PLATFORM_CAPS. A platform
+    PLATFORM_CAPS doesn't recognize excludes text posts (the safe direction) rather than
+    guessing.
     """
+    platform_row = conn.execute(
+        "SELECT platform FROM channels WHERE id = ?", (channel_id,)
+    ).fetchone()
+    platform = platform_row["platform"] if platform_row else None
+    caps = PLATFORM_CAPS.get(platform)
+    supports_text = 1 if caps is not None and caps.supports_text else 0
+
     rows = conn.execute(
         f"""
         SELECT
@@ -78,8 +93,11 @@ def select_candidates(conn, channel_id: int, now):
           ) AS perf
         FROM posts p
         WHERE p.content_status = 'ready'
-          AND p.post_type IN ('single','carousel')
-          AND EXISTS (SELECT 1 FROM post_assets  pa WHERE pa.post_id = p.id)
+          AND (
+            (p.post_type IN ('single','carousel')
+               AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
+            OR (p.post_type = 'text' AND :supports_text = 1)
+          )
           AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid)
           AND NOT EXISTS (
              SELECT 1 FROM publications q
@@ -92,7 +110,7 @@ def select_candidates(conn, channel_id: int, now):
           last_posted ASC,
           p.created_at ASC
         """,
-        {"cid": channel_id},
+        {"cid": channel_id, "supports_text": supports_text},
     ).fetchall()
     return rows
 

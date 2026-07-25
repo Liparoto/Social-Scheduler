@@ -39,6 +39,11 @@ COLUMN_MAP = {
     "post_total_media_view_unique": "reach",
     "post_impressions_unique": "reach",
     "post_impressions": "impressions",
+    # Threads insights. "quotes" is deliberately unmapped — it has no column, and folding
+    # it into shares would silently inflate that number; it stays in raw_json.
+    "views": "impressions",
+    "replies": "comments",
+    "reposts": "shares",
 }
 
 
@@ -139,7 +144,19 @@ def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub
     return {**summary, **insights}
 
 
-_FETCHERS = {"instagram": _fetch_instagram, "facebook": _fetch_facebook}
+def _fetch_threads(client, remote_post_id: str, token: str, config, logger, pub_id) -> dict:
+    """Unlike Facebook, Threads has no stable summary endpoint to fall back on — the
+    insights call IS the only source. If it fails, let it raise: run_metrics' caller
+    logs it and skips this snapshot rather than recording an all-null row."""
+    metrics = [m.strip() for m in config.threads_insight_metrics.split(",") if m.strip()]
+    return client.get_threads_insights(remote_post_id, token, metrics)
+
+
+_FETCHERS = {
+    "instagram": _fetch_instagram,
+    "facebook": _fetch_facebook,
+    "threads": _fetch_threads,
+}
 
 assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (
     "metrics._FETCHERS and clients.SUPPORTED_PLATFORMS disagree"

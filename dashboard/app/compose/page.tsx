@@ -22,6 +22,7 @@ export default function ComposePage() {
     caption: p.caption,
     content_kind: p.content_kind,
     content_status: p.content_status,
+    post_type: p.post_type,
   }));
   const defaultDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10); // tomorrow (UTC)
   const defaultTime = "09:00";

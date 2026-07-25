@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { PostPublicationRow } from "@/lib/types";
+import type { PostPublicationRow, PostType } from "@/lib/types";
 import type { Channel } from "@/lib/types";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { formatInTz, tzAbbrev } from "@/lib/format";
+import { incompatibleChannelsForPostType } from "@/lib/platforms";
 
 // Split a UTC ISO instant into {date, time} strings in a given IANA timezone,
 // suitable for prefilling <input type="date"> / <input type="time">. Same
@@ -193,10 +194,12 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
 
 export function PostSendsPanel({
   postId,
+  postType,
   sends,
   channels,
 }: {
   postId: number;
+  postType: PostType;
   sends: PostPublicationRow[];
   channels: Channel[];
 }) {
@@ -212,7 +215,10 @@ export function PostSendsPanel({
     sends.filter((s) => !READ_ONLY_STATUSES.has(s.status) && s.status !== "canceled" && s.status !== "failed")
       .map((s) => s.channel_id)
   );
-  const pickable = channels.filter((c) => !busyChannelIds.has(c.id));
+  // ...and channels that can't publish this post's type at all — offering them would
+  // schedule a send the worker is guaranteed to fail terminally.
+  const incompatibleIds = new Set(incompatibleChannelsForPostType(postType, channels).map((c) => c.id));
+  const pickable = channels.filter((c) => !busyChannelIds.has(c.id) && !incompatibleIds.has(c.id));
 
   async function addSend() {
     setError(null);

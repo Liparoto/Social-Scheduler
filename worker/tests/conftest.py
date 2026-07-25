@@ -62,7 +62,8 @@ class FakeGraphClient:
     """Same method surface as GraphClient; records calls, no network."""
 
     def __init__(self, limit=(0, 50, 86400), fail_on=None, insights=None,
-                 page_summary=None, page_insights=None, fail_child_index=None):
+                 page_summary=None, page_insights=None, fail_child_index=None,
+                 threads_limit=(0, 250, 86400), threads_insights=None):
         self.calls = []
         self.limit = limit
         self.fail_on = set(fail_on or [])
@@ -79,6 +80,10 @@ class FakeGraphClient:
         }
         self.page_insights = page_insights if page_insights is not None else {
             "post_total_media_view_unique": 40,
+        }
+        self.threads_limit = threads_limit
+        self.threads_insights = threads_insights if threads_insights is not None else {
+            "views": 500, "likes": 12, "replies": 3, "reposts": 2, "quotes": 1,
         }
         self._n = 0
 
@@ -161,6 +166,51 @@ class FakeGraphClient:
             raise RuntimeError("(#100) invalid metric")
         return dict(self.page_insights)
 
+    # -- Threads surface -------------------------------------------------------------
+    def create_threads_container(self, threads_user_id, token, *, media_type,
+                                  text=None, image_url=None, is_carousel_item=False,
+                                  children=None):
+        if media_type == "CAROUSEL":
+            kind = "threads_carousel"
+            value = tuple(children or ())
+        elif is_carousel_item:
+            kind = "threads_child"
+            value = image_url
+        elif media_type == "TEXT":
+            kind = "threads_text"
+            value = text
+        else:
+            kind = "threads_image"
+            value = image_url
+        self.calls.append((kind, value))
+        if kind in self.fail_on:
+            raise RuntimeError("threads create container boom")
+        self._n += 1
+        return f"threads-cont-{self._n}"
+
+    def get_threads_container_status(self, container_id, token):
+        self.calls.append(("threads_status", container_id))
+        return "FINISHED"
+
+    def publish_threads_container(self, threads_user_id, creation_id, token):
+        self.calls.append(("threads_publish", creation_id))
+        if "threads_publish" in self.fail_on:
+            raise RuntimeError("threads publish boom")
+        self._n += 1
+        return f"threads-media-{self._n}"
+
+    def get_threads_publishing_limit(self, threads_user_id, token):
+        self.calls.append(("threads_limit", threads_user_id))
+        if "threads_limit" in self.fail_on:
+            raise RuntimeError("threads quota check boom")
+        return self.threads_limit
+
+    def get_threads_insights(self, media_id, token, metrics):
+        self.calls.append(("threads_insights", media_id))
+        if "threads_insights" in self.fail_on:
+            raise RuntimeError("threads insights boom")
+        return dict(self.threads_insights)
+
 
 @pytest.fixture
 def fake_client():
@@ -175,13 +225,22 @@ def make_publication(conn):
               scheduled_offset_min=-1, with_token=True, now=None,
               platform="instagram", remote_account_id=None):
         if remote_account_id is None:
-            remote_account_id = "PAGE1" if platform == "facebook" else "178414"
+            if platform == "facebook":
+                remote_account_id = "PAGE1"
+            elif platform == "threads":
+                remote_account_id = "THREADS1"
+            else:
+                remote_account_id = "178414"
+        if platform == "facebook":
+            account_name = "Test FB Page"
+        elif platform == "threads":
+            account_name = "Test Threads"
+        else:
+            account_name = "Test IG"
         cur = conn.execute(
             """INSERT INTO channels (platform, account_name, remote_account_id, access_token)
                VALUES (?, ?, ?, ?)""",
-            (platform,
-             "Test FB Page" if platform == "facebook" else "Test IG",
-             remote_account_id,
+            (platform, account_name, remote_account_id,
              "tok-123" if with_token else None),
         )
         channel_id = cur.lastrowid

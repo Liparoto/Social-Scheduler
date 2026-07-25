@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  getCaptionVariants,
   getChannel,
   getPeriod,
   getPost,
+  getPostTargets,
   listTags,
   setCaptionVariants,
   setPostPeriods,
@@ -12,6 +14,7 @@ import {
 } from "@/lib/queries";
 import type { ContentKind, ContentStatus, PeriodMode } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
+import { captionLimitError } from "@/lib/caption-limits";
 
 export const runtime = "nodejs";
 
@@ -19,6 +22,11 @@ export const runtime = "nodejs";
  * Save a post's content-model fields in one call: kind/status/cooldown, target
  * accounts, green/blackout period links, and caption variants. Used by the composer
  * and any future edit UI (B2). Every field is optional — send only what changed.
+ *
+ * Every field is parsed/validated FIRST, with nothing written until all of it checks
+ * out — including a cross-field check (caption length vs. the platforms this post is
+ * targeted at) that needs the parsed target_channel_ids and caption_variants together,
+ * whichever of the two arrived in this request and whichever is left over from before.
  */
 export async function PATCH(
   req: NextRequest,
@@ -26,7 +34,8 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const postId = Number(id);
-  if (!getPost(postId)) {
+  const post = getPost(postId);
+  if (!post) {
     return NextResponse.json({ error: "Post not found." }, { status: 404 });
   }
   const body = await req.json();
@@ -68,10 +77,8 @@ export async function PATCH(
       contentFields.cooldown_days = n;
     }
   }
-  if (Object.keys(contentFields).length > 0) {
-    updatePostContentModel(postId, contentFields);
-  }
 
+  let targetChannelIds: number[] | undefined;
   if ("target_channel_ids" in body) {
     if (!Array.isArray(body.target_channel_ids)) {
       return NextResponse.json(
@@ -79,17 +86,18 @@ export async function PATCH(
         { status: 400 }
       );
     }
-    const targetChannelIds = body.target_channel_ids.map(Number);
-    const badChannelIds = targetChannelIds.filter((cid: number) => !getChannel(cid));
+    const parsed = body.target_channel_ids.map(Number);
+    const badChannelIds = parsed.filter((cid: number) => !getChannel(cid));
     if (badChannelIds.length > 0) {
       return NextResponse.json(
         { error: `Unknown channel(s): ${badChannelIds.join(", ")}.` },
         { status: 400 }
       );
     }
-    setPostTargets(postId, targetChannelIds);
+    targetChannelIds = parsed;
   }
 
+  let periodLinks: { periodId: number; mode: PeriodMode }[] | undefined;
   if ("period_links" in body) {
     if (!Array.isArray(body.period_links)) {
       return NextResponse.json({ error: "period_links must be an array." }, { status: 400 });
@@ -122,9 +130,10 @@ export async function PATCH(
       seen.add(key);
       links.push({ periodId, mode });
     }
-    setPostPeriods(postId, links);
+    periodLinks = links;
   }
 
+  let captionVariants: { platform: string | null; body: string; sort_order: number }[] | undefined;
   if ("caption_variants" in body) {
     if (!Array.isArray(body.caption_variants)) {
       return NextResponse.json(
@@ -145,16 +154,49 @@ export async function PATCH(
         { status: 400 }
       );
     }
-    setCaptionVariants(postId, variants);
+    captionVariants = variants;
   }
 
+  let tagIds: number[] | undefined;
   if ("tag_ids" in body) {
     const validTagIds = new Set(listTags().map((t) => t.id));
-    const tagIds = parseTagIds(body.tag_ids, (id) => validTagIds.has(id));
-    if (tagIds === "invalid") {
+    const parsed = parseTagIds(body.tag_ids, (tid) => validTagIds.has(tid));
+    if (parsed === "invalid") {
       return NextResponse.json({ error: "Invalid tag_ids." }, { status: 400 });
     }
-    setPostTags(postId, tagIds ?? []);
+    tagIds = parsed ?? [];
+  }
+
+  // Cross-field check: whatever this post's targets and caption variants end up being
+  // (this request's values where sent, the existing saved ones otherwise), does every
+  // targeted channel's actual caption length fit its platform's limit? Threads' 500-char
+  // cap is the only one today, but this reads any platform's maxCaptionChars.
+  const effectiveTargetIds = targetChannelIds ?? getPostTargets(postId);
+  const effectiveVariants =
+    captionVariants ?? getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
+  const effectiveChannels = effectiveTargetIds
+    .map((cid) => getChannel(cid))
+    .filter((c): c is NonNullable<typeof c> => !!c); // already rejected above if it came from this request
+  const captionError = captionLimitError(effectiveChannels, effectiveVariants, post.caption);
+  if (captionError) {
+    return NextResponse.json({ error: captionError }, { status: 400 });
+  }
+
+  // All validated — now write.
+  if (Object.keys(contentFields).length > 0) {
+    updatePostContentModel(postId, contentFields);
+  }
+  if (targetChannelIds !== undefined) {
+    setPostTargets(postId, targetChannelIds);
+  }
+  if (periodLinks !== undefined) {
+    setPostPeriods(postId, periodLinks);
+  }
+  if (captionVariants !== undefined) {
+    setCaptionVariants(postId, captionVariants);
+  }
+  if (tagIds !== undefined) {
+    setPostTags(postId, tagIds);
   }
 
   return NextResponse.json({ ok: true });
