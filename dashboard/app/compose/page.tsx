@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getActiveChannels, listPeriods, listTags, listPosts } from "@/lib/queries";
 import { config } from "@/lib/config";
+import { getPublishReadiness } from "@/lib/publish-readiness";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { ComposeSwitcher } from "@/components/compose-switcher";
 
@@ -53,6 +54,7 @@ export default function ComposePage() {
             libraryPosts={libraryPosts}
             defaultDate={defaultDate}
             defaultTime={defaultTime}
+            readiness={getPublishReadiness()}
           />
         )}
       </div>
