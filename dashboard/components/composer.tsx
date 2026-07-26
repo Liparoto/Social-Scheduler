@@ -7,6 +7,7 @@ import { platformLabel, supportsText, captionLimit, PLATFORMS } from "@/lib/plat
 import { captionsForPlatform } from "@/lib/caption-limits";
 import type { Period, PeriodMode, Tag } from "@/lib/types";
 import type { ConformMode } from "@/lib/conform";
+import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
@@ -34,12 +35,14 @@ export function Composer({
   periods,
   timeOfDayTags,
   topicTags,
+  readiness,
 }: {
   channels: ChannelLite[];
   defaultTimezone: string;
   periods: Period[];
   timeOfDayTags: Tag[];
   topicTags: Tag[];
+  readiness: PublishReadiness;
 }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -50,6 +53,7 @@ export function Composer({
   const [textOnly, setTextOnly] = useState(false);
   const [timezone, setTimezone] = useState(defaultTimezone);
   const [scheduledLocal, setScheduledLocal] = useState("");
+  const [postNow, setPostNow] = useState(false);
   const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
   const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>({});
   const [tagIds, setTagIds] = useState<number[]>([]);
@@ -223,7 +227,7 @@ export function Composer({
       return setError(`Caption is over the limit for: ${names}.`);
     }
     if (selected.size === 0) return setError("Select at least one channel.");
-    if (!scheduledLocal) return setError("Pick a date and time.");
+    if (!postNow && !scheduledLocal) return setError("Pick a date and time.");
 
     const res = await fetch("/api/posts", {
       method: "POST",
@@ -234,7 +238,7 @@ export function Composer({
         post_type: textOnly ? "text" : undefined,
         asset_ids: textOnly ? [] : assets.map((a) => a.id),
         channel_ids: Array.from(selected),
-        scheduled_local: scheduledLocal,
+        ...(postNow ? { post_now: true } : { scheduled_local: scheduledLocal }),
         timezone,
         content_kind: contentKind,
         caption_variants: captionVariantsPayload,
@@ -521,7 +525,11 @@ export function Composer({
                       {disabled
                         ? `${platformLabel(c.platform)} can't post text-only`
                         : platformLabel(c.platform)}
-                      {!disabled && c.requires_approval ? " · needs approval" : ""}
+                      {!disabled && c.requires_approval
+                        ? postNow
+                          ? " · approval skipped (Post now)"
+                          : " · needs approval"
+                        : ""}
                     </span>
                   </span>
                 </button>
@@ -532,27 +540,83 @@ export function Composer({
 
         {/* Schedule */}
         <section className="rounded-card border border-border bg-surface p-5">
-          <h3 className="mb-3 font-display text-sm font-semibold text-ink">Schedule</h3>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className={label}>Date &amp; time</label>
-              <input
-                type="datetime-local"
-                className={fieldCls}
-                value={scheduledLocal}
-                onChange={(e) => setScheduledLocal(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className={label}>Timezone (IANA)</label>
-              <input
-                className={fieldCls}
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                placeholder="America/New_York"
-              />
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="font-display text-sm font-semibold text-ink">Schedule</h3>
+            <div className="inline-flex rounded-lg border border-border p-0.5">
+              <button
+                type="button"
+                className={segBtn(!postNow)}
+                onClick={() => setPostNow(false)}
+              >
+                Schedule
+              </button>
+              <button
+                type="button"
+                className={segBtn(postNow)}
+                onClick={() => setPostNow(true)}
+              >
+                Post now
+              </button>
             </div>
           </div>
+
+          {!postNow ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className={label}>Date &amp; time</label>
+                <input
+                  type="datetime-local"
+                  className={fieldCls}
+                  value={scheduledLocal}
+                  onChange={(e) => setScheduledLocal(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className={label}>Timezone (IANA)</label>
+                <input
+                  className={fieldCls}
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  placeholder="America/New_York"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2 rounded-lg bg-surface-sunken px-3 py-2.5 text-xs">
+              {readiness.dryRun ? (
+                <p className="font-medium text-accent-strong">
+                  Dry-run is on — this will be simulated and nothing will actually post. Set{" "}
+                  <code className="data rounded bg-surface px-1 py-0.5">DRY_RUN=0</code> in{" "}
+                  <code className="data rounded bg-surface px-1 py-0.5">.env</code> to publish for
+                  real.
+                </p>
+              ) : null}
+              {readiness.killSwitch ? (
+                <p className="font-medium text-accent-strong">
+                  The kill switch is on — the worker is running but won&rsquo;t publish
+                  anything until <code className="data rounded bg-surface px-1 py-0.5">
+                    KILL_SWITCH=0
+                  </code>{" "}
+                  is set in <code className="data rounded bg-surface px-1 py-0.5">.env</code>.
+                </p>
+              ) : null}
+              {!readiness.workerOnline ? (
+                <p className="font-medium text-accent-strong">
+                  The worker isn&rsquo;t running — nothing will pick this up until it is. The
+                  send will simply wait.
+                </p>
+              ) : null}
+              {!readiness.dryRun && !readiness.killSwitch && readiness.workerOnline ? (
+                <p className="text-muted">
+                  Publishes on the worker&rsquo;s next check, within about a minute — not
+                  instantly.
+                </p>
+              ) : null}
+              <p className="text-muted">
+                Skips the approval step, even for channels that require it.
+              </p>
+            </div>
+          )}
         </section>
 
         <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
@@ -644,7 +708,9 @@ export function Composer({
           )}
           {anyApprovalNeeded ? (
             <p className="mt-3 rounded bg-surface-sunken px-2 py-1.5 text-[11px] text-muted">
-              One or more channels require approval — those sends wait until approved.
+              {postNow
+                ? "One or more channels require approval — Post now skips that step."
+                : "One or more channels require approval — those sends wait until approved."}
             </p>
           ) : null}
         </div>
@@ -654,7 +720,7 @@ export function Composer({
           disabled={submitting || overCaptionLimit}
           className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
         >
-          {submitting ? "Scheduling…" : "Schedule post"}
+          {submitting ? (postNow ? "Sending…" : "Scheduling…") : postNow ? "Post now" : "Schedule post"}
         </button>
         <div className="rounded-card border border-border bg-surface p-4">
           <div className="mb-2 flex items-center justify-between gap-2">

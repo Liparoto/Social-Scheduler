@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Period, Tag } from "@/lib/types";
+import type { PublishReadiness } from "@/lib/publish-readiness";
 import { Composer } from "./composer";
 import { ScheduleFromLibrary, type LibraryPickItem, type ChannelLite } from "./schedule-from-library";
 
@@ -19,6 +20,7 @@ export function ComposeSwitcher({
   libraryPosts,
   defaultDate,
   defaultTime,
+  readiness,
 }: {
   channels: ChannelLite[];
   defaultTimezone: string;
@@ -28,6 +30,7 @@ export function ComposeSwitcher({
   libraryPosts: LibraryPickItem[];
   defaultDate: string;
   defaultTime: string;
+  readiness: PublishReadiness;
 }) {
   const [mode, setMode] = useState<"new" | "library">("new");
   return (
@@ -43,6 +46,7 @@ export function ComposeSwitcher({
           periods={periods}
           timeOfDayTags={timeOfDayTags}
           topicTags={topicTags}
+          readiness={readiness}
         />
       ) : (
         <ScheduleFromLibrary

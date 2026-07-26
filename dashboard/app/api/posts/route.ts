@@ -16,6 +16,9 @@ export async function POST(req: NextRequest) {
   const timeZone: string = body.timezone || "UTC";
   const isText: boolean = body.post_type === "text";
   const caption: string = (body.caption || "").trim();
+  // "Post now": publish on the worker's next poll instead of a chosen date/time.
+  // Wins over any scheduled_local also present in the body — see below.
+  const postNow: boolean = body.post_now === true;
 
   if (isText) {
     if (assetIds.length > 0) {
@@ -33,7 +36,7 @@ export async function POST(req: NextRequest) {
   if (channelIds.length === 0) {
     return NextResponse.json({ error: "Select at least one channel." }, { status: 400 });
   }
-  if (!localTime) {
+  if (!postNow && !localTime) {
     return NextResponse.json({ error: "Pick a date and time." }, { status: 400 });
   }
   const channels = channelIds.map((cid) => getChannel(cid));
@@ -53,11 +56,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: compatError }, { status: 400 });
   }
 
+  // post_now wins over any scheduled_local also present in the body: the current
+  // instant is used as-is, with no timezone conversion needed (there's no wall-clock
+  // entry to convert — "now" means now, in UTC, on this machine).
   let scheduledUtc: string;
-  try {
-    scheduledUtc = zonedTimeToUtc(localTime, timeZone);
-  } catch {
-    return NextResponse.json({ error: "Invalid date/time." }, { status: 400 });
+  if (postNow) {
+    scheduledUtc = new Date().toISOString();
+  } else {
+    try {
+      scheduledUtc = zonedTimeToUtc(localTime, timeZone);
+    } catch {
+      return NextResponse.json({ error: "Invalid date/time." }, { status: 400 });
+    }
   }
 
   let contentKind: ContentKind | undefined;
@@ -103,6 +113,7 @@ export async function POST(req: NextRequest) {
     content_kind: contentKind,
     content_status: "ready",
     target_channel_ids: channelIds,
+    skip_approval: postNow,
     caption_variants: captionVariants ?? undefined,
     period_links: periodLinks ?? undefined,
     tag_ids: tagIds ?? undefined,
