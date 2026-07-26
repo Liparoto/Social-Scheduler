@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 import { channelColor } from "@/lib/format";
 import { platformLabel } from "@/lib/platforms";
+import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
@@ -40,6 +41,7 @@ export function PostEditor({
   initialTagIds,
   initialPeriods,
   initialCaptions,
+  readiness,
 }: {
   post: Post;
   assets: Asset[];
@@ -53,6 +55,7 @@ export function PostEditor({
   initialTagIds: number[];
   initialPeriods: Record<number, PeriodMode>;
   initialCaptions: { platform: string; body: string }[];
+  readiness: PublishReadiness;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -226,7 +229,13 @@ export function PostEditor({
       <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
 
       {/* Scheduled sends (retarget/hold/remove/add) */}
-      <PostSendsPanel postId={post.id} postType={post.post_type} sends={sends} channels={sendableChannels} />
+      <PostSendsPanel
+        postId={post.id}
+        postType={post.post_type}
+        sends={sends}
+        channels={sendableChannels}
+        readiness={readiness}
+      />
 
       {/* Content status + cooldown + save */}
       <section className={card}>

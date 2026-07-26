@@ -7,6 +7,8 @@ import type { Channel } from "@/lib/types";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { formatInTz, tzAbbrev } from "@/lib/format";
 import { incompatibleChannelsForPostType } from "@/lib/platforms";
+import type { PublishReadiness } from "@/lib/publish-readiness";
+import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 
 // Split a UTC ISO instant into {date, time} strings in a given IANA timezone,
 // suitable for prefilling <input type="date"> / <input type="time">. Same
@@ -37,6 +39,10 @@ function splitInTz(iso: string | null, timeZone: string): { date: string; time: 
 const READ_ONLY_STATUSES = new Set(["posted", "publishing"]);
 const dateTimeInputCls =
   "rounded-md border border-border bg-surface px-2 py-1 text-xs text-ink focus:border-brand";
+const segBtn = (active: boolean) =>
+  `rounded-md px-3 py-1.5 text-sm transition-colors ${
+    active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
+  }`;
 
 function SendRow({ send, postId }: { send: PostPublicationRow; postId: number }) {
   const router = useRouter();
@@ -202,16 +208,19 @@ export function PostSendsPanel({
   postType,
   sends,
   channels,
+  readiness,
 }: {
   postId: number;
   postType: PostType;
   sends: PostPublicationRow[];
   channels: Channel[];
+  readiness: PublishReadiness;
 }) {
   const router = useRouter();
   const [channelId, setChannelId] = useState<number | "">("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
+  const [postNow, setPostNow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -231,7 +240,7 @@ export function PostSendsPanel({
       setError("Pick a channel.");
       return;
     }
-    if (!date || !time) {
+    if (!postNow && (!date || !time)) {
       setError("Pick a date and time.");
       return;
     }
@@ -239,7 +248,10 @@ export function PostSendsPanel({
     const res = await fetch(`/api/posts/${postId}/schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channel_ids: [channelId], date, time }),
+      body: JSON.stringify({
+        channel_ids: [channelId],
+        ...(postNow ? { post_now: true } : { date, time }),
+      }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -273,7 +285,25 @@ export function PostSendsPanel({
       )}
 
       <div className="mt-4 rounded-lg border border-border bg-surface-sunken p-3">
-        <h4 className="mb-2 text-xs font-semibold text-ink-soft">Add a send</h4>
+        <div className="mb-2 flex items-center justify-between">
+          <h4 className="text-xs font-semibold text-ink-soft">Add a send</h4>
+          <div className="inline-flex rounded-lg border border-border p-0.5">
+            <button
+              type="button"
+              className={segBtn(!postNow)}
+              onClick={() => setPostNow(false)}
+            >
+              Schedule
+            </button>
+            <button
+              type="button"
+              className={segBtn(postNow)}
+              onClick={() => setPostNow(true)}
+            >
+              Post now
+            </button>
+          </div>
+        </div>
         <div className="flex flex-wrap items-end gap-2">
           <div>
             <label className="mb-1 block text-[11px] font-medium text-ink-soft">Channel</label>
@@ -290,32 +320,41 @@ export function PostSendsPanel({
               ))}
             </select>
           </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-ink-soft">Date</label>
-            <input
-              type="date"
-              className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-ink-soft">Time (channel local)</label>
-            <input
-              type="time"
-              className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-            />
-          </div>
+          {!postNow ? (
+            <>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-ink-soft">Date</label>
+                <input
+                  type="date"
+                  className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-ink-soft">Time (channel local)</label>
+                <input
+                  type="time"
+                  className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                />
+              </div>
+            </>
+          ) : null}
           <button
             onClick={addSend}
             disabled={busy}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
-            {busy ? "Adding…" : "Add"}
+            {busy ? (postNow ? "Sending…" : "Adding…") : postNow ? "Post now" : "Add"}
           </button>
         </div>
+        {postNow ? (
+          <div className="mt-2">
+            <PostNowReadinessNotice readiness={readiness} />
+          </div>
+        ) : null}
         {error ? <p className="mt-2 text-xs text-status-failed">{error}</p> : null}
       </div>
     </section>

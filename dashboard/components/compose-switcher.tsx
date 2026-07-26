@@ -54,6 +54,7 @@ export function ComposeSwitcher({
           channels={channels}
           defaultDate={defaultDate}
           defaultTime={defaultTime}
+          readiness={readiness}
         />
       )}
     </div>

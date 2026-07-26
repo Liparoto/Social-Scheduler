@@ -30,15 +30,20 @@ export async function POST(
   const channelIds: number[] = Array.isArray(body.channel_ids) ? body.channel_ids : [];
   const date: string = body.date || "";
   const time: string = body.time || "";
+  // "Post now": publish on the worker's next poll instead of a chosen date/time.
+  // Wins over any date/time also present in the body — see below.
+  const postNow: boolean = body.post_now === true;
 
   if (channelIds.length === 0) {
     return NextResponse.json({ error: "Select at least one channel." }, { status: 400 });
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return NextResponse.json({ error: "Pick a date." }, { status: 400 });
-  }
-  if (!/^\d{2}:\d{2}$/.test(time)) {
-    return NextResponse.json({ error: "Enter a time as HH:MM." }, { status: 400 });
+  if (!postNow) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return NextResponse.json({ error: "Pick a date." }, { status: 400 });
+    }
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      return NextResponse.json({ error: "Enter a time as HH:MM." }, { status: 400 });
+    }
   }
 
   const channels = channelIds.map((cid) => getChannel(cid));
@@ -68,14 +73,22 @@ export async function POST(
     return NextResponse.json({ error: captionError }, { status: 400 });
   }
 
+  // post_now wins over any date/time also present in the body: the current instant is
+  // used as-is, with no timezone conversion needed (there's no wall-clock entry to
+  // convert — "now" means now, in UTC, on this machine) — same as app/api/posts/route.ts.
+  const nowIso = new Date().toISOString();
+
   const entries: BulkEntry[] = [];
   for (const channel of targetChannels) {
-    const scheduledAt = intervalSlots(date, time, 1, 1, channel.timezone)[0];
+    const scheduledAt = postNow ? nowIso : intervalSlots(date, time, 1, 1, channel.timezone)[0];
+    // "Post now" (skip_approval) means the person scheduling this send right now IS the
+    // approver — see the same decision in lib/queries.ts's createPostWithPublications.
+    const status = postNow || !channel.requires_approval ? "scheduled" : "pending_approval";
     entries.push({
       post_id: postId,
       channel_id: channel.id,
       scheduled_at: scheduledAt,
-      status: channel.requires_approval ? "pending_approval" : "scheduled",
+      status,
     });
   }
 
