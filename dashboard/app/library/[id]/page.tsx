@@ -13,9 +13,11 @@ import {
   listPeriods,
   listTags,
 } from "@/lib/queries";
+import { getPublishReadiness } from "@/lib/publish-readiness";
 import { PostEditor } from "@/components/post-editor";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export default async function EditPostPage({
   params,
@@ -50,6 +52,7 @@ export default async function EditPostPage({
           platform: c.platform ?? "",
           body: c.body,
         }))}
+        readiness={getPublishReadiness()}
       />
     </div>
   );

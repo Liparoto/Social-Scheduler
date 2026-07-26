@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { channelColor } from "@/lib/format";
+import type { PublishReadiness } from "@/lib/publish-readiness";
+import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 
 export type LibraryPickItem = {
   id: number;
@@ -23,23 +26,31 @@ export type ChannelLite = {
 };
 
 const card = "rounded-card border border-border bg-surface p-5";
+const segBtn = (active: boolean) =>
+  `rounded-md px-3 py-1.5 text-sm transition-colors ${
+    active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
+  }`;
 
 export function ScheduleFromLibrary({
   posts,
   channels,
   defaultDate,
   defaultTime,
+  readiness,
 }: {
   posts: LibraryPickItem[];
   channels: ChannelLite[];
   defaultDate: string;
   defaultTime: string;
+  readiness: PublishReadiness;
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [targets, setTargets] = useState<Set<number>>(new Set());
   const [date, setDate] = useState(defaultDate);
   const [time, setTime] = useState(defaultTime);
+  const [postNow, setPostNow] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,7 +92,10 @@ export function ScheduleFromLibrary({
     const res = await fetch(`/api/posts/${selected.id}/schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channel_ids: Array.from(effectiveTargets), date, time }),
+      body: JSON.stringify({
+        channel_ids: Array.from(effectiveTargets),
+        ...(postNow ? { post_now: true } : { date, time }),
+      }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -90,8 +104,16 @@ export function ScheduleFromLibrary({
       return;
     }
     const b = await res.json();
-    setNotice(`Scheduled to ${b.created} account${b.created === 1 ? "" : "s"}.`);
+    setNotice(
+      postNow
+        ? `Posting now to ${b.created} account${b.created === 1 ? "" : "s"}.`
+        : `Scheduled to ${b.created} account${b.created === 1 ? "" : "s"}.`
+    );
     setTargets(new Set());
+    // Re-fetch server state so the dry-run / kill-switch / worker readiness banner
+    // (PostNowReadinessNotice) can't go stale across repeated sends on this page —
+    // same class of bug as the cached-.env readiness fix, just via a stale page.
+    router.refresh();
   }
 
   if (!selected) {
@@ -183,7 +205,25 @@ export function ScheduleFromLibrary({
       </div>
 
       <div className={card}>
-        <h3 className="mb-2 font-display text-sm font-semibold text-ink">Where & when</h3>
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="font-display text-sm font-semibold text-ink">Where & when</h3>
+          <div className="inline-flex rounded-lg border border-border p-0.5">
+            <button
+              type="button"
+              className={segBtn(!postNow)}
+              onClick={() => setPostNow(false)}
+            >
+              Schedule
+            </button>
+            <button
+              type="button"
+              className={segBtn(postNow)}
+              onClick={() => setPostNow(true)}
+            >
+              Post now
+            </button>
+          </div>
+        </div>
         <div className="mb-3 grid gap-2 sm:grid-cols-2">
           {channels.map((c) => {
             const on = effectiveTargets.has(c.id);
@@ -224,16 +264,20 @@ export function ScheduleFromLibrary({
             );
           })}
         </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-xs font-medium text-ink-soft mb-1">Date</label>
-            <input type="date" className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand" value={date} onChange={(e) => setDate(e.target.value)} />
+        {!postNow ? (
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs font-medium text-ink-soft mb-1">Date</label>
+              <input type="date" className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand" value={date} onChange={(e) => setDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-ink-soft mb-1">Time (each account’s local)</label>
+              <input type="time" className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand" value={time} onChange={(e) => setTime(e.target.value)} />
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-ink-soft mb-1">Time (each account’s local)</label>
-            <input type="time" className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand" value={time} onChange={(e) => setTime(e.target.value)} />
-          </div>
-        </div>
+        ) : (
+          <PostNowReadinessNotice readiness={readiness} />
+        )}
 
         {error ? <p className="mt-3 text-sm text-status-failed">{error}</p> : null}
         {notice ? (
@@ -248,7 +292,13 @@ export function ScheduleFromLibrary({
             disabled={busy || effectiveTargets.size === 0}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
-            {busy ? "Scheduling…" : `Schedule to ${effectiveTargets.size} account${effectiveTargets.size === 1 ? "" : "s"}`}
+            {busy
+              ? postNow
+                ? "Sending…"
+                : "Scheduling…"
+              : postNow
+              ? `Post now to ${effectiveTargets.size} account${effectiveTargets.size === 1 ? "" : "s"}`
+              : `Schedule to ${effectiveTargets.size} account${effectiveTargets.size === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>
