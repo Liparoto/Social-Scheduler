@@ -232,6 +232,10 @@ export interface CreatePostInput extends ContentModelInput {
   channel_ids: number[];
   scheduled_at: string; // ISO UTC
   created_by?: string;
+  /** "Post now" from the composer: force every publication straight to 'scheduled',
+   *  bypassing each channel's requires_approval. See the comment at the status
+   *  decision below for why this is intentional, not a bug. */
+  skip_approval?: boolean;
 }
 
 /**
@@ -277,7 +281,12 @@ export function createPostWithPublications(
     const publicationIds: number[] = [];
     for (const channelId of data.channel_ids) {
       const ch = getChannel(channelId);
-      const status = ch?.requires_approval ? "pending_approval" : "scheduled";
+      // Approval gates content nobody reviewed individually (queued/auto-filled sends).
+      // "Post now" (skip_approval) means the person composing this post right now IS
+      // the approver — clicking publish is the review. Don't "fix" this back to
+      // honoring requires_approval for post_now; that would silently swallow the post
+      // into pending_approval and it would never go out.
+      const status = !data.skip_approval && ch?.requires_approval ? "pending_approval" : "scheduled";
       const info = insertPub.run(
         postId,
         channelId,

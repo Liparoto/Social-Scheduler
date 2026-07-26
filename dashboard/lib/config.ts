@@ -45,3 +45,11 @@ export const config = {
   publicAssetBaseUrl: get("PUBLIC_ASSET_BASE_URL", ""),
   defaultTimezone: get("DEFAULT_TIMEZONE", "UTC"),
 };
+
+// Mirrors worker/config.py's dry_run_active(): DRY_RUN is a live safety switch, so treat
+// anything other than an explicit "0" or "false" as ON, including it being unset — same
+// fail-safe direction the worker takes (default dry-run ON).
+export function isDryRun(): boolean {
+  const raw = get("DRY_RUN", "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false";
+}
