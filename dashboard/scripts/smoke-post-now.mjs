@@ -287,6 +287,22 @@ async function main() {
     `expected 400 for an over-limit caption, got ${overLimitCaption.status}`
   );
 
+  // ---- Scenario 6: carousel over the platform limit still rejected under post_now --
+  // noApprovalChannel is instagram, whose maxCarousel is 10 (dashboard/lib/platforms.ts).
+  // Reusing the same asset id repeatedly is fine — incompatiblePostError only looks at
+  // assetIds.length, not distinctness.
+  const overSizeCarousel = await postsRoute.POST(
+    postReq({
+      asset_ids: Array(11).fill(asset.id),
+      channel_ids: [noApprovalChannel],
+      post_now: true,
+    })
+  );
+  assert(
+    overSizeCarousel.status === 400,
+    `expected 400 for an over-limit carousel, got ${overSizeCarousel.status}`
+  );
+
   console.log("PASS");
 }
 

@@ -525,7 +525,11 @@ export function Composer({
                       {disabled
                         ? `${platformLabel(c.platform)} can't post text-only`
                         : platformLabel(c.platform)}
-                      {!disabled && c.requires_approval ? " · needs approval" : ""}
+                      {!disabled && c.requires_approval
+                        ? postNow
+                          ? " · approval skipped (Post now)"
+                          : " · needs approval"
+                        : ""}
                     </span>
                   </span>
                 </button>
@@ -586,17 +590,28 @@ export function Composer({
                   <code className="data rounded bg-surface px-1 py-0.5">.env</code> to publish for
                   real.
                 </p>
-              ) : !readiness.workerOnline ? (
+              ) : null}
+              {readiness.killSwitch ? (
+                <p className="font-medium text-accent-strong">
+                  The kill switch is on — the worker is running but won&rsquo;t publish
+                  anything until <code className="data rounded bg-surface px-1 py-0.5">
+                    KILL_SWITCH=0
+                  </code>{" "}
+                  is set in <code className="data rounded bg-surface px-1 py-0.5">.env</code>.
+                </p>
+              ) : null}
+              {!readiness.workerOnline ? (
                 <p className="font-medium text-accent-strong">
                   The worker isn&rsquo;t running — nothing will pick this up until it is. The
                   send will simply wait.
                 </p>
-              ) : (
+              ) : null}
+              {!readiness.dryRun && !readiness.killSwitch && readiness.workerOnline ? (
                 <p className="text-muted">
                   Publishes on the worker&rsquo;s next check, within about a minute — not
                   instantly.
                 </p>
-              )}
+              ) : null}
               <p className="text-muted">
                 Skips the approval step, even for channels that require it.
               </p>
