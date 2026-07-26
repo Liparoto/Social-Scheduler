@@ -209,12 +209,17 @@ export function PostSendsPanel({
   sends,
   channels,
   readiness,
+  dirty = false,
 }: {
   postId: number;
   postType: PostType;
   sends: PostPublicationRow[];
   channels: Channel[];
   readiness: PublishReadiness;
+  // True when the surrounding editor has unsaved changes. Post now publishes whatever
+  // is currently saved in the DB, so it must be blocked while dirty — the scheduled
+  // path is unaffected since scheduling for later still leaves time to save first.
+  dirty?: boolean;
 }) {
   const router = useRouter();
   const [channelId, setChannelId] = useState<number | "">("");
@@ -240,6 +245,10 @@ export function PostSendsPanel({
       setError("Pick a channel.");
       return;
     }
+    if (postNow && dirty) {
+      setError("Save your changes first — Post now publishes what's saved.");
+      return;
+    }
     if (!postNow && (!date || !time)) {
       setError("Pick a date and time.");
       return;
@@ -262,6 +271,7 @@ export function PostSendsPanel({
     setChannelId("");
     setDate("");
     setTime("");
+    setPostNow(false);
     router.refresh();
   }
 
@@ -287,9 +297,14 @@ export function PostSendsPanel({
       <div className="mt-4 rounded-lg border border-border bg-surface-sunken p-3">
         <div className="mb-2 flex items-center justify-between">
           <h4 className="text-xs font-semibold text-ink-soft">Add a send</h4>
-          <div className="inline-flex rounded-lg border border-border p-0.5">
+          <div
+            role="group"
+            aria-label="Send timing"
+            className="inline-flex rounded-lg border border-border p-0.5"
+          >
             <button
               type="button"
+              aria-pressed={!postNow}
               className={segBtn(!postNow)}
               onClick={() => setPostNow(false)}
             >
@@ -297,6 +312,7 @@ export function PostSendsPanel({
             </button>
             <button
               type="button"
+              aria-pressed={postNow}
               className={segBtn(postNow)}
               onClick={() => setPostNow(true)}
             >
@@ -344,12 +360,17 @@ export function PostSendsPanel({
           ) : null}
           <button
             onClick={addSend}
-            disabled={busy}
+            disabled={busy || (postNow && dirty)}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
-            {busy ? (postNow ? "Sending…" : "Adding…") : postNow ? "Post now" : "Add"}
+            {busy ? (postNow ? "Sending…" : "Adding…") : postNow ? "Post now →" : "Add"}
           </button>
         </div>
+        {postNow && dirty ? (
+          <p className="mt-2 text-xs text-status-failed">
+            Save your changes first — Post now publishes what&apos;s saved.
+          </p>
+        ) : null}
         {postNow ? (
           <div className="mt-2">
             <PostNowReadinessNotice readiness={readiness} />

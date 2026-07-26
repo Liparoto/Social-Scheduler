@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { channelColor } from "@/lib/format";
 import type { PublishReadiness } from "@/lib/publish-readiness";
@@ -43,6 +44,7 @@ export function ScheduleFromLibrary({
   defaultTime: string;
   readiness: PublishReadiness;
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [targets, setTargets] = useState<Set<number>>(new Set());
@@ -108,6 +110,10 @@ export function ScheduleFromLibrary({
         : `Scheduled to ${b.created} account${b.created === 1 ? "" : "s"}.`
     );
     setTargets(new Set());
+    // Re-fetch server state so the dry-run / kill-switch / worker readiness banner
+    // (PostNowReadinessNotice) can't go stale across repeated sends on this page —
+    // same class of bug as the cached-.env readiness fix, just via a stale page.
+    router.refresh();
   }
 
   if (!selected) {

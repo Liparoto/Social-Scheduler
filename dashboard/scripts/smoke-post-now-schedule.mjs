@@ -288,6 +288,41 @@ async function main() {
     `expected 400 for an over-limit carousel, got ${overSizeCarousel.status}`
   );
 
+  // ---- Scenario 7: multi-channel fan-out — post_now to an approval-required AND a
+  // no-approval channel at once must land BOTH as 'scheduled' (never pending_approval)
+  // and sharing the same scheduled_at. Fanning one post to several accounts at once is
+  // the whole point of this surface, but every other scenario above uses a single
+  // channel, so this is the only coverage of the multi-target path.
+  const post7 = makeDraftPost();
+  const beforeNow7 = Date.now();
+  const res7 = await scheduleReq(post7, {
+    channel_ids: [approvalChannel, noApprovalChannel],
+    post_now: true,
+  });
+  assert(res7.status === 201, `expected 201 for multi-channel post_now, got ${res7.status}`);
+  const pubs7 = queries.getPostPublications(post7);
+  const pub7a = pubs7.find((p) => p.channel_id === approvalChannel);
+  const pub7b = pubs7.find((p) => p.channel_id === noApprovalChannel);
+  assert(pub7a, "expected a publication for the approval-required channel");
+  assert(pub7b, "expected a publication for the no-approval channel");
+  assert(
+    pub7a.status === "scheduled",
+    `expected 'scheduled' (not pending_approval) for the approval-required channel under post_now, got '${pub7a.status}'`
+  );
+  assert(
+    pub7b.status === "scheduled",
+    `expected 'scheduled' for the no-approval channel under post_now, got '${pub7b.status}'`
+  );
+  assert(
+    pub7a.scheduled_at === pub7b.scheduled_at,
+    `expected both fan-out publications to share the same scheduled_at, got '${pub7a.scheduled_at}' vs '${pub7b.scheduled_at}'`
+  );
+  const scheduledAtMs7 = new Date(pub7a.scheduled_at).getTime();
+  assert(
+    scheduledAtMs7 >= beforeNow7 && scheduledAtMs7 <= Date.now() + 5000,
+    `expected fan-out scheduled_at to be ~now, got ${pub7a.scheduled_at}`
+  );
+
   console.log("PASS");
 }
 

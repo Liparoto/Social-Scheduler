@@ -83,6 +83,26 @@ export function PostEditor({
       return next;
     });
 
+  // Post now publishes whatever is currently saved in the database — not whatever is
+  // sitting in this component's state. If the editor has unsaved changes, "Post now"
+  // would silently publish the stale, already-saved version. Compare the editable
+  // fields that actually feed a publish (captions, targets, tags, content status)
+  // against the props this component was initialised with, so a scroll-and-click from
+  // "fix a typo" straight to "Post now" gets caught instead of shipping the typo.
+  const normalizedCaptions = (list: { platform: string; body: string }[]) =>
+    JSON.stringify(
+      list
+        .filter((v) => v.body.trim())
+        .map((v) => ({ platform: v.platform || null, body: v.body.trim() }))
+    );
+  const isDirty =
+    normalizedCaptions(captions) !== normalizedCaptions(initialCaptions) ||
+    JSON.stringify(Array.from(targets).sort((a, b) => a - b)) !==
+      JSON.stringify([...initialTargets].sort((a, b) => a - b)) ||
+    JSON.stringify([...tagIds].sort((a, b) => a - b)) !==
+      JSON.stringify([...initialTagIds].sort((a, b) => a - b)) ||
+    status !== post.content_status;
+
   async function save() {
     setError(null);
     setNotice(null);
@@ -235,6 +255,7 @@ export function PostEditor({
         sends={sends}
         channels={sendableChannels}
         readiness={readiness}
+        dirty={isDirty}
       />
 
       {/* Content status + cooldown + save */}
