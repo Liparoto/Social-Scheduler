@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createDraftPost, getChannel, getPeriod, listTags } from "@/lib/queries";
+import { createDraftPost, getAsset, getChannel, getPeriod, listTags } from "@/lib/queries";
 import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 import { PLATFORMS, incompatiblePostError } from "@/lib/platforms";
@@ -56,7 +56,37 @@ export async function POST(req: NextRequest) {
     targetChannelIds = body.target_channel_ids;
   }
 
-  const postType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
+  // Load the assets so post_type can reflect what they ACTUALLY are, not just how many
+  // there are. Mirrors the channel lookup directly above.
+  const postAssets = assetIds.map((aid) => getAsset(aid));
+  const unknownAssetIdx = postAssets.findIndex((a) => !a);
+  if (unknownAssetIdx !== -1) {
+    return NextResponse.json(
+      { error: `Unknown asset ${assetIds[unknownAssetIdx]}.` },
+      { status: 400 }
+    );
+  }
+  const chosenAssets = postAssets.map((a) => a!);
+
+  // No platform publishes a carousel containing video. Caught here so it fails at
+  // compose time with a clear reason, rather than terminally in the worker later.
+  if (!isText && chosenAssets.length > 1 && chosenAssets.some((a) => a.media_kind === "video")) {
+    return NextResponse.json(
+      { error: "A carousel can only contain images. Post a video as its own Reel." },
+      { status: 400 }
+    );
+  }
+
+  // A single VIDEO asset is a reel, not a "single". Everything else is unchanged.
+  const isReel =
+    !isText && chosenAssets.length === 1 && chosenAssets[0].media_kind === "video";
+  const postType = isText
+    ? "text"
+    : isReel
+      ? "reel"
+      : assetIds.length > 1
+        ? "carousel"
+        : "single";
   const targetChannels = (targetChannelIds ?? []).map((cid) => getChannel(cid)!);
 
   if (targetChannels.length > 0) {
@@ -106,7 +136,10 @@ export async function POST(req: NextRequest) {
   const postId = createDraftPost({
     caption,
     first_comment: (body.first_comment || "").trim(),
-    post_type: isText ? "text" : undefined,
+    // undefined (not "carousel"/"single") falls through to createDraftPost's own
+    // asset-count derivation — but that derivation doesn't know about video, so a reel
+    // must be passed explicitly or it would be saved as "single" edit-time.
+    post_type: isText ? "text" : isReel ? "reel" : undefined,
     asset_ids: assetIds,
     created_by: body.created_by,
     content_kind: contentKind,

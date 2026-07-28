@@ -20,6 +20,7 @@ import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-varia
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
+import { CoverFramePicker } from "./cover-frame-picker";
 import { PostSendsPanel } from "./post-sends-panel";
 
 const card = "rounded-card border border-border bg-surface p-5";
@@ -164,23 +165,29 @@ export function PostEditor({
         <div className="flex items-start gap-4">
           <div className="flex gap-2">
             {assets.length ? (
-              assets.slice(0, 4).map((a) => (
-                <div key={a.id}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`/api/media/${a.id}?variant=thumb`}
-                    alt=""
-                    className="h-16 w-16 rounded-lg object-cover"
-                  />
-                  {a.needs_review ? (
-                    <ConformControl
-                      assetId={a.id}
-                      conformMode={a.conform_mode}
-                      needsReview={a.needs_review}
+              assets.slice(0, 4).map((a) =>
+                a.media_kind === "video" ? (
+                  <div key={a.id} className="w-40">
+                    <CoverFramePicker asset={a} />
+                  </div>
+                ) : (
+                  <div key={a.id}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`/api/media/${a.id}?variant=thumb`}
+                      alt=""
+                      className="h-16 w-16 rounded-lg object-cover"
                     />
-                  ) : null}
-                </div>
-              ))
+                    {a.needs_review ? (
+                      <ConformControl
+                        assetId={a.id}
+                        conformMode={a.conform_mode}
+                        needsReview={a.needs_review}
+                      />
+                    ) : null}
+                  </div>
+                )
+              )
             ) : (
               <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
                 {post.post_type === "text" ? "Text post" : "no image"}
