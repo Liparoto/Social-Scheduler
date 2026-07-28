@@ -178,6 +178,13 @@ export function updateAssetConform(
     .run({ ...fields, id });
 }
 
+/** Persist the chosen cover frame. Assets have no updated_at column. */
+export function updateAssetCoverFrame(id: number, coverFrameMs: number): void {
+  getDb()
+    .prepare("UPDATE assets SET cover_frame_ms = ? WHERE id = ?")
+    .run(coverFrameMs, id);
+}
+
 export function recentAssets(limit = 60): Asset[] {
   return getDb()
     .prepare("SELECT * FROM assets ORDER BY created_at DESC, id DESC LIMIT ?")
