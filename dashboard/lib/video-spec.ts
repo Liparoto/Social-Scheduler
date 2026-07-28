@@ -31,15 +31,46 @@ export interface ReelCheck {
   warnings: string[];
 }
 
-function humanDuration(ms: number): string {
-  const total = Math.round(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return m > 0 ? `${m}m${String(s).padStart(2, "0")}s` : `${(ms / 1000).toFixed(1)}s`;
+/**
+ * Formats a duration for display. `direction` controls which way partial units round:
+ * - "floor" (default): round down. Used when reporting a value that is BELOW a minimum,
+ *   so the displayed number can never reach the minimum it's being rejected for.
+ * - "ceil": round up. Used when reporting a value that is ABOVE a maximum, so the
+ *   displayed number can never drop back down to the maximum it's being rejected for.
+ *
+ * Rounding happens at one-decisecond precision (not whole seconds) so a value just past
+ * a minute boundary (e.g. 59,900ms) can't get carried into "1m00s" by the rounding itself —
+ * only an actual >=60s duration displays as a whole minute.
+ */
+export function humanDuration(ms: number, direction: "floor" | "ceil" = "floor"): string {
+  const roundFn = direction === "ceil" ? Math.ceil : Math.floor;
+  const deciseconds = roundFn(ms / 100);
+  const wholeSeconds = Math.floor(deciseconds / 10);
+  const tenth = deciseconds - wholeSeconds * 10;
+
+  if (wholeSeconds < 60) {
+    return `${wholeSeconds}.${tenth}s`;
+  }
+
+  // The "Xm00s" format has no room for a decimal, so a "ceil" duration with any leftover
+  // fraction must carry into the next whole second — otherwise an over-the-limit value
+  // could still print as exactly the limit (e.g. 900,001ms must not print as "15m00s").
+  const roundedSeconds = tenth > 0 && direction === "ceil" ? wholeSeconds + 1 : wholeSeconds;
+  const m = Math.floor(roundedSeconds / 60);
+  const s = roundedSeconds % 60;
+  return `${m}m${String(s).padStart(2, "0")}s`;
 }
 
-function humanBytes(bytes: number): string {
-  return `${(bytes / MB).toFixed(1)} MB`;
+/**
+ * Formats a byte size for display, always rounding UP to the next tenth of a MB. This is
+ * only ever used to report a size that already failed the max-size check, so rounding
+ * to-nearest would let a file 1 byte over the cap print as e.g. "300.0 MB" — indistinguishable
+ * from the cap itself. Rounding up guarantees the printed number is always strictly greater
+ * than the cap whenever the actual size is.
+ */
+export function humanBytes(bytes: number): string {
+  const rounded = Math.ceil((bytes / MB) * 10) / 10;
+  return `${rounded.toFixed(1)} MB`;
 }
 
 /**
@@ -64,12 +95,12 @@ export function validateReel(meta: VideoMeta, byteSize: number, mime: string): R
   }
   if (meta.duration_ms < REEL_SPEC.minDurationMs) {
     errors.push(
-      `This is ${humanDuration(meta.duration_ms)}. Reels must be at least 3 seconds.`
+      `This is ${humanDuration(meta.duration_ms, "floor")}. Reels must be at least 3 seconds.`
     );
   }
   if (meta.duration_ms > REEL_SPEC.maxDurationMs) {
     errors.push(
-      `This is ${humanDuration(meta.duration_ms)}. Reels cap at 15 minutes. ` +
+      `This is ${humanDuration(meta.duration_ms, "ceil")}. Reels cap at 15 minutes. ` +
         `Trim it in Photos and upload again.`
     );
   }
