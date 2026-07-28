@@ -9,6 +9,7 @@ from dataclasses import fields
 
 import pytest
 
+from worker import publisher
 from worker.graph_api import GraphClient
 
 
@@ -93,9 +94,6 @@ def test_reels_poll_budget_is_longer_than_the_image_budget():
     assert interval * tries > image_budget
 
 
-from worker import publisher
-
-
 def test_reel_is_an_allowed_post_type():
     assert "reel" in publisher.SUPPORTED_POST_TYPES
 
@@ -132,7 +130,14 @@ def test_reel_fails_terminally_on_every_other_platform(platform):
 
 
 def test_publish_reel_passes_cover_offset_and_uses_the_reels_budget():
+    """Not FINISHED until the 3rd poll, with the image budget's max_tries deliberately
+    set too low (2) to ever get there. If _publish_reel used the image budget instead
+    of the Reels one, this would raise "not FINISHED after polling" before publish is
+    ever called. The recorded sleep_fn intervals additionally pin *which* budget's
+    interval was actually used, not just that polling happened enough times.
+    """
     calls = {}
+    sleeps = []
 
     class _C:
         def create_video_container(self, ig, url, token, caption=None, thumb_offset=None):
@@ -142,35 +147,45 @@ def test_publish_reel_passes_cover_offset_and_uses_the_reels_budget():
         def get_container_status(self, cid, token):
             calls.setdefault("polls", 0)
             calls["polls"] += 1
-            return "FINISHED"
+            return "FINISHED" if calls["polls"] >= 3 else "IN_PROGRESS"
 
         def publish_container(self, ig, cid, token):
             calls["published"] = (ig, cid)
             return "MEDIA123"
 
     class _Cfg:
+        # Distinguishable budgets: the image budget cannot survive 3 polls (max_tries=2),
+        # so reaching FINISHED at poll 3 is only possible via the Reels budget.
         status_poll_interval = 5
-        status_poll_max_tries = 60
+        status_poll_max_tries = 2
         reels_status_poll_interval = 10
         reels_status_poll_max_tries = 90
 
     plan = {"platform": "instagram", "post_type": "reel", "account_id": "IG1",
             "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
             "caption": "hello", "cover_frame_ms": 2400}
-    got = publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), lambda _: None)
+    got = publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), sleeps.append)
 
     assert got == "MEDIA123"
     assert calls["container"] == ("IG1", "https://x/v.mp4", "hello", 2400)
     assert calls["published"] == ("IG1", "CONT")
+    assert calls["polls"] == 3
+    # sleep_fn was invoked with the Reels interval (10), never the image interval (5) —
+    # pins that _publish_reel is actually passing interval=/max_tries= through to the
+    # poll loop rather than relying on the loop's image defaults.
+    assert sleeps == [10, 10]
 
 
 def test_reel_poll_exhaustion_is_retryable_not_terminal():
     """A container still transcoding must come back on the next cycle, not burn the post."""
+    polls = {"count": 0}
+
     class _C:
         def create_video_container(self, *a, **kw):
             return "CONT"
 
         def get_container_status(self, cid, token):
+            polls["count"] += 1
             return "IN_PROGRESS"
 
         def publish_container(self, *a):
@@ -189,3 +204,6 @@ def test_reel_poll_exhaustion_is_retryable_not_terminal():
         publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), lambda _: None)
     # RuntimeError (not _NonRetryable) is what publish_one treats as retryable.
     assert not isinstance(exc.value, publisher._NonRetryable)
+    # Exhausted the Reels budget (max_tries=2), never the image budget (max_tries=1) —
+    # pins that _publish_reel actually used reels_status_poll_max_tries to poll.
+    assert polls["count"] == 2

@@ -139,7 +139,7 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
-            f"post_type '{post_type}' not supported until Phase 6 (Reels/Stories)"
+            f"post_type '{post_type}' not supported (Stories are still Phase 6)"
         )
     if post_type == "single" and len(assets) != 1:
         raise _NonRetryable(f"single post needs exactly 1 asset, has {len(assets)}")
