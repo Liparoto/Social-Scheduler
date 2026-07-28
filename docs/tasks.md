@@ -487,16 +487,11 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       `META_GRAPH_VERSION`. `ClientRegistry` caches on the resolved `(base_url, version)`
       pair so Instagram/Facebook keep hitting the install's configured `v25.0` while Threads
       correctly hits `v1.0`. See `reference.md` for details.
-- [~] Real-post verification (owner, Threads) — **PARKED 2026-07-24**, mirrors the Facebook
-      item above: code is done, reviewed, and dry-run verified (a Threads text post and a
-      Threads image post both correctly plan and report `dry_run` with
-      `plan["platform"] == "threads"`). What remains is entirely Meta-side account plumbing —
-      adding the Threads product to the Meta app, authorizing via Threads Login (its own
-      OAuth flow — not Facebook Login), and obtaining a long-lived token and Threads user id
-      per `docs/meta-setup.md`. No real post has been attempted. The version-path issue above
-      is now resolved (Threads runs on its own `v1.0` via `THREADS_API_VERSION`, overridable
-      if Meta bumps it), so the first real post is no longer expected to fail on that front.
-- [~] Real-post verification (owner) — **PARKED 2026-07-24**, to resume alongside other
+- [x] ~~Real-post verification (owner, Threads) — PARKED 2026-07-24~~ **UNBLOCKED and DONE
+      2026-07-25** — see the Threads real-post item above. The Meta-side plumbing this item
+      was waiting on (Threads product added to the Meta app, Threads Login OAuth, long-lived
+      token + the *Threads* user id) was all completed, and the first real post published.
+- [~] Real-post verification (owner, Facebook) — **PARKED 2026-07-24**, to resume alongside other
       platform connections. Code is done, reviewed, merged and dry-run verified; what remains is
       Meta-side account plumbing only. State when parked:
       - **Blocker:** the Meta app (`Liparoto Social Scheduler`) does not offer
@@ -558,13 +553,15 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       - **Known gap #1 — no delete-channel UI.** Removing a channel currently requires
         raw SQL; there's no dashboard control for it yet (pre-existing gap, not
         Discord/Telegram-specific, but noticed while adding these two).
-      - **Known gap #2 — image aspect ratio (open decision, not a bug).** Discord and
-        Telegram currently receive the **Instagram-conformed** image derivative
-        (cropped/padded to the 4:5–1.91:1 range) even though neither platform
-        constrains aspect ratio, so a post to either could show a needlessly
-        letterboxed/cropped image versus what was originally uploaded. Flagging for a
-        future decision rather than fixing now — may need its own "platform-native
-        derivative" concept in the image-conformance pipeline.
+      - **Known gap #2 — image aspect ratio.** ✅ **CLOSED 2026-07-25** (`d42d8ef`).
+        Discord and Telegram were receiving the Instagram-conformed derivative
+        (cropped/padded to 4:5–1.91:1) even though neither platform constrains aspect
+        ratio. Fixed with `PlatformCaps.needs_conformed_media` (default `True`): the two
+        unconstrained platforms now get the **untouched original** (`storage_path`)
+        instead of `publish_path`. The caps flag is threaded through `_resolve_local_path`
+        so `_validate` and `_build_plan` always agree on which file is being sent.
+        Instagram, Facebook and Threads are unchanged. No "platform-native derivative"
+        concept was needed after all.
 - [ ] Reels/video (async container, status polling, `video_url`).
 - [ ] Stories.
 - [ ] First-comment automation (post-publish comment endpoint).
@@ -572,6 +569,59 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
 
 ### Verification
 - [ ] Each adapter dry-run first, then one real post to a test account, before automation.
+
+---
+
+## Channel accent colour + original media on unconstrained platforms  `[x] done`
+Plan: `docs/superpowers/plans/2026-07-25-channel-colour-and-original-media.md`
+Two small, unrelated improvements shipped together.
+- [x] Migration `0010`: nullable `channels.color_hue` INTEGER (0–360, an HSL **hue**, not a hex
+      value) so `channelColor()`/`channelHue()` in `dashboard/lib/format.ts` keep guaranteeing
+      contrast and dark-mode behaviour. `NULL` = "derive from the channel id, as before", so no
+      existing channel changed appearance. Plain `ALTER TABLE` — none of `0008`/`0009`'s rebuild
+      or cascade-delete risk. Routes validate null-or-0–360 before it reaches the DB.
+- [x] Shared, keyboard-navigable `<ColorSwatchPicker>` (10 evenly-spaced hues + an explicit
+      "Automatic" that stores NULL), in both the channel create form and a new edit control.
+      Selection is never colour-only — every swatch has an accessible label, the active one gets
+      a ring **and** a check mark. The chosen hue is threaded through *every* surface that renders
+      a channel chip (Overview queue rail + publications table, Compose, Library, post editor,
+      sends panel), not just the easiest ones.
+- [x] Worker: `PlatformCaps.needs_conformed_media` → Discord/Telegram publish the original image.
+      (See Phase 6's Known gap #2 above — this is what closed it.)
+
+---
+
+## "Post now" — publish without picking a date  `[x] done`
+Designs/plans: `docs/superpowers/plans/2026-07-25-post-now.md` and `-post-now-from-library.md`
+One behaviour to learn, available from all three places that create sends. Semantics everywhere:
+`scheduled_at` = the current instant, status forced straight to `scheduled` (**approval bypassed**
+— whoever is composing-and-publishing right now *is* the approver), and `post_now` wins over any
+supplied date/time. The scheduled path is byte-identical to before and still honours
+`requires_approval`, pinned by regression cases in both smoke scripts.
+- [x] Server: `post_now: true` on `POST /api/posts` (new post) and on
+      `POST /api/posts/[id]/schedule` (existing post). Every existing validation still applies
+      under `post_now` — unknown channel, no channels, platform/post-type compatibility, carousel
+      size, caption limit. It is not a hole around the rules.
+- [x] UI: a Schedule / Post now toggle in the composer, the From-library picker, and the post
+      editor's Add-a-send. Off by default; hides the date/time inputs when on (restoring any typed
+      value if toggled back off). Shared `<PostNowReadinessNotice>` so all three surfaces show the
+      same warnings.
+- [x] **Honesty over instant gratification.** The three things that silently prevent a real post
+      are surfaced *before* the click: `DRY_RUN` on, kill switch on, worker offline — **all**
+      applicable warnings render, not the first one. The happy path says "within about a minute",
+      not "instantly", because the worker polls. Neither condition disables the button.
+- [x] Fixed a real trap found in review: readiness was read once at module load with parsing that
+      disagreed with `worker/config.py`, so the composer could say "nothing will actually post"
+      while the worker was live. `config.ts` now re-reads `.env` live (2s memo) and mirrors
+      `_as_bool`'s allow-list and `override=True` precedence exactly.
+- [x] Fixed a second trap: Post now publishes what's **saved**, so an unsaved caption edit could
+      be silently discarded and the old text posted for real. `PostEditor` now blocks the Post-now
+      submit while dirty. Scheduled sends are unaffected.
+- [x] Verified: 324 worker tests; dashboard `tsc` clean; two smoke scripts driving the real routes
+      against a scratch DB copy; browser-verified on all three surfaces; the live DB left exactly
+      as found with `PRAGMA foreign_key_check` empty.
+
+---
 
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
 - [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
