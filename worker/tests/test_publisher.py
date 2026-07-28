@@ -103,7 +103,7 @@ def test_failure_retries_then_terminal_and_is_independent(conn, config, make_pub
 
 
 def test_invalid_post_type_fails_terminally_without_retry(conn, config, fake_client, make_publication):
-    pub = make_publication(post_type="reel", n_assets=1)  # not supported until Phase 6
+    pub = make_publication(post_type="story", n_assets=1)  # not supported yet (Stories)
     out = publish_one(conn, pub, config, fake_client, dry_run=False, now=NOW)
     assert out.result == "failed"
     row = _reload(conn, pub["id"])

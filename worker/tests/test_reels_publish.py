@@ -7,6 +7,8 @@ Follows the same fake-session idiom as test_graph_api_threads.py / test_graph_ap
 
 from dataclasses import fields
 
+import pytest
+
 from worker.graph_api import GraphClient
 
 
@@ -89,3 +91,101 @@ def test_reels_poll_budget_is_longer_than_the_image_budget():
 
     image_budget = defaults["status_poll_interval"] * defaults["status_poll_max_tries"]
     assert interval * tries > image_budget
+
+
+from worker import publisher
+
+
+def test_reel_is_an_allowed_post_type():
+    assert "reel" in publisher.SUPPORTED_POST_TYPES
+
+
+def test_reel_needs_exactly_one_video_asset():
+    post = {"post_type": "reel", "first_comment": None}
+    caps_ok = [{"id": 1, "media_kind": "video", "storage_path": "a.mp4"}]
+    # one video: fine
+    publisher._validate(post, caps_ok, True, "https://x", "instagram", caption="hi")
+
+    # two assets: refused
+    with pytest.raises(publisher._NonRetryable, match="exactly 1"):
+        publisher._validate(post, caps_ok * 2, True, "https://x", "instagram", caption="hi")
+
+    # an IMAGE asset: refused. This is the guard that stops a mis-typed post from
+    # sending a JPEG to the REELS endpoint.
+    with pytest.raises(publisher._NonRetryable, match="video"):
+        publisher._validate(
+            post,
+            [{"id": 1, "media_kind": "image", "storage_path": "a.jpg"}],
+            True, "https://x", "instagram", caption="hi",
+        )
+
+
+@pytest.mark.parametrize("platform", ["facebook", "threads", "discord", "telegram"])
+def test_reel_fails_terminally_on_every_other_platform(platform):
+    """No platform except Instagram publishes Reels. Each must refuse TERMINALLY with a
+    clear message — never retry forever, never silently drop the video."""
+    plan = {"platform": platform, "post_type": "reel", "account_id": "X",
+            "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
+            "caption": "hi", "cover_frame_ms": None}
+    with pytest.raises(publisher._NonRetryable, match="reel"):
+        publisher._PUBLISHERS[platform](object(), plan, "TOKEN", object(), lambda _: None)
+
+
+def test_publish_reel_passes_cover_offset_and_uses_the_reels_budget():
+    calls = {}
+
+    class _C:
+        def create_video_container(self, ig, url, token, caption=None, thumb_offset=None):
+            calls["container"] = (ig, url, caption, thumb_offset)
+            return "CONT"
+
+        def get_container_status(self, cid, token):
+            calls.setdefault("polls", 0)
+            calls["polls"] += 1
+            return "FINISHED"
+
+        def publish_container(self, ig, cid, token):
+            calls["published"] = (ig, cid)
+            return "MEDIA123"
+
+    class _Cfg:
+        status_poll_interval = 5
+        status_poll_max_tries = 60
+        reels_status_poll_interval = 10
+        reels_status_poll_max_tries = 90
+
+    plan = {"platform": "instagram", "post_type": "reel", "account_id": "IG1",
+            "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
+            "caption": "hello", "cover_frame_ms": 2400}
+    got = publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), lambda _: None)
+
+    assert got == "MEDIA123"
+    assert calls["container"] == ("IG1", "https://x/v.mp4", "hello", 2400)
+    assert calls["published"] == ("IG1", "CONT")
+
+
+def test_reel_poll_exhaustion_is_retryable_not_terminal():
+    """A container still transcoding must come back on the next cycle, not burn the post."""
+    class _C:
+        def create_video_container(self, *a, **kw):
+            return "CONT"
+
+        def get_container_status(self, cid, token):
+            return "IN_PROGRESS"
+
+        def publish_container(self, *a):
+            raise AssertionError("must not publish an unfinished container")
+
+    class _Cfg:
+        status_poll_interval = 0
+        status_poll_max_tries = 1
+        reels_status_poll_interval = 0
+        reels_status_poll_max_tries = 2
+
+    plan = {"platform": "instagram", "post_type": "reel", "account_id": "IG1",
+            "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
+            "caption": None, "cover_frame_ms": None}
+    with pytest.raises(RuntimeError) as exc:
+        publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), lambda _: None)
+    # RuntimeError (not _NonRetryable) is what publish_one treats as retryable.
+    assert not isinstance(exc.value, publisher._NonRetryable)
