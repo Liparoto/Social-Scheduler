@@ -6,11 +6,13 @@ import sharp from "sharp";
 import { config } from "@/lib/config";
 import { getAssetByHash, upsertAssetByHash } from "@/lib/queries";
 import { conformImage } from "@/lib/conform";
+import { readVideoMeta, VideoParseError } from "@/lib/video-meta";
+import { validateReel, REEL_MIME_TYPES } from "@/lib/video-spec";
 
 export const runtime = "nodejs";
 
 const THUMB_MAX = 480;
-const EXT_BY_MIME: Record<string, string> = {
+const IMAGE_EXT_BY_MIME: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/webp": "webp",
@@ -23,13 +25,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No file provided." }, { status: 400 });
   }
   const mime = file.type;
-  const ext = EXT_BY_MIME[mime];
-  if (!ext) {
+  const imageExt = IMAGE_EXT_BY_MIME[mime];
+  const videoExt = REEL_MIME_TYPES[mime];
+  if (!imageExt && !videoExt) {
     return NextResponse.json(
-      { error: "Only JPEG, PNG, or WebP images are supported (video arrives in a later phase)." },
+      { error: "Only JPEG, PNG or WebP images, and MP4 or MOV video, are supported." },
       { status: 415 }
     );
   }
+  const ext = imageExt ?? videoExt;
+  const isVideo = Boolean(videoExt);
 
   const buf = Buffer.from(await file.arrayBuffer());
   // Dedup by CONTENT HASH (not filename) — check before writing anything to disk.
@@ -37,6 +42,53 @@ export async function POST(req: NextRequest) {
   const existing = getAssetByHash(hash);
   if (existing) {
     return NextResponse.json({ asset: existing, deduped: true });
+  }
+
+  // ---- Video: validate, never process ------------------------------------------
+  // No transcoding by design (see the design spec, Decision 1) — we check the file
+  // against Instagram's Reels spec and refuse with a specific reason if it can't be
+  // published, rather than silently rewriting the owner's footage.
+  if (isVideo) {
+    let meta;
+    try {
+      meta = readVideoMeta(buf);
+    } catch (err) {
+      if (err instanceof VideoParseError) {
+        return NextResponse.json({ error: err.message }, { status: 422 });
+      }
+      throw err;
+    }
+    const check = validateReel(meta, buf.length, mime);
+    if (check.errors.length > 0) {
+      return NextResponse.json({ error: check.errors.join(" ") }, { status: 422 });
+    }
+
+    const storageRel = `${hash}.${ext}`;
+    await fs.mkdir(config.assetStorageDir, { recursive: true });
+    await fs.writeFile(path.join(config.assetStorageDir, storageRel), buf);
+
+    const { asset, deduped } = upsertAssetByHash({
+      content_hash: hash,
+      media_kind: "video",
+      original_filename: file.name || null,
+      storage_path: storageRel,
+      public_url: config.publicAssetBaseUrl
+        ? `${config.publicAssetBaseUrl.replace(/\/$/, "")}/${storageRel}`
+        : null,
+      // No thumbnail file: sharp cannot read video and ffmpeg is deliberately not a
+      // dependency. Surfaces render a <video> element instead (design spec, Components).
+      thumbnail_path: null,
+      mime_type: mime,
+      width: meta.width,
+      height: meta.height,
+      byte_size: buf.length,
+      // No conform derivative — publish_path stays NULL, so the worker's existing
+      // _resolve_url precedence falls through to storage_path with no worker change.
+      publish_path: null,
+      duration_ms: meta.duration_ms,
+      has_audio: meta.has_audio ? 1 : 0,
+    });
+    return NextResponse.json({ asset, deduped, warnings: check.warnings });
   }
 
   const storageRel = `${hash}.${ext}`;

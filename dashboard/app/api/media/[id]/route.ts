@@ -11,6 +11,8 @@ const MIME_BY_EXT: Record<string, string> = {
   jpeg: "image/jpeg",
   png: "image/png",
   webp: "image/webp",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
 };
 
 /** Serve a stored asset (or its thumbnail) for in-dashboard preview only. */
