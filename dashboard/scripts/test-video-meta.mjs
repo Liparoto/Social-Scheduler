@@ -18,10 +18,28 @@ function mvhd(timescale, duration) {
   return box("mvhd", p);
 }
 
-/** tkhd v0: width at payload offset 76, height at 80, both 16.16 fixed-point. */
-function tkhd(width, height) {
+/**
+ * tkhd v0: width at payload offset 76, height at 80, both 16.16 fixed-point.
+ * The 3x3 display matrix {a,b,u,c,d,v,x,y,w} occupies offsets 40-76. By default this
+ * writes a proper identity matrix (a=1, d=1, w=1 in 2.30 fixed-point) — real files always
+ * have a valid matrix, so fixtures should too. Pass rotate90 or rotate270 to instead write
+ * the matrix iPhones use for portrait-recorded, landscape-sampled video.
+ */
+function tkhd(width, height, { rotate90 = false, rotate270 = false } = {}) {
   const p = Buffer.alloc(84);
   p.writeUInt32BE(0, 0);
+  const FIX = 65536; // 16.16 fixed-point unit
+  let a = FIX, b = 0, c = 0, d = FIX;
+  if (rotate90) {
+    a = 0; b = 1 * FIX; c = -1 * FIX; d = 0;
+  } else if (rotate270) {
+    a = 0; b = -1 * FIX; c = 1 * FIX; d = 0;
+  }
+  p.writeInt32BE(a, 40);
+  p.writeInt32BE(b, 44);
+  p.writeInt32BE(c, 52);
+  p.writeInt32BE(d, 56);
+  p.writeInt32BE(1 << 30, 72); // w, 2.30 fixed-point unit
   p.writeUInt32BE(width * 65536, 76);
   p.writeUInt32BE(height * 65536, 80);
   return box("tkhd", p);
@@ -34,9 +52,9 @@ function hdlr(kind) {
   return box("hdlr", p);
 }
 
-function file({ timescale = 600, duration = 6000, w = 1080, h = 1920, audio = true, moovFirst = true } = {}) {
+function file({ timescale = 600, duration = 6000, w = 1080, h = 1920, audio = true, moovFirst = true, rotate90 = false, rotate270 = false } = {}) {
   const ftyp = box("ftyp", Buffer.from("isomiso2avc1mp41", "ascii"));
-  const tracks = [box("trak", Buffer.concat([tkhd(w, h), hdlr("vide")]))];
+  const tracks = [box("trak", Buffer.concat([tkhd(w, h, { rotate90, rotate270 }), hdlr("vide")]))];
   if (audio) tracks.push(box("trak", Buffer.concat([tkhd(0, 0), hdlr("soun")])));
   const moov = box("moov", Buffer.concat([mvhd(timescale, duration), ...tracks]));
   const mdat = box("mdat", Buffer.alloc(64));
@@ -66,6 +84,27 @@ assert.equal(readVideoMeta(file({ moovFirst: false })).duration_ms, 10_000, "moo
 const land = readVideoMeta(file({ w: 1920, h: 1080 }));
 assert.equal(land.width, 1920);
 assert.equal(land.height, 1080);
+
+// Identity-matrix portrait video must still report portrait (pins that the matrix fix
+// doesn't disturb the already-passing, non-rotated case).
+const portraitIdentity = readVideoMeta(file({ w: 1080, h: 1920 }));
+assert.equal(portraitIdentity.width, 1080, "identity portrait width");
+assert.equal(portraitIdentity.height, 1920, "identity portrait height");
+
+// iPhone-style 90-degree rotation: stored landscape (1280x720), displayed portrait (720x1280).
+const rot90 = readVideoMeta(file({ w: 1280, h: 720, rotate90: true }));
+assert.equal(rot90.width, 720, "90deg-rotated width");
+assert.equal(rot90.height, 1280, "90deg-rotated height");
+
+// 270-degree rotation: same transpose as 90 degrees.
+const rot270 = readVideoMeta(file({ w: 1280, h: 720, rotate270: true }));
+assert.equal(rot270.width, 720, "270deg-rotated width");
+assert.equal(rot270.height, 1280, "270deg-rotated height");
+
+// Genuinely landscape identity-matrix video must NOT be transposed.
+const landIdentity = readVideoMeta(file({ w: 1920, h: 1080 }));
+assert.equal(landIdentity.width, 1920, "identity landscape width");
+assert.equal(landIdentity.height, 1080, "identity landscape height");
 
 // Garbage must throw a typed error, never return junk
 assert.throws(() => readVideoMeta(Buffer.from("this is not a video at all")), VideoParseError);

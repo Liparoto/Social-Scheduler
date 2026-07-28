@@ -97,13 +97,46 @@ export function readVideoMeta(buf: Buffer): VideoMeta {
   // Dimensions come from the first track that actually has them. An audio track's tkhd
   // carries 0x0, so a plain "first tkhd" read would report a 0x0 video on files that
   // happen to list audio first.
+  //
+  // tkhd has two versions with different payload layouts (version 1 uses 64-bit
+  // creation/modification/duration fields, shifting everything after by 12 bytes):
+  //   v0: matrix at +40 (36 bytes), width/height at +76/+80
+  //   v1: matrix at +52 (36 bytes), width/height at +88/+92
+  //
+  // Width/height here are the *stored sample* dimensions, not necessarily the *displayed*
+  // ones. iPhones commonly record portrait video as landscape samples plus a 90°/270°
+  // rotation in the matrix, so the raw fields alone would report a portrait Reel as
+  // landscape — exactly backwards for Reels' portrait-first validation. The matrix is
+  // {a, b, u, c, d, v, x, y, w}; for an unrotated video a=1, d=1, b=c=0. For a 90°/270°
+  // rotation a=d=0 and b, c are both non-zero, and the displayed dimensions are the
+  // stored ones transposed. We only special-case that transposing pattern — arbitrary
+  // rotation angles or scaling are out of scope.
   let width = 0;
   let height = 0;
+  const MATRIX_EPSILON = 0.01;
   for (const tkhd of findAll(buf, moov.start, moov.end, "tkhd")) {
-    if (tkhd.end - tkhd.start < 84) continue;
-    const w = buf.readUInt32BE(tkhd.start + 76) / 65536;
-    const h = buf.readUInt32BE(tkhd.start + 80) / 65536;
+    const version = buf.readUInt8(tkhd.start);
+    const isV1 = version === 1;
+    const matrixOffset = isV1 ? 52 : 40;
+    const dimOffset = isV1 ? 88 : 76;
+    const minSize = isV1 ? 96 : 84;
+    if (tkhd.end - tkhd.start < minSize) continue;
+
+    let w = buf.readUInt32BE(tkhd.start + dimOffset) / 65536;
+    let h = buf.readUInt32BE(tkhd.start + dimOffset + 4) / 65536;
     if (w > 0 && h > 0) {
+      const a = buf.readInt32BE(tkhd.start + matrixOffset) / 65536;
+      const b = buf.readInt32BE(tkhd.start + matrixOffset + 4) / 65536;
+      const c = buf.readInt32BE(tkhd.start + matrixOffset + 12) / 65536;
+      const d = buf.readInt32BE(tkhd.start + matrixOffset + 16) / 65536;
+      const isTransposing =
+        Math.abs(a) < MATRIX_EPSILON &&
+        Math.abs(d) < MATRIX_EPSILON &&
+        Math.abs(b) > MATRIX_EPSILON &&
+        Math.abs(c) > MATRIX_EPSILON;
+      if (isTransposing) {
+        [w, h] = [h, w];
+      }
       width = Math.round(w);
       height = Math.round(h);
       break;
