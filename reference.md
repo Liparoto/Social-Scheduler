@@ -383,3 +383,26 @@ existing Reels warnings so the owner is told plainly what happened — see
 - Keep secrets in `.env` only; never commit `/data` or tokens.
 - When building the Facebook, video, or Stories adapters, re-run the same live-docs
   verification we did for IG image/carousel — don't extrapolate from this doc alone.
+
+## Verified: first real Reel published (2026-07-29)
+
+The full video pipeline was proven end to end against the live Instagram API.
+
+- **Media id** `17983260633046217` · **permalink** https://www.instagram.com/reel/DbYtd48ADWu/
+- **`media_product_type: REELS`** and `media_type: VIDEO`, read back from the API rather than
+  trusted from our own DB — it is a genuine Reel, not a plain video post.
+- **60 seconds end to end.** Cloudflared tunnel live in ~21s; container create → poll →
+  publish took a further ~37s for a 7.6s clip. The Reels poll budget
+  (`REELS_STATUS_POLL_INTERVAL=10` × `REELS_STATUS_POLL_MAX_TRIES=90`, a 15-minute ceiling)
+  is therefore generous rather than tight — leave it, but there is no evidence it needs raising.
+- **Source was a 4K HEVC iPhone camera original** (2160×3840, 49.4 MB, `moov` atom LAST),
+  automatically converted on upload to 1080×1920 H.264, 15 MB, `moov` FIRST. The worker sent
+  the derivative (`publish_path`), never the original.
+- **`thumb_offset=2600`** was sent from `assets.cover_frame_ms`, exercising cover-frame selection.
+- `DRY_RUN` was flipped to `0` for exactly one `--once` cycle and restored to `1` immediately,
+  guarded by a shell trap so an interrupted run could not leave it live.
+
+**The moov-atom risk recorded in the Reels design spec is now closed for the conversion path.**
+Conversion relocates `moov` to the front as a side effect, so any file that goes through it
+satisfies Meta's container requirement regardless of how the camera wrote it. An in-spec video
+that skips conversion could still carry a trailing `moov`; that path remains untested.
