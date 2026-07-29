@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { findConverter, convertVideo, buildArgs, ConvertError } from "../lib/video-convert.ts";
 import { readVideoMeta } from "../lib/video-meta.ts";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // "off" must disable conversion entirely, whatever is installed
 assert.equal(findConverter("off"), null, "off disables conversion");
@@ -28,6 +31,15 @@ assert.equal(findConverter("off"), null, "off disables conversion");
   const faststartIndex = args.indexOf("-movflags");
   assert.ok(faststartIndex !== -1 && args[faststartIndex + 1] === "+faststart",
     "moov must still be moved to the front for Instagram");
+
+  // ffmpeg is verbose on stderr by default (banner, full stream metadata, a continuously
+  // rewriting progress line) — enough that a long Reel could plausibly exceed execFile's
+  // default 1 MB maxBuffer and fail a conversion that actually succeeded. Quiet it down.
+  assert.ok(args.includes("-nostdin"), "must not let ffmpeg try to read stdin");
+  const loglevelIndex = args.indexOf("-loglevel");
+  assert.ok(loglevelIndex !== -1 && args[loglevelIndex + 1] === "error",
+    "must suppress ffmpeg's banner/metadata chatter, keeping only real errors");
+  assert.ok(args.includes("-nostats"), "must suppress the rewriting progress line");
 }
 
 // On macOS avconvert is always present
@@ -62,8 +74,44 @@ if (conv) {
     const b = fs.readFileSync(dst);
     assert.ok(b.indexOf(Buffer.from("moov")) < b.indexOf(Buffer.from("mdat")), "moov must be first");
     fs.rmSync(dst, { force: true });
+
+    // Timeout path: the kill-and-cleanup logic was verified manually during review, but
+    // nothing in this suite forced a real timeout — the garbage-input case above fails too
+    // fast to ever reach it. Force one deterministically with an absurdly small timeoutMs
+    // against the real (multi-second-to-convert) fixture, and confirm not just that it
+    // rejects, but that the killed child is actually gone — a SIGTERM the process ignored,
+    // or a grandchild it spawned, would otherwise keep transcoding in the background after
+    // we've already told the caller it failed.
+    const timeoutDst = path.join(os.tmpdir(), `conv-timeout-${process.pid}.mov`);
+    await assert.rejects(
+      () => convertVideo(REAL, timeoutDst, { converter: conv, timeoutMs: 50 }),
+      ConvertError,
+      "an absurdly short timeoutMs must reject with ConvertError"
+    );
+    assert.ok(!fs.existsSync(timeoutDst), "no partial output may survive a timeout");
+
+    let stillRunning = "";
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        stillRunning = execFileSync("pgrep", ["-f", timeoutDst], { encoding: "utf8" }).trim();
+      } catch {
+        stillRunning = ""; // pgrep exits non-zero when nothing matches — the expected outcome
+      }
+      if (!stillRunning) break;
+      await sleep(100);
+    }
+    assert.equal(
+      stillRunning,
+      "",
+      `${conv} must not still be running after a timeout (pgrep found: ${stillRunning})`
+    );
+    console.log("  timeout path verified — ConvertError, no partial file, no lingering process");
   } else {
     console.log("  (skipped real-file conversion — IMG_3707.MOV not present)");
+    console.log(
+      "\n  *** SKIPPED: timeout/kill/cleanup test not run (IMG_3707.MOV fixture not present). ***\n" +
+      "  *** This machine did not verify the timeout path forces a real kill+cleanup. ***\n"
+    );
   }
 }
 

@@ -86,6 +86,10 @@ export function buildArgs(converter: Converter, input: string, output: string): 
   }
   return [
     "-y",
+    "-nostdin",
+    "-loglevel",
+    "error",
+    "-nostats",
     "-i",
     input,
     "-vf",
@@ -99,6 +103,17 @@ export function buildArgs(converter: Converter, input: string, output: string): 
     output,
   ];
 }
+
+// execFile buffers the child's stdout+stderr in memory and rejects if either exceeds
+// `maxBuffer` — which defaults to a mere 1 MB. ffmpeg is verbose on stderr by default (banner,
+// full stream metadata, a continuously-rewriting progress line), and even with `-loglevel
+// error -nostats` quieting it above, this is a second, independent line of defense: an
+// unexpectedly chatty converter (a future flag change, an unusual input, a different ffmpeg
+// build) must never cause a spurious failure on an otherwise-successful conversion. We never
+// use the output for anything but the error message on failure, so the only requirement is
+// "large enough to never be the reason a conversion fails" — 64 MB is far beyond anything
+// either converter has been observed to produce, even unquieted.
+const MAX_CONVERTER_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function cleanupPartial(output: string): void {
   try {
@@ -132,19 +147,24 @@ export function convertVideo(
     // terminates the process on timeout, not just abandoning the promise. The callback
     // fires for every failure path (nonzero exit, spawn error, or timeout alike), so
     // cleanup only needs to happen in one place.
-    execFile(bin, args, { timeout: timeoutMs }, (error: ExecFileException | null) => {
-      if (error) {
-        cleanupPartial(outputPath);
-        reject(
-          new ConvertError(
-            error.killed
-              ? `${converter} timed out after ${timeoutMs}ms converting ${inputPath}`
-              : `${converter} failed converting ${inputPath}: ${error.message}`
-          )
-        );
-        return;
+    execFile(
+      bin,
+      args,
+      { timeout: timeoutMs, maxBuffer: MAX_CONVERTER_BUFFER_BYTES },
+      (error: ExecFileException | null) => {
+        if (error) {
+          cleanupPartial(outputPath);
+          reject(
+            new ConvertError(
+              error.killed
+                ? `${converter} timed out after ${timeoutMs}ms converting ${inputPath}`
+                : `${converter} failed converting ${inputPath}: ${error.message}`
+            )
+          );
+          return;
+        }
+        resolve();
       }
-      resolve();
-    });
+    );
   });
 }
