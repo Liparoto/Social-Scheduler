@@ -332,7 +332,7 @@ def make_publication(conn):
 
     def _make(post_type="single", n_assets=1, public_url="https://assets.test/a.jpg",
               scheduled_offset_min=-1, with_token=True, now=None,
-              platform="instagram", remote_account_id=None):
+              platform="instagram", remote_account_id=None, media_kind="image"):
         # Discord has no account id at all (the webhook URL is both address and secret),
         # so its remote_account_id stays None even when the caller doesn't pass one —
         # every other platform gets a sensible per-platform default.
@@ -375,8 +375,8 @@ def make_publication(conn):
         for i in range(n_assets):
             cur = conn.execute(
                 """INSERT INTO assets (content_hash, media_kind, storage_path, public_url)
-                   VALUES (?, 'image', ?, ?)""",
-                (f"hash-{post_id}-{i}", f"assets/{post_id}-{i}.jpg",
+                   VALUES (?, ?, ?, ?)""",
+                (f"hash-{post_id}-{i}", media_kind, f"assets/{post_id}-{i}.jpg",
                  (f"{public_url}?i={i}" if public_url else None)),
             )
             conn.execute(

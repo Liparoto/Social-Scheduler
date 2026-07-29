@@ -4,10 +4,9 @@
     {
       "name": "dashboard",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["run", "dev", "--", "-p", "3939"],
       "cwd": "dashboard",
-      "port": 3000,
-      "autoPort": true
+      "port": 3939
     }
   ]
 }

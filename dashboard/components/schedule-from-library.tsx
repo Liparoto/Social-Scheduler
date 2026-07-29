@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
-import { channelColor } from "@/lib/format";
+import { channelColor, videoPreviewSrc } from "@/lib/format";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 
@@ -138,12 +138,29 @@ export function ScheduleFromLibrary({
                 className="flex gap-3 rounded-lg border border-border p-2 text-left hover:bg-surface-sunken"
               >
                 {p.first_asset_id ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`/api/media/${p.first_asset_id}?variant=thumb`}
-                    alt=""
-                    className="h-14 w-14 shrink-0 rounded object-cover"
-                  />
+                  p.post_type === "reel" ? (
+                    // No thumbnail file exists for video (no ffmpeg dependency by
+                    // design) — render the real file with preload="metadata" so the
+                    // browser decodes just the first frame, same approach as
+                    // post-editor.tsx / cover-frame-picker.tsx. videoPreviewSrc's #t=
+                    // fragment is what makes that frame actually paint in Safari; this
+                    // list doesn't load cover_frame_ms (would need a new query), so it
+                    // always uses the small non-zero fallback offset.
+                    <video
+                      src={videoPreviewSrc(p.first_asset_id)}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="h-14 w-14 shrink-0 rounded object-cover"
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/media/${p.first_asset_id}?variant=thumb`}
+                      alt=""
+                      className="h-14 w-14 shrink-0 rounded object-cover"
+                    />
+                  )
                 ) : (
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded bg-surface-sunken text-center text-[10px] text-faint">
                     {p.post_type === "text" ? "Text post" : "no image"}
@@ -169,12 +186,26 @@ export function ScheduleFromLibrary({
         <div className="flex items-start justify-between gap-3">
           <div className="flex gap-3">
             {selected.first_asset_id ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={`/api/media/${selected.first_asset_id}?variant=thumb`}
-                alt=""
-                className="h-20 w-20 shrink-0 rounded-lg object-cover"
-              />
+              selected.post_type === "reel" ? (
+                // videoPreviewSrc's #t= fragment forces Safari to paint a frame for a
+                // preload="metadata" video (Chrome already does this for free). No
+                // cover_frame_ms on this row (would need a new query), so it falls
+                // back to a small non-zero offset.
+                <video
+                  src={videoPreviewSrc(selected.first_asset_id)}
+                  preload="metadata"
+                  muted
+                  playsInline
+                  className="h-20 w-20 shrink-0 rounded-lg object-cover"
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`/api/media/${selected.first_asset_id}?variant=thumb`}
+                  alt=""
+                  className="h-20 w-20 shrink-0 rounded-lg object-cover"
+                />
+              )
             ) : (
               <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
                 {selected.post_type === "text" ? "Text post" : "no image"}

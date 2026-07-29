@@ -27,6 +27,17 @@ export async function POST(
   if (!asset) {
     return NextResponse.json({ error: "Asset not found." }, { status: 404 });
   }
+  // conformImage() runs sharp, which cannot decode video — refuse before touching the
+  // file. Same precedent as /api/assets/[id]/cover's mirror-image guard (video-only route
+  // refusing a non-video with 409). Callers (composer.tsx, post-editor.tsx, bulk-import.tsx)
+  // already gate this control on media_kind !== "video", but the route must not depend on
+  // every caller getting that right.
+  if (asset.media_kind === "video") {
+    return NextResponse.json(
+      { error: "Only an image can be cropped or padded." },
+      { status: 409 }
+    );
+  }
 
   const originalAbs = path.join(config.assetStorageDir, asset.storage_path);
   const original = await fs.readFile(originalAbs);

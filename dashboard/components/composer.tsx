@@ -2,16 +2,16 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { channelColor } from "@/lib/format";
-import { platformLabel, supportsText, captionLimit, PLATFORMS } from "@/lib/platforms";
+import { channelColor, videoPreviewSrc } from "@/lib/format";
+import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
-import type { Period, PeriodMode, Tag } from "@/lib/types";
-import type { ConformMode } from "@/lib/conform";
+import type { Asset, Period, PeriodMode, Tag } from "@/lib/types";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
 import { ConformControl } from "@/components/conform-control";
+import { CoverFramePicker } from "@/components/cover-frame-picker";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 
 interface ChannelLite {
@@ -22,12 +22,18 @@ interface ChannelLite {
   requires_approval: boolean;
   color_hue: number | null;
 }
+// Wraps the full Asset row the upload API returns (needed as-is for <CoverFramePicker>)
+// plus the bits that only make sense while composing: whether this upload matched
+// an existing asset by content hash, any non-blocking warnings the Reels validator
+// raised (e.g. "no audio track") that the API returns but a plain image upload never
+// has, and — when an out-of-spec video was silently rewritten to fit Instagram's
+// limits — the before/after dimensions, so the owner can be told plainly what
+// happened instead of just noticing the framing changed.
 interface UploadedAsset {
-  id: number;
-  name: string;
+  asset: Asset;
   deduped: boolean;
-  conformMode: ConformMode;
-  needsReview: number;
+  warnings: string[];
+  converted?: { from: string; to: string };
 }
 
 export function Composer({
@@ -79,8 +85,18 @@ export function Composer({
     mode,
   }));
 
+  // A reel is always exactly one video asset — mixing video with anything else, or more
+  // than one video, is rejected up front in onFiles below, so "the one asset present is
+  // a video" is equivalent to "this is a reel". Gated on !textOnly too: switching Text
+  // only on always submits asset_ids: [] regardless of what's still sitting in `assets`
+  // (see submit below), so a leftover video asset must not keep disabling every
+  // text-capable channel or blocking channel selection once the post is really text-only.
+  const hasVideo = !textOnly && assets.length === 1 && assets[0].asset.media_kind === "video";
+
   const postType = textOnly
     ? "text"
+    : hasVideo
+    ? "reel"
     : assets.length > 1
     ? "carousel"
     : assets.length === 1
@@ -130,13 +146,43 @@ export function Composer({
       : null;
   const overCaptionLimit = allCaptionChecks.some((c) => c.length > c.limit);
 
+  // Shared by the Threads text-only toggle and the video-channel gating below: drop any
+  // already-selected channel that the given predicate says can no longer take this post,
+  // rather than leaving it selected-but-disabled (which would submit a target that can't
+  // work).
+  function deselectIncompatible(isCompatible: (platform: string) => boolean) {
+    setSelected((prev) => {
+      const filtered = new Set<number>();
+      prev.forEach((id) => {
+        const channel = channels.find((c) => c.id === id);
+        if (channel && isCompatible(channel.platform)) filtered.add(id);
+      });
+      return filtered;
+    });
+  }
+
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setError(null);
     setNotice(null);
+
+    // A reel is a single video with no other media — the API rejects a mixed carousel
+    // too, but catching it here gives an immediate, specific message instead of a
+    // confusing 400 after the upload already completed.
+    const incoming = Array.from(files);
+    const incomingHasVideo = incoming.some((f) => f.type.startsWith("video/"));
+    if (hasVideo) {
+      setError("Remove the current video before adding more media.");
+      return;
+    }
+    if (incomingHasVideo && (assets.length > 0 || incoming.length > 1)) {
+      setError("A Reel is a single video with no other images or videos alongside it.");
+      return;
+    }
+
     setUploading(true);
     let dedupCount = 0;
-    for (const file of Array.from(files)) {
+    for (const file of incoming) {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/assets/upload", { method: "POST", body: fd });
@@ -147,22 +193,28 @@ export function Composer({
       }
       if (body.deduped) dedupCount += 1;
       setAssets((prev) =>
-        prev.some((a) => a.id === body.asset.id)
+        prev.some((a) => a.asset.id === body.asset.id)
           ? prev
           : [
               ...prev,
               {
-                id: body.asset.id,
-                name: file.name,
+                asset: body.asset,
                 deduped: body.deduped,
-                conformMode: body.asset.conform_mode,
-                needsReview: body.asset.needs_review,
+                warnings: body.warnings ?? [],
+                converted: body.converted,
               },
             ]
       );
+      if (body.asset.media_kind === "video") {
+        // Mirrors toggleTextOnly's deselect below: a video just became this post's only
+        // asset, so any selected channel that can't publish video has to go.
+        deselectIncompatible(supportsVideo);
+      }
     }
     if (dedupCount > 0) {
-      setNotice(`${dedupCount} image already existed (matched by content) — reused, not duplicated.`);
+      // "file", not "image" — a video dedupes the same way, by content hash.
+      const noun = dedupCount === 1 ? "file" : "files";
+      setNotice(`${dedupCount} ${noun} already existed (matched by content) — reused, not duplicated.`);
     }
     setUploading(false);
     if (fileInput.current) fileInput.current.value = "";
@@ -179,12 +231,13 @@ export function Composer({
   }
 
   function removeAsset(id: number) {
-    setAssets((prev) => prev.filter((a) => a.id !== id));
+    setAssets((prev) => prev.filter((a) => a.asset.id !== id));
   }
 
   function toggleChannel(id: number) {
     const channel = channels.find((c) => c.id === id);
     if (textOnly && channel && !supportsText(channel.platform)) return;
+    if (hasVideo && channel && !supportsVideo(channel.platform)) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -195,18 +248,9 @@ export function Composer({
 
   function toggleTextOnly(next: boolean) {
     setTextOnly(next);
-    if (next) {
-      // Deselect any already-selected channel that can't take a text-only post — leaving
-      // it selected-but-disabled would submit a target that cannot work.
-      setSelected((prev) => {
-        const filtered = new Set<number>();
-        prev.forEach((id) => {
-          const channel = channels.find((c) => c.id === id);
-          if (channel && supportsText(channel.platform)) filtered.add(id);
-        });
-        return filtered;
-      });
-    }
+    // Deselect any already-selected channel that can't take a text-only post — leaving
+    // it selected-but-disabled would submit a target that cannot work.
+    if (next) deselectIncompatible(supportsText);
   }
 
   const anyApprovalNeeded = channels.some(
@@ -237,7 +281,7 @@ export function Composer({
         caption,
         first_comment: firstComment,
         post_type: textOnly ? "text" : undefined,
-        asset_ids: textOnly ? [] : assets.map((a) => a.id),
+        asset_ids: textOnly ? [] : assets.map((a) => a.asset.id),
         channel_ids: Array.from(selected),
         ...(postNow ? { post_now: true } : { scheduled_local: scheduledLocal }),
         timezone,
@@ -269,7 +313,7 @@ export function Composer({
         caption,
         first_comment: firstComment,
         post_type: textOnly ? "text" : undefined,
-        asset_ids: textOnly ? [] : assets.map((a) => a.id),
+        asset_ids: textOnly ? [] : assets.map((a) => a.asset.id),
         content_kind: contentKind,
         content_status: libraryStatus,
         target_channel_ids: Array.from(selected),
@@ -317,24 +361,25 @@ export function Composer({
           </label>
         </section>
 
-        {/* Images */}
+        {/* Images / video */}
         {!textOnly ? (
           <section className="rounded-card border border-border bg-surface p-5">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="font-display text-sm font-semibold text-ink">
-                Images
+                {hasVideo ? "Video" : "Images"}
                 <span className="data ml-2 text-xs font-normal text-faint">{postType}</span>
               </h3>
               <button
                 onClick={() => fileInput.current?.click()}
-                className="rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-surface-sunken"
+                disabled={hasVideo}
+                className="rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-surface-sunken disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {uploading ? "Uploading…" : "Add images"}
+                {uploading ? "Uploading…" : "Add media"}
               </button>
               <input
                 ref={fileInput}
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
+                accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
                 multiple
                 hidden
                 onChange={(e) => onFiles(e.target.files)}
@@ -350,11 +395,38 @@ export function Composer({
                 }}
                 className="rounded-lg border border-dashed border-border-strong px-4 py-10 text-center text-sm text-muted"
               >
-                Drag images here, or use <span className="text-ink-soft">Add images</span>.
+                Drag images or a video here, or use <span className="text-ink-soft">Add media</span>.
                 <br />
                 <span className="text-xs text-faint">
-                  Dedup is by content — the same file won&rsquo;t be stored twice.
+                  Dedup is by content — the same file won&rsquo;t be stored twice. A single
+                  video becomes a Reel; it can&rsquo;t be mixed with images.
                 </span>
+              </div>
+            ) : hasVideo ? (
+              <div className="max-w-xs space-y-2">
+                <CoverFramePicker asset={assets[0].asset} />
+                {assets[0].converted ? (
+                  <p className="inline-block rounded bg-accent-weak px-1.5 py-0.5 text-[11px] font-medium text-accent-strong">
+                    Converted to {assets[0].converted.to} so Instagram will accept it. Your
+                    original is untouched.
+                  </p>
+                ) : null}
+                {assets[0].warnings.length > 0 ? (
+                  <ul className="space-y-1">
+                    {assets[0].warnings.map((w, i) => (
+                      <li key={i} className="text-xs font-medium text-accent-strong">
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => removeAsset(assets[0].asset.id)}
+                  className="text-xs font-medium text-status-failed hover:underline"
+                >
+                  Remove video
+                </button>
               </div>
             ) : (
               <div>
@@ -364,7 +436,7 @@ export function Composer({
                 <ul className="flex flex-wrap gap-3">
                   {assets.map((a, i) => (
                     <li
-                      key={a.id}
+                      key={a.asset.id}
                       draggable
                       onDragStart={() => (dragIndex.current = i)}
                       onDragOver={(e) => e.preventDefault()}
@@ -378,7 +450,7 @@ export function Composer({
                         {i + 1}
                       </span>
                       <button
-                        onClick={() => removeAsset(a.id)}
+                        onClick={() => removeAsset(a.asset.id)}
                         className="absolute right-1 top-1 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-ink/75 text-xs text-white group-hover:flex"
                         aria-label="Remove image"
                       >
@@ -386,15 +458,15 @@ export function Composer({
                       </button>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={`/api/media/${a.id}?variant=thumb`}
-                        alt={a.name}
+                        src={`/api/media/${a.asset.id}?variant=thumb`}
+                        alt={a.asset.original_filename ?? "image"}
                         className="h-24 w-24 cursor-grab rounded-lg border border-border object-cover active:cursor-grabbing"
                       />
-                      {a.needsReview ? (
+                      {a.asset.needs_review ? (
                         <ConformControl
-                          assetId={a.id}
-                          conformMode={a.conformMode}
-                          needsReview={a.needsReview}
+                          assetId={a.asset.id}
+                          conformMode={a.asset.conform_mode}
+                          needsReview={a.asset.needs_review}
                         />
                       ) : null}
                       <div className="mt-1 flex justify-center gap-1">
@@ -489,7 +561,9 @@ export function Composer({
           <div className="grid gap-2 sm:grid-cols-2">
             {channels.map((c) => {
               const on = selected.has(c.id);
-              const disabled = textOnly && !supportsText(c.platform);
+              const textDisabled = textOnly && !supportsText(c.platform);
+              const videoDisabled = hasVideo && !supportsVideo(c.platform);
+              const disabled = textDisabled || videoDisabled;
               const color = channelColor(c.id, c.color_hue);
               return (
                 <button
@@ -523,9 +597,11 @@ export function Composer({
                       {c.account_name}
                     </span>
                     <span className="data block text-[11px] text-muted">
-                      {disabled
+                      {textDisabled
                         ? `${platformLabel(c.platform)} can't post text-only`
-                        : platformLabel(c.platform)}
+                        : videoDisabled
+                          ? `${platformLabel(c.platform)} can't post video`
+                          : platformLabel(c.platform)}
                       {!disabled && c.requires_approval
                         ? postNow
                           ? " · approval skipped (Post now)"
@@ -620,12 +696,26 @@ export function Composer({
             ) : (
               <div className="aspect-square bg-surface-sunken">
                 {assets[0] ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`/api/media/${assets[0].id}`}
-                    alt=""
-                    className="h-full w-full object-cover"
-                  />
+                  hasVideo ? (
+                    // videoPreviewSrc's #t= fragment forces Safari to paint a frame on
+                    // load (Chrome already does this for free); the owner's chosen
+                    // cover frame is already in hand here, so the preview shows the
+                    // same frame as the cover picker above instead of frame 0.
+                    <video
+                      src={videoPreviewSrc(assets[0].asset.id, assets[0].asset.cover_frame_ms)}
+                      className="h-full w-full object-cover"
+                      muted
+                      playsInline
+                      controls
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/media/${assets[0].asset.id}`}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  )
                 ) : (
                   <div className="flex h-full items-center justify-center text-xs text-faint">
                     First image appears here

@@ -51,6 +51,27 @@ def make_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
     return pid
 
 
+def make_reel_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
+                    content_kind="evergreen"):
+    """A reel: post_type='reel' with exactly one video asset (mirrors what the Reels
+    validator from Task 3 requires to publish)."""
+    pid = conn.execute(
+        "INSERT INTO posts (caption, post_type, status, content_status, content_kind, created_at) "
+        "VALUES ('reel caption','reel','draft','ready',?,?)",
+        (content_kind, created_at),
+    ).lastrowid
+    aid = conn.execute(
+        "INSERT INTO assets (content_hash, media_kind, storage_path, public_url, duration_ms) "
+        "VALUES (?,?,?,?,?)",
+        (f"h{pid}", "video", f"{pid}.mp4", "https://a.test/x.mp4", 15000),
+    ).lastrowid
+    conn.execute("INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?,?,0)", (pid, aid))
+    if channel_id is not None:
+        conn.execute("INSERT INTO post_targets (post_id, channel_id) VALUES (?,?)", (pid, channel_id))
+    conn.commit()
+    return pid
+
+
 def make_text_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
                     content_kind="evergreen"):
     """A text post: caption only, deliberately NO row in post_assets."""
@@ -270,6 +291,31 @@ def test_text_post_not_selected_for_instagram_channel(conn):
     post_type gate without the platform-capability gate would let this happen."""
     ch = make_channel(conn, platform="instagram")
     p = make_text_post(conn, ch)
+    assert p not in picks(conn, ch, 10)
+
+
+def test_reels_are_eligible_for_autofill(conn):
+    """Recycling evergreen demo videos is a primary goal. Left out of the candidate
+    query, a reel is publishable but never auto-queued — it just silently never
+    appears, with no error anywhere."""
+    ch = make_channel(conn)
+    p = make_reel_post(conn, ch)
+    rows = select_candidates(conn, ch, NOW)
+    assert [r["post_type"] for r in rows] == ["reel"]
+    assert p in picks(conn, ch, 10)
+
+
+def test_reels_not_selected_for_channel_with_no_video_publish_path(conn):
+    """Mirrors test_text_post_not_selected_for_instagram_channel, but for the OTHER
+    capability-gated post_type: a channel on a platform with no publish path for
+    post_type='reel' (everything but Instagram — worker/publisher.py's
+    _publish_instagram is the only adapter with a 'reel' branch) must never have a reel
+    auto-queued to it. Without this gate the worker would fail it terminally every
+    autofill cycle forever, since 'failed' isn't in ACTIVE_QUEUE_STATUSES."""
+    ch = make_channel(conn, platform="facebook")
+    p = make_reel_post(conn, ch)
+    rows = select_candidates(conn, ch, NOW)
+    assert [r["post_type"] for r in rows] == []
     assert p not in picks(conn, ch, 10)
 
 

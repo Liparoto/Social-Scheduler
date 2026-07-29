@@ -89,6 +89,14 @@ class PlatformCaps:
     # from a public URL (which is why publishing opens a tunnel); these platforms do not, so
     # they need neither a public URL nor cloudflared.
     uploads_media_bytes: bool = False
+    # True when this platform has an actual publish path for post_type='reel'. Only
+    # Instagram does today (worker/publisher.py's _publish_instagram has a 'reel'
+    # branch; every other adapter falls through to its `else` and fails terminally).
+    # Defaults False — the safe direction for a future platform, same reasoning as
+    # supports_text: worst case autofill under-selects rather than queuing a reel a
+    # channel can never actually publish (which fails terminally forever — see
+    # autofill.select_candidates).
+    supports_video: bool = False
     # False when the credential alone identifies the destination, so there is no separate
     # account id to store or ask for (Discord's webhook URL is both address and secret).
     uses_account_id: bool = True
@@ -104,7 +112,11 @@ class PlatformCaps:
 
 PLATFORM_CAPS: dict[str, PlatformCaps] = {
     # Instagram: feed carousels cap at 10 (see reference.md). No text-only format.
-    "instagram": PlatformCaps(supports_text=False, max_carousel=10, caption_chars={}),
+    # The only platform with a publish path for post_type='reel' (see supports_video's
+    # docstring above).
+    "instagram": PlatformCaps(
+        supports_text=False, max_carousel=10, caption_chars={}, supports_video=True
+    ),
     # Facebook Pages: attached_media multi-photo posts cap at 10. No text-only format
     # here either — a Page status update is a different product surface we don't publish.
     "facebook": PlatformCaps(supports_text=False, max_carousel=10, caption_chars={}),

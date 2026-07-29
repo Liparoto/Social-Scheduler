@@ -61,8 +61,11 @@ export interface Asset {
   height: number | null;
   byte_size: number | null;
   publish_path: string | null;
-  conform_mode: "none" | "crop" | "pad";
+  conform_mode: "none" | "crop" | "pad" | "downscale";
   needs_review: number;
+  duration_ms: number | null;
+  cover_frame_ms: number | null;
+  has_audio: number;
   created_at: string;
 }
 

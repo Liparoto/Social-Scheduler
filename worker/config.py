@@ -72,6 +72,12 @@ class Config:
     # Container status polling (used for carousel/video readiness).
     status_poll_interval: int = 5
     status_poll_max_tries: int = 60
+    # Reels poll separately from images: Meta transcodes video server-side, which takes
+    # far longer than an image container. 10s x 90 = a 15-minute ceiling, matching the
+    # maximum Reel length. This is a considered guess, not a published figure — Meta
+    # gives no transcode SLA. Revise from real observations.
+    reels_status_poll_interval: int = 10
+    reels_status_poll_max_tries: int = 90
     # Metrics fetching: only refresh posts published within this window, and no more
     # often than this interval per publication (keeps API usage sane).
     metrics_max_age_days: int = 30
@@ -141,6 +147,8 @@ class Config:
             tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),
             tunnel_startup_timeout=int(os.environ.get("TUNNEL_STARTUP_TIMEOUT", "30")),
             tunnel_ready_timeout=int(os.environ.get("TUNNEL_READY_TIMEOUT", "60")),
+            reels_status_poll_interval=int(os.environ.get("REELS_STATUS_POLL_INTERVAL", "10")),
+            reels_status_poll_max_tries=int(os.environ.get("REELS_STATUS_POLL_MAX_TRIES", "90")),
             tod_morning=os.environ.get("TOD_MORNING", "09:00"),
             tod_afternoon=os.environ.get("TOD_AFTERNOON", "13:00"),
             tod_evening=os.environ.get("TOD_EVENING", "18:00"),

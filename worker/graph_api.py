@@ -91,6 +91,35 @@ class GraphClient:
             data["caption"] = caption
         return self._post(f"{ig_user_id}/media", data)["id"]
 
+    def create_video_container(
+        self,
+        ig_user_id: str,
+        video_url: str,
+        token: str,
+        caption: str | None = None,
+        thumb_offset: int | None = None,
+    ) -> str:
+        """Create a REELS container. Meta downloads video_url server-side, transcodes it,
+        and the container is not publishable until its status_code reaches FINISHED —
+        which for video takes far longer than for an image (see the Reels poll budget).
+
+        thumb_offset is a MILLISECOND offset; Meta extracts that frame as the cover, so
+        we never generate or upload a cover image. Meta's documented default is 0 (the
+        first frame) when the field is absent.
+        """
+        data = {
+            "media_type": "REELS",
+            "video_url": video_url,
+            "access_token": token,
+        }
+        if caption:
+            data["caption"] = caption
+        # Explicitly `is not None`: 0 means "the first frame, deliberately chosen", and a
+        # truthiness check would silently drop it.
+        if thumb_offset is not None:
+            data["thumb_offset"] = thumb_offset
+        return self._post(f"{ig_user_id}/media", data)["id"]
+
     def get_container_status(self, container_id: str, token: str) -> str:
         return self._get(
             container_id, {"fields": "status_code", "access_token": token}

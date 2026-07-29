@@ -6,7 +6,7 @@ import type { PublicationStatus, Platform } from "@/lib/types";
 import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
-import { formatInTz, tzAbbrev } from "@/lib/format";
+import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
 
 type StatusFilter = "all" | PublicationStatus;
 
@@ -107,12 +107,30 @@ export function PublicationQueue({
                     <div className="flex items-start gap-3">
                       <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
                         {p.first_asset_id ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={`/api/media/${p.first_asset_id}?variant=thumb`}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
+                          p.post_type === "reel" ? (
+                            // No thumbnail file exists for video (no ffmpeg dependency
+                            // by design) — render the real file with
+                            // preload="metadata" so the browser decodes just the first
+                            // frame, same approach as post-editor.tsx /
+                            // cover-frame-picker.tsx. videoPreviewSrc's #t= fragment is
+                            // what makes that frame actually paint in Safari; this row
+                            // doesn't load cover_frame_ms (would need a new query), so
+                            // it always uses the small non-zero fallback offset.
+                            <video
+                              src={videoPreviewSrc(p.first_asset_id)}
+                              preload="metadata"
+                              muted
+                              playsInline
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={`/api/media/${p.first_asset_id}?variant=thumb`}
+                              alt=""
+                              className="h-full w-full object-cover"
+                            />
+                          )
                         ) : null}
                       </div>
                       <div className="min-w-0">

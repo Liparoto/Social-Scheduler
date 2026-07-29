@@ -23,7 +23,7 @@ from .config import Config
 from .redact import redact
 
 MIN_CAROUSEL = 2
-SUPPORTED_POST_TYPES = ("single", "carousel", "text")
+SUPPORTED_POST_TYPES = ("single", "carousel", "text", "reel")
 
 
 def _utcnow() -> datetime:
@@ -139,10 +139,17 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
-            f"post_type '{post_type}' not supported until Phase 6 (Reels/Stories)"
+            f"post_type '{post_type}' not supported (Stories are still Phase 6)"
         )
     if post_type == "single" and len(assets) != 1:
         raise _NonRetryable(f"single post needs exactly 1 asset, has {len(assets)}")
+    if post_type == "reel":
+        if len(assets) != 1:
+            raise _NonRetryable(f"a reel needs exactly 1 asset, has {len(assets)}")
+        if assets[0]["media_kind"] != "video":
+            raise _NonRetryable(
+                f"a reel needs a video asset, got media_kind='{assets[0]['media_kind']}'"
+            )
     if post_type == "carousel" and not (MIN_CAROUSEL <= len(assets) <= caps.max_carousel):
         raise _NonRetryable(
             f"carousel needs {MIN_CAROUSEL}-{caps.max_carousel} assets, has {len(assets)}"
@@ -211,6 +218,17 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
         # IG user id, or FB Page id — whichever this channel's platform uses.
         "account_id": channel["remote_account_id"],
         "post_type": post["post_type"],
+        # The chosen cover frame travels with the plan so dry-run shows it too. It lives
+        # on the ASSET, so a recycled evergreen video reuses the same choice.
+        #
+        # The `in .keys()` guard mirrors _resolve_url's handling of publish_path: many
+        # existing tests build asset fixtures as plain dicts without this column, and a
+        # bare assets[0]["cover_frame_ms"] would KeyError on every one of them.
+        "cover_frame_ms": (
+            assets[0]["cover_frame_ms"]
+            if assets and "cover_frame_ms" in assets[0].keys()
+            else None
+        ),
         "caption": caption,
         "first_comment": post["first_comment"],
         "asset_urls": asset_urls,
@@ -218,22 +236,27 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     }
 
 
-def _poll_until_finished(client, container_id, token, config, sleep_fn, status_fn=None) -> None:
+def _poll_until_finished(client, container_id, token, config, sleep_fn, status_fn=None,
+                         interval=None, max_tries=None) -> None:
     """Poll a container's status_code until FINISHED. Small images are usually ready
     immediately; carousels/video need this. ERROR/EXPIRED are terminal failures.
 
     status_fn lets other platforms reuse this same poll loop against their own status
     call (e.g. Threads' get_threads_container_status, whose field is named `status`
     rather than Instagram's `status_code`) without duplicating the loop.
+
+    interval/max_tries let Reels poll on their own, longer budget without a second loop.
     """
     status_fn = status_fn or client.get_container_status
-    for _ in range(config.status_poll_max_tries):
+    interval = config.status_poll_interval if interval is None else interval
+    max_tries = config.status_poll_max_tries if max_tries is None else max_tries
+    for _ in range(max_tries):
         status = status_fn(container_id, token)
         if status == "FINISHED":
             return
         if status in ("ERROR", "EXPIRED"):
             raise RuntimeError(f"container {container_id} status={status}")
-        sleep_fn(config.status_poll_interval)
+        sleep_fn(interval)
     raise RuntimeError(f"container {container_id} not FINISHED after polling")
 
 
@@ -258,6 +281,27 @@ def _publish_carousel(client, plan, token, config, sleep_fn) -> str:
     )
     _poll_until_finished(client, parent, token, config, sleep_fn)
     return client.publish_container(ig, parent, token)
+
+
+def _publish_reel(client, plan, token, config, sleep_fn) -> str:
+    """Reels use the same container -> poll -> publish shape as an image, with two
+    differences: media_type=REELS with a video_url, and a much longer poll budget
+    because Meta transcodes the video server-side before the container is publishable.
+    """
+    ig = plan["account_id"]
+    container = client.create_video_container(
+        ig,
+        plan["asset_urls"][0],
+        token,
+        caption=plan["caption"],
+        thumb_offset=plan.get("cover_frame_ms"),
+    )
+    _poll_until_finished(
+        client, container, token, config, sleep_fn,
+        interval=config.reels_status_poll_interval,
+        max_tries=config.reels_status_poll_max_tries,
+    )
+    return client.publish_container(ig, container, token)
 
 
 def _publish_fb_single(client, plan, token) -> str:
@@ -289,6 +333,8 @@ def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
         return _publish_single(client, plan, token, config, sleep_fn)
     elif post_type == "carousel":
         return _publish_carousel(client, plan, token, config, sleep_fn)
+    elif post_type == "reel":
+        return _publish_reel(client, plan, token, config, sleep_fn)
     else:
         raise _NonRetryable(f"instagram adapter has no publish path for post_type '{post_type}'")
 

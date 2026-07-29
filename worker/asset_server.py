@@ -26,6 +26,7 @@ _CONTENT_TYPE = {
     ".png": "image/png",
     ".webp": "image/webp",
     ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
 }
 
 

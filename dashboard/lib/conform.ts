@@ -6,7 +6,11 @@ export const IG_MIN_WIDTH = 320;
 export const IG_MIN_RATIO = 4 / 5; // 0.8 (portrait bound)
 export const IG_MAX_RATIO = 1.91; // landscape bound
 
-export type ConformMode = "none" | "crop" | "pad";
+// "downscale" is never produced by conformImage() below (image-only) — it's included
+// here because it's the video-upload equivalent of this same "how was this asset
+// reframed for publishing" concept, and Asset.conform_mode (lib/types.ts) is one
+// shared column/type across both media kinds.
+export type ConformMode = "none" | "crop" | "pad" | "downscale";
 
 export interface ConformResult {
   buffer: Buffer;

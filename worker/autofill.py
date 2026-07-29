@@ -66,9 +66,15 @@ def select_candidates(conn, channel_id: int, now):
 
     Type eligibility is capability-driven, not a hardcoded type list: a single/carousel
     post is eligible if it has at least one asset (unchanged); a text post is eligible
-    only if the channel's platform declares supports_text in PLATFORM_CAPS. A platform
-    PLATFORM_CAPS doesn't recognize excludes text posts (the safe direction) rather than
-    guessing.
+    only if the channel's platform declares supports_text in PLATFORM_CAPS, and a reel
+    only if it declares supports_video — a platform PLATFORM_CAPS doesn't recognize
+    excludes both (the safe direction) rather than guessing. Reels are asset-gated the
+    same as single/carousel here — the stricter "exactly one video asset" rule is the
+    publisher's job (worker/publisher.py), not autofill's; autofill only needs to know a
+    reel is a candidate at all. Without the supports_video gate, a reel targeted at a
+    platform with no publish path for it (everything but Instagram today) would get
+    selected, queued, and fail terminally every autofill cycle forever — 'failed' isn't
+    in ACTIVE_QUEUE_STATUSES, so the "already queued" guard below never excludes it.
     """
     platform_row = conn.execute(
         "SELECT platform FROM channels WHERE id = ?", (channel_id,)
@@ -76,6 +82,7 @@ def select_candidates(conn, channel_id: int, now):
     platform = platform_row["platform"] if platform_row else None
     caps = PLATFORM_CAPS.get(platform)
     supports_text = 1 if caps is not None and caps.supports_text else 0
+    supports_video = 1 if caps is not None and caps.supports_video else 0
 
     rows = conn.execute(
         f"""
@@ -98,6 +105,8 @@ def select_candidates(conn, channel_id: int, now):
           AND (
             (p.post_type IN ('single','carousel')
                AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
+            OR (p.post_type = 'reel' AND :supports_video = 1
+               AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
             OR (p.post_type = 'text' AND :supports_text = 1)
           )
           AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid)
@@ -112,7 +121,7 @@ def select_candidates(conn, channel_id: int, now):
           last_posted ASC,
           p.created_at ASC
         """,
-        {"cid": channel_id, "supports_text": supports_text},
+        {"cid": channel_id, "supports_text": supports_text, "supports_video": supports_video},
     ).fetchall()
     return rows
 

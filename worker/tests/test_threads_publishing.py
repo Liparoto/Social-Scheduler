@@ -165,13 +165,30 @@ def test_threads_unhandled_post_type_fails_terminally_naming_the_type(
 
     monkeypatch.setattr(publisher_mod, "SUPPORTED_POST_TYPES", ("single", "carousel", "text", "reel"))
     client = FakeGraphClient(threads_limit=(0, 250, 86400))
-    pub = make_publication(platform="threads", post_type="single", n_assets=1)
+    # media_kind='video' so this publication clears Task 6's reel-shape validation
+    # (which requires a single video asset) and dispatch actually reaches
+    # _publish_threads's unhandled-post_type branch, rather than being rejected by
+    # validation before _publish_threads is ever entered.
+    pub = make_publication(platform="threads", post_type="single", n_assets=1, media_kind="video")
     conn.execute("UPDATE posts SET post_type = 'reel' WHERE id = ?", (pub["post_id"],))
     conn.commit()
     pub = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
 
+    # Spy on _publish_threads (wrapping, not replacing it) so this test proves the
+    # adapter's unhandled-post_type branch is genuinely reached, rather than passing
+    # by accident because validation rejected the publication before dispatch.
+    entered = {"count": 0}
+    real_publish_threads = publisher_mod._publish_threads
+
+    def spying_publish_threads(*args, **kwargs):
+        entered["count"] += 1
+        return real_publish_threads(*args, **kwargs)
+
+    monkeypatch.setitem(publisher_mod._PUBLISHERS, "threads", spying_publish_threads)
+
     out = publish_one(conn, pub, config, client, dry_run=False)
 
+    assert entered["count"] == 1  # proves dispatch actually reached _publish_threads
     assert out.result == "failed"
     row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
     assert row["status"] == "failed"

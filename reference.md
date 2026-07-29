@@ -131,6 +131,39 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
   (community cites Jan 27, 2025). Both naming sets currently appear in Meta docs mapped to
   their respective login configs.
 
+### Reels — verified spec (verified 2026-07-28, IG User Media reference, `#reels-specs`)
+
+| Limit | Value |
+|---|---|
+| Max file size | 300 MB |
+| Duration | 3 seconds minimum, 15 minutes maximum |
+| Max width | 1920 px |
+| Aspect ratio | 0.01:1 to 10:1 (width:height) — 9:16 recommended, but anything in range is accepted |
+| Container | MOV or MP4, no edit lists, **`moov` atom at the front of the file** |
+
+⚠ **Widely-circulated third-party guides claiming a 4 GB cap and a 90-second maximum are
+wrong.** These numbers were re-verified directly against the live docs (not carried over
+from memory or a blog post) — see `dashboard/lib/video-spec.ts`'s `REEL_SPEC`, which is the
+runtime source of truth the app validates against.
+
+The `moov`-at-front requirement is a real container-format rule, not a performance
+suggestion — Meta's own wording is *"moov atom at the front of the file."* iPhone camera
+footage routinely fails it (moov written last, after the full `mdat`); see "Video
+conversion on upload" above for how this project closes that gap on the convertible path,
+and the "Verified: first real Reel" note below for what remains untested (an in-spec file
+that skips conversion).
+
+**`cover_url` vs `thumb_offset` — precedence.** Instagram's REELS container accepts either
+`cover_url` (an actual image file Meta uses directly as the cover) or `thumb_offset` (a
+millisecond offset into the video; Meta extracts that frame itself). Where both are
+possible, an explicit `cover_url` image is the more direct instruction and takes
+precedence over deriving one from `thumb_offset` — there is nothing to derive once a real
+image is supplied. **This project only ever sends `thumb_offset`** (from
+`assets.cover_frame_ms`, via `worker/graph_api.py`'s `create_video_container` →
+`worker/publisher.py`) — a real, uploaded custom cover image via `cover_url` is not
+implemented (deferred, see docs/tasks.md). Absent either field, Meta's documented default
+is frame 0.
+
 ### Facebook Pages publishing (verified 2026-07-23)
 - Single photo: `POST /{page-id}/photos` with `url`, `caption`, `published=true`. The response
   carries both `id` (photo) and **`post_id`** (the feed post) — store `post_id`, since insights
@@ -287,6 +320,88 @@ in every platform registry (`clients._BASE_URLS`/`_API_VERSIONS`/`PLATFORM_CAPS`
 
 ---
 
+## Video conversion on upload (dashboard, added 2026-07-28)
+
+The upload route (`dashboard/app/api/assets/upload/route.ts`) no longer refuses every
+out-of-spec Reel. It classifies each Reels-spec failure as **convertible** (re-encoding
+genuinely fixes it) or **fatal** (nothing can), and only converts on the convertible path.
+This matters in practice, not in theory: an iPhone's default camera setting **is** 4K
+(2160×3840), which is over Instagram's 1920px width cap — so the "failing" case this
+feature handles is the *normal* case for footage shot on a phone, not an edge case.
+
+### Convertible versus fatal (`dashboard/lib/video-spec.ts`, `classifyReelErrors`)
+
+| Failure | Bucket | Why |
+|---|---|---|
+| Wrong container (not MP4/MOV) | convertible | Re-encoding changes the container. |
+| Over 300 MB | convertible | Re-encoding at a lower bitrate shrinks the file. |
+| Width over 1920px | convertible | Downscaling fixes this exactly — see below. |
+| Under 3 seconds | **fatal** | Nothing to trim *to* — there's no footage to add back. |
+| Over 15 minutes | **fatal** | The only fix is trimming, and trimming is an **editorial**
+  decision — which seconds to cut is a choice about content, not a technical transform. The
+  app converts pixels and containers; it does not decide what a Reel is *about*. Refuse and
+  tell the owner to trim in Photos and re-upload. |
+
+Off-vertical aspect ratio and no audio track remain **warnings** in both cases — Instagram
+publishes and letterboxes a landscape Reel, so there's nothing to convert or refuse.
+
+The route checks `fatal` before ever looking at `convertible`: a video that's both 40
+minutes long *and* 4K is refused for length without wasting a 300-second conversion
+attempt on a file that's getting rejected regardless.
+
+### Converter probe order (`dashboard/lib/video-convert.ts`, `findConverter`)
+
+1. **`avconvert`** — `/usr/bin/avconvert`, ships with every macOS install, zero extra
+   dependency. Preferred.
+2. **`ffmpeg`** — fallback for a clone not on macOS, or where `avconvert` is somehow
+   missing. Probed on `PATH`.
+3. **Refuse** — neither is present (or `VIDEO_CONVERTER=off`): 422, with the same
+   convertible messages plus an "install ffmpeg" hint. No conversion is silently skipped.
+
+Exact command lines (`buildArgs`):
+
+```
+avconvert -s <input> -p Preset1920x1080 -o <output> --replace
+
+ffmpeg -y -nostdin -loglevel error -nostats -i <input> \
+  -vf scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2 \
+  -c:v h264 -c:a aac -movflags +faststart <output>
+```
+
+Both fit the video inside a 1920×1920 box without cropping, padding, or upscaling
+(`force_original_aspect_ratio=decrease`), rounded to even pixel dimensions
+(`force_divisible_by=2`, required by h264) — this is deliberately equivalent to what
+`avconvert`'s `Preset1920x1080` does for both landscape and portrait input, so the two
+converters produce the same shape from the same source regardless of which one a given
+install has.
+
+### Measured result — the real 4K fixture (`~/Downloads/IMG_3707.MOV`)
+
+Verified via the composer, end to end, using `avconvert` (this Mac has it) on
+2026-07-29:
+
+| | Original | Converted |
+|---|---|---|
+| Dimensions | 2160×3840 (portrait; sensor stores 3840×2160 landscape + a rotation matrix — see `video-meta.ts`'s tkhd matrix parsing) | 1080×1920 |
+| File size | 51,798,715 bytes (49.4 MB) | 15,512,907 bytes (14.8 MB) |
+| Duration | 7.637 s (unchanged — conversion never touches duration) | 7.637 s |
+| Container | `mdat` before `moov` — `moov` at offset 51,778,986, right after a 51.8 MB `mdat` (typical of an unprocessed phone recording: the player must read to the end for metadata) | `moov` at offset 28, immediately after `ftyp` and *before* `mdat` |
+
+That last row is a side effect neither converter's Reels-facing docs advertise but both
+produce: `avconvert`'s export and ffmpeg's explicit `-movflags +faststart` both relocate
+the `moov` atom to the front. This isn't why the video is converted, but it's a genuine,
+measured improvement — a player (or Meta's own ingestion) can start reading metadata
+without seeking to the end of a 50 MB file first.
+
+The original file is retained untouched at `storage_path`; only the derivative at
+`publish_path` is what actually gets published (`worker/publisher.py`'s `_resolve_url`
+prefers `publish_path`). The asset row gets `conform_mode: "downscale"` and
+`needs_review: 1`, and the composer surfaces `converted: { from, to }` next to the
+existing Reels warnings so the owner is told plainly what happened — see
+`dashboard/components/composer.tsx`.
+
+---
+
 ## Stack references (fetch current docs before version-sensitive decisions)
 - **Next.js (App Router):** use Context7 / official docs for route handlers, server actions,
   and `better-sqlite3` usage in server-side code.
@@ -301,3 +416,26 @@ in every platform registry (`clients._BASE_URLS`/`_API_VERSIONS`/`PLATFORM_CAPS`
 - Keep secrets in `.env` only; never commit `/data` or tokens.
 - When building the Facebook, video, or Stories adapters, re-run the same live-docs
   verification we did for IG image/carousel — don't extrapolate from this doc alone.
+
+## Verified: first real Reel published (2026-07-29)
+
+The full video pipeline was proven end to end against the live Instagram API.
+
+- **Media id** `17983260633046217` · **permalink** https://www.instagram.com/reel/DbYtd48ADWu/
+- **`media_product_type: REELS`** and `media_type: VIDEO`, read back from the API rather than
+  trusted from our own DB — it is a genuine Reel, not a plain video post.
+- **60 seconds end to end.** Cloudflared tunnel live in ~21s; container create → poll →
+  publish took a further ~37s for a 7.6s clip. The Reels poll budget
+  (`REELS_STATUS_POLL_INTERVAL=10` × `REELS_STATUS_POLL_MAX_TRIES=90`, a 15-minute ceiling)
+  is therefore generous rather than tight — leave it, but there is no evidence it needs raising.
+- **Source was a 4K HEVC iPhone camera original** (2160×3840, 49.4 MB, `moov` atom LAST),
+  automatically converted on upload to 1080×1920 H.264, 15 MB, `moov` FIRST. The worker sent
+  the derivative (`publish_path`), never the original.
+- **`thumb_offset=2600`** was sent from `assets.cover_frame_ms`, exercising cover-frame selection.
+- `DRY_RUN` was flipped to `0` for exactly one `--once` cycle and restored to `1` immediately,
+  guarded by a shell trap so an interrupted run could not leave it live.
+
+**The moov-atom risk recorded in the Reels design spec is now closed for the conversion path.**
+Conversion relocates `moov` to the front as a side effect, so any file that goes through it
+satisfies Meta's container requirement regardless of how the camera wrote it. An in-spec video
+that skips conversion could still carry a trailing `moov`; that path remains untested.

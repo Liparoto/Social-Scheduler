@@ -7,7 +7,7 @@ import type { ConformMode } from "@/lib/conform";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
-import { channelColor } from "@/lib/format";
+import { channelColor, videoPreviewSrc } from "@/lib/format";
 
 // `uid` is a per-tile client id: two tiles can share an assetId (re-importing a
 // deduped image), so React keys must not be the assetId.
@@ -19,6 +19,8 @@ type Item = {
   deduped: boolean;
   conformMode: ConformMode;
   needsReview: number;
+  mediaKind: "image" | "video";
+  coverFrameMs: number | null;
 };
 
 const card = "rounded-card border border-border bg-surface p-5";
@@ -79,6 +81,11 @@ export function BulkImport({
           deduped: body.deduped,
           conformMode: body.asset.conform_mode,
           needsReview: body.asset.needs_review,
+          mediaKind: body.asset.media_kind,
+          // Already on the upload response — a fresh upload's is always null, but a
+          // deduped re-upload of a video that already has a chosen cover reuses it, so
+          // the preview shows the actual cover instead of frame 0.
+          coverFrameMs: body.asset.cover_frame_ms ?? null,
         },
       ]);
     }
@@ -157,13 +164,28 @@ export function BulkImport({
             {items.map((it, i) => (
               <div key={it.uid} className="flex gap-3">
                 <div className="shrink-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`/api/media/${it.assetId}?variant=thumb`}
-                    alt=""
-                    className="h-20 w-20 rounded-lg object-cover"
-                  />
-                  {it.needsReview ? (
+                  {it.mediaKind === "video" ? (
+                    // No thumbnail file exists for video (no ffmpeg dependency by
+                    // design) — render the real file with preload="metadata" so the
+                    // browser decodes just the first frame, same approach as
+                    // post-editor.tsx / cover-frame-picker.tsx. videoPreviewSrc's #t=
+                    // fragment is what makes that frame actually paint in Safari.
+                    <video
+                      src={videoPreviewSrc(it.assetId, it.coverFrameMs)}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="h-20 w-20 rounded-lg object-cover"
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/media/${it.assetId}?variant=thumb`}
+                      alt=""
+                      className="h-20 w-20 rounded-lg object-cover"
+                    />
+                  )}
+                  {it.mediaKind !== "video" && it.needsReview ? (
                     <ConformControl
                       assetId={it.assetId}
                       conformMode={it.conformMode}

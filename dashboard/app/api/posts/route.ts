@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPostWithPublications, getChannel, getPeriod, listTags } from "@/lib/queries";
+import { createPostWithPublications, getAsset, getChannel, getPeriod, listTags } from "@/lib/queries";
 import { zonedTimeToUtc } from "@/lib/time";
 import type { ContentKind, PostType } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
@@ -46,7 +46,37 @@ export async function POST(req: NextRequest) {
   }
   const targetChannels = channels.map((c) => c!);
 
-  const postType: PostType = isText ? "text" : assetIds.length > 1 ? "carousel" : "single";
+  // Load the assets so post_type can reflect what they ACTUALLY are, not just how many
+  // there are. Mirrors the channel lookup directly above.
+  const postAssets = assetIds.map((aid) => getAsset(aid));
+  const unknownAssetIdx = postAssets.findIndex((a) => !a);
+  if (unknownAssetIdx !== -1) {
+    return NextResponse.json(
+      { error: `Unknown asset ${assetIds[unknownAssetIdx]}.` },
+      { status: 400 }
+    );
+  }
+  const chosenAssets = postAssets.map((a) => a!);
+
+  // No platform publishes a carousel containing video. Caught here so it fails at
+  // compose time with a clear reason, rather than terminally in the worker later.
+  if (!isText && chosenAssets.length > 1 && chosenAssets.some((a) => a.media_kind === "video")) {
+    return NextResponse.json(
+      { error: "A carousel can only contain images. Post a video as its own Reel." },
+      { status: 400 }
+    );
+  }
+
+  // A single VIDEO asset is a reel, not a "single". Everything else is unchanged.
+  const isReel =
+    !isText && chosenAssets.length === 1 && chosenAssets[0].media_kind === "video";
+  const postType: PostType = isText
+    ? "text"
+    : isReel
+      ? "reel"
+      : assetIds.length > 1
+        ? "carousel"
+        : "single";
 
   // The strictest selected channel is the one that matters — the worker still enforces
   // each channel's own limit independently per publication, but accepting a count that's

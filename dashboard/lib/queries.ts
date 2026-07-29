@@ -123,8 +123,11 @@ export interface InsertAssetInput {
   height: number | null;
   byte_size: number | null;
   publish_path?: string | null;
-  conform_mode?: "none" | "crop" | "pad";
+  conform_mode?: "none" | "crop" | "pad" | "downscale";
   needs_review?: number;
+  duration_ms?: number | null;
+  cover_frame_ms?: number | null;
+  has_audio?: number;
 }
 
 /** Insert an asset, or return the existing one if the content hash already exists (dedup). */
@@ -136,16 +139,21 @@ export function upsertAssetByHash(input: InsertAssetInput): { asset: Asset; dedu
       `INSERT INTO assets
         (content_hash, media_kind, original_filename, storage_path, public_url,
          thumbnail_path, mime_type, width, height, byte_size,
-         publish_path, conform_mode, needs_review)
+         publish_path, conform_mode, needs_review,
+         duration_ms, cover_frame_ms, has_audio)
        VALUES (@content_hash, @media_kind, @original_filename, @storage_path, @public_url,
          @thumbnail_path, @mime_type, @width, @height, @byte_size,
-         @publish_path, @conform_mode, @needs_review)`
+         @publish_path, @conform_mode, @needs_review,
+         @duration_ms, @cover_frame_ms, @has_audio)`
     )
     .run({
       ...input,
       publish_path: input.publish_path ?? null,
       conform_mode: input.conform_mode ?? "none",
       needs_review: input.needs_review ?? 0,
+      duration_ms: input.duration_ms ?? null,
+      cover_frame_ms: input.cover_frame_ms ?? null,
+      has_audio: input.has_audio ?? 0,
     });
   return {
     asset: getAsset(Number(info.lastInsertRowid))!,
@@ -158,7 +166,7 @@ export function updateAssetConform(
   id: number,
   fields: Partial<{
     publish_path: string | null;
-    conform_mode: "none" | "crop" | "pad";
+    conform_mode: "none" | "crop" | "pad" | "downscale";
     needs_review: number;
   }>
 ): void {
@@ -168,6 +176,13 @@ export function updateAssetConform(
   getDb()
     .prepare(`UPDATE assets SET ${setClause} WHERE id = @id`)
     .run({ ...fields, id });
+}
+
+/** Persist the chosen cover frame. Assets have no updated_at column. */
+export function updateAssetCoverFrame(id: number, coverFrameMs: number): void {
+  getDb()
+    .prepare("UPDATE assets SET cover_frame_ms = ? WHERE id = ?")
+    .run(coverFrameMs, id);
 }
 
 export function recentAssets(limit = 60): Asset[] {

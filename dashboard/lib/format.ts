@@ -31,6 +31,24 @@ export function tzAbbrev(timeZone: string): string {
   }
 }
 
+/**
+ * URL for a `<video>` preview thumbnail, with a media-fragment (`#t=`) seek target.
+ *
+ * Chrome decodes and paints the first frame of a `preload="metadata"` video for free;
+ * Safari paints nothing until the video is played or explicitly seeked. Appending
+ * `#t=<seconds>` tells the browser to seek there on load, which forces Safari to
+ * decode and paint that frame too.
+ *
+ * Uses the asset's chosen cover frame (`cover_frame_ms`) when there is one, so the
+ * thumbnail shows the actual frame the owner picked for the Reel's cover. Falls back
+ * to a small non-zero offset when no cover has been chosen (or it's exactly frame 0) —
+ * `#t=0` does not reliably force a seek in Safari.
+ */
+export function videoPreviewSrc(assetId: number, coverFrameMs?: number | null): string {
+  const seconds = coverFrameMs ? coverFrameMs / 1000 : 0.1;
+  return `/api/media/${assetId}#t=${seconds}`;
+}
+
 export function humanBytes(n: number | null): string {
   if (!n && n !== 0) return "—";
   if (n < 1024) return `${n} B`;
