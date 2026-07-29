@@ -49,6 +49,14 @@ def get_post(conn: sqlite3.Connection, post_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
 
 
+def get_asset(conn: sqlite3.Connection, asset_id: int) -> sqlite3.Row | None:
+    """Look up a single asset by id. Used to resolve a Reel's cover_asset_id — the id can
+    be dangling (the referenced row deleted out from under it), so callers must handle
+    None rather than assume the FK always resolves.
+    """
+    return conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+
+
 def get_ordered_assets(conn: sqlite3.Connection, post_id: int) -> list[sqlite3.Row]:
     """Assets for a post, in carousel/child order."""
     return conn.execute(
