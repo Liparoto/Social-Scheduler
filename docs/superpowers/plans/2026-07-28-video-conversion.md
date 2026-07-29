@@ -86,11 +86,12 @@ assert.match(c.fatal[0], /16m04s/, "must name the real duration");
 c = classifyReelErrors({ ...ok, duration_ms: 2_000 }, MB2, "video/mp4");
 assert.equal(c.fatal.length, 1, "too short must be fatal");
 
-// A 16-minute 4K video: fatal wins, and conversion must NOT be offered — converting
-// it first and only then saying "too long" would waste minutes of the owner's time.
+// A 16-minute 4K video has BOTH a fatal problem and convertible ones. The classifier
+// reports both honestly; the upload route is what guarantees the fatal check runs first
+// so no time is wasted transcoding a video that will be refused for length anyway.
 c = classifyReelErrors({ ...ok, duration_ms: 964_000, width: 2160 }, 400 * MB2, "video/mp4");
-assert.ok(c.fatal.length >= 1, "duration still fatal");
-assert.deepEqual(c.convertible, [], "no conversion offered when something is fatal");
+assert.equal(c.fatal.length, 1, "duration is fatal");
+assert.ok(c.convertible.length >= 1, "and the width/size problems are still reported");
 
 // Warnings are unchanged and never block
 c = classifyReelErrors({ ...ok, width: 1920, height: 1080, has_audio: false }, MB2, "video/mp4");
@@ -128,7 +129,7 @@ export function validateReel(meta: VideoMeta, byteSize: number, mime: string): R
 
 Keep every existing message string byte-identical — tests assert on their text, and they are what the owner reads.
 
-**Important:** when anything is `fatal`, `convertible` must come back **empty**, so a caller cannot convert a video that is going to be refused anyway.
+**The classifier applies no cross-suppression.** `fatal` and `convertible` are reported independently — a 16-minute 4K video has both. An earlier draft of this plan had `convertible` come back empty whenever anything was `fatal`, which (a) contradicted an existing test pinning that `validateReel` reports *every* problem rather than just the first, and (b) duplicated a guarantee that belongs in Task 3's route ordering. **The "never transcode a video that will be refused anyway" guarantee lives solely in Task 3's ordering** — checking `fatal` first and returning immediately. There is no second net under it, so Task 3 must get that ordering right.
 
 - [ ] **Step 4: Run tests, expect pass**
 
