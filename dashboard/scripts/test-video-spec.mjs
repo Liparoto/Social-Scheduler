@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { validateReel, classifyReelErrors, REEL_SPEC, humanDuration, humanBytes } from "../lib/video-spec.ts";
 
-const ok = { duration_ms: 30_000, width: 1080, height: 1920, has_audio: true };
+const ok = {
+  duration_ms: 30_000,
+  width: 1080,
+  height: 1920,
+  has_audio: true,
+  moov_before_mdat: true,
+  is_hevc: false,
+};
 const MB = 1024 * 1024;
 
 // The happy path: a normal vertical iPhone clip
@@ -93,7 +100,14 @@ console.log("OK — reel spec validator enforces verified limits, warns on ratio
 
 // --- classifyReelErrors: splits fatal from convertible ---
 
-const okC = { duration_ms: 30_000, width: 1080, height: 1920, has_audio: true };
+const okC = {
+  duration_ms: 30_000,
+  width: 1080,
+  height: 1920,
+  has_audio: true,
+  moov_before_mdat: true,
+  is_hevc: false,
+};
 const MB2 = 1024 * 1024;
 
 // 4K iPhone portrait — the case that motivated this work. Convertible, not fatal.
@@ -138,4 +152,71 @@ assert.equal(c.warnings.length, 2, "landscape + silent both warn");
 c = classifyReelErrors(okC, 40 * MB2, "video/mp4");
 assert.deepEqual([c.fatal, c.convertible, c.warnings], [[], [], []]);
 
+// --- Whole-branch review, Important 3: trailing 'moov' and HEVC are convertible -----
+
+// 'moov' after 'mdat' (the common iPhone-camera-original layout) is convertible, not
+// fatal — conversion relocates it to the front.
+c = classifyReelErrors({ ...okC, moov_before_mdat: false }, 40 * MB2, "video/quicktime");
+assert.deepEqual(c.fatal, [], "trailing moov must NOT be fatal — conversion relocates it");
+assert.equal(c.convertible.length, 1, "trailing moov must be convertible");
+assert.match(c.convertible[0], /moov/i, "must name the actual problem (moov)");
+
+// HEVC is convertible, not fatal — conversion transcodes to H.264.
+c = classifyReelErrors({ ...okC, is_hevc: true }, 40 * MB2, "video/quicktime");
+assert.deepEqual(c.fatal, [], "HEVC must NOT be fatal — conversion transcodes it");
+assert.equal(c.convertible.length, 1, "HEVC must be convertible");
+assert.match(c.convertible[0], /HEVC/, "must name the actual problem (HEVC)");
+
+// The two new conditions are independent — a file can have either, both, or neither.
+c = classifyReelErrors({ ...okC, moov_before_mdat: false, is_hevc: true }, 40 * MB2, "video/quicktime");
+assert.deepEqual(c.fatal, []);
+assert.equal(c.convertible.length, 2, "moov-trailing AND HEVC must both be reported");
+
 console.log("OK — classifyReelErrors splits fatal from convertible");
+
+// --- Real-file verification (whole-branch review, Important 3) ---------------------
+// Both real files this fix was written against. Read-only — never modify either.
+{
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const { readVideoMeta } = await import("../lib/video-meta.ts");
+
+  const iphoneOriginal = path.join(os.homedir(), "Downloads", "IMG_3707.MOV");
+  if (fs.existsSync(iphoneOriginal)) {
+    const meta = readVideoMeta(fs.readFileSync(iphoneOriginal));
+    assert.equal(meta.moov_before_mdat, false, "IMG_3707.MOV: moov is known to be LAST");
+    assert.equal(meta.is_hevc, true, "IMG_3707.MOV: known to be HEVC");
+    const real = classifyReelErrors(meta, fs.statSync(iphoneOriginal).size, "video/quicktime");
+    assert.ok(
+      real.convertible.length >= 3,
+      `IMG_3707.MOV must classify convertible on several counts (width, moov, HEVC), got: ${real.convertible}`
+    );
+    console.log("OK — IMG_3707.MOV (real 4K HEVC, moov-last) classifies convertible on several counts");
+  } else {
+    console.log("SKIPPED — ~/Downloads/IMG_3707.MOV not present on this machine");
+  }
+
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const convertedReel = path.join(
+    scriptDir,
+    "..",
+    "..",
+    "data",
+    "assets",
+    "pub",
+    "da5ef00137664d28da89e0489bce2f594b922a73df7dd473cbd0f213f6875313.mp4"
+  );
+  if (fs.existsSync(convertedReel)) {
+    const meta = readVideoMeta(fs.readFileSync(convertedReel));
+    assert.equal(meta.moov_before_mdat, true, "converted reel: moov is known to be FIRST");
+    assert.equal(meta.is_hevc, false, "converted reel: known to be H.264, not HEVC");
+    const real = classifyReelErrors(meta, fs.statSync(convertedReel).size, "video/mp4");
+    assert.deepEqual(real.convertible, [], `converted reel must classify entirely clean, got: ${real.convertible}`);
+    assert.deepEqual(real.fatal, []);
+    console.log("OK — the converted 1080x1920 H.264 reel classifies entirely clean");
+  } else {
+    console.log("SKIPPED — converted reel fixture not present at data/assets/pub/…f6875313.mp4");
+  }
+}

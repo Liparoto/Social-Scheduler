@@ -35,8 +35,9 @@ export interface ReelCheck {
  * Splits Reels validation failures into three buckets:
  * - `fatal` — trimming (duration) is an editorial decision the app must never make, and no
  *   amount of re-encoding adds footage back. These can never be fixed by conversion.
- * - `convertible` — too wide, too large, or the wrong container. Downscaling/re-encoding
- *   genuinely fixes these, so a caller may offer to convert and retry.
+ * - `convertible` — too wide, too large, the wrong container, 'moov' trailing 'mdat', or
+ *   an HEVC codec. Downscaling/re-encoding genuinely fixes all of these, so a caller may
+ *   offer to convert and retry.
  * - `warnings` — never block a post; Instagram accepts and letterboxes/publishes anyway.
  *
  * This reports every bucket's problems honestly and independently — it does not suppress
@@ -82,6 +83,19 @@ export function classifyReelErrors(meta: VideoMeta, byteSize: number, mime: stri
     convertible.push(
       `This video is ${meta.width} pixels wide. Instagram caps Reels at 1920. ` +
         `Export it at 1080p and upload again.`
+    );
+  }
+  if (!meta.moov_before_mdat) {
+    convertible.push(
+      `This video's index ('moov') is stored at the end of the file — common for iPhone ` +
+        `camera originals. Instagram's servers require it at the front. Converting relocates it.`
+    );
+  }
+  if (meta.is_hevc) {
+    convertible.push(
+      `This video uses HEVC (H.265) encoding. Many browsers — including this app's own ` +
+        `previews — can't decode it. Converting to H.264 fixes previews, the cover picker, ` +
+        `and Instagram's own compatibility.`
     );
   }
 

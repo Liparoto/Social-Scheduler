@@ -305,6 +305,20 @@ def test_reels_are_eligible_for_autofill(conn):
     assert p in picks(conn, ch, 10)
 
 
+def test_reels_not_selected_for_channel_with_no_video_publish_path(conn):
+    """Mirrors test_text_post_not_selected_for_instagram_channel, but for the OTHER
+    capability-gated post_type: a channel on a platform with no publish path for
+    post_type='reel' (everything but Instagram — worker/publisher.py's
+    _publish_instagram is the only adapter with a 'reel' branch) must never have a reel
+    auto-queued to it. Without this gate the worker would fail it terminally every
+    autofill cycle forever, since 'failed' isn't in ACTIVE_QUEUE_STATUSES."""
+    ch = make_channel(conn, platform="facebook")
+    p = make_reel_post(conn, ch)
+    rows = select_candidates(conn, ch, NOW)
+    assert [r["post_type"] for r in rows] == []
+    assert p not in picks(conn, ch, 10)
+
+
 def test_caption_over_telegram_limit_skipped_but_selected_for_instagram(conn):
     """A caption fine for Instagram (no enforced limit) but over Telegram's 1024-char
     single-image limit must never be auto-queued to the Telegram channel — queuing it

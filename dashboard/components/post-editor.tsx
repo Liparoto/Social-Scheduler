@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type {
   Asset,
@@ -14,7 +14,7 @@ import type {
   Tag,
 } from "@/lib/types";
 import { channelColor } from "@/lib/format";
-import { platformLabel } from "@/lib/platforms";
+import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
@@ -77,12 +77,30 @@ export function PostEditor({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const toggleTarget = (id: number) =>
+  // Channels that can't publish this post's type at all (e.g. a 'reel' targeted at a
+  // platform with no publish path for one) — disabled here rather than offered and
+  // left to fail terminally at autofill/publish time. Mirrors library-view.tsx,
+  // post-sends-panel.tsx and schedule-from-library.tsx, which all gate the same way;
+  // this was the one target picker that didn't.
+  const incompatibleChannelIds = useMemo(
+    () => new Set(incompatibleChannelsForPostType(post.post_type, channels).map((c) => c.id)),
+    [channels, post.post_type]
+  );
+  // Derived, not written back into `targets` state — same reasoning as library-view.tsx's
+  // effectiveChans: nothing to keep in sync if the incompatible set ever changes.
+  const effectiveTargets = useMemo(
+    () => new Set([...targets].filter((id) => !incompatibleChannelIds.has(id))),
+    [targets, incompatibleChannelIds]
+  );
+
+  const toggleTarget = (id: number) => {
+    if (incompatibleChannelIds.has(id)) return;
     setTargets((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  };
 
   // Post now publishes whatever is currently saved in the database — not whatever is
   // sitting in this component's state. If the editor has unsaved changes, "Post now"
@@ -98,7 +116,7 @@ export function PostEditor({
     );
   const isDirty =
     normalizedCaptions(captions) !== normalizedCaptions(initialCaptions) ||
-    JSON.stringify(Array.from(targets).sort((a, b) => a - b)) !==
+    JSON.stringify(Array.from(effectiveTargets).sort((a, b) => a - b)) !==
       JSON.stringify([...initialTargets].sort((a, b) => a - b)) ||
     JSON.stringify([...tagIds].sort((a, b) => a - b)) !==
       JSON.stringify([...initialTagIds].sort((a, b) => a - b)) ||
@@ -120,7 +138,7 @@ export function PostEditor({
       content_kind: kind,
       content_status: status,
       cooldown_days: cooldown.trim() === "" ? null : Number(cooldown),
-      target_channel_ids: Array.from(targets),
+      target_channel_ids: Array.from(effectiveTargets),
       tag_ids: tagIds,
       period_links: Object.entries(periodModes).map(([pid, mode]) => ({
         periodId: Number(pid),
@@ -226,20 +244,30 @@ export function PostEditor({
         <p className="mb-3 text-xs text-muted">Which accounts auto-fill can post this to.</p>
         <div className="grid gap-2 sm:grid-cols-2">
           {channels.map((c) => {
-            const on = targets.has(c.id);
+            const on = effectiveTargets.has(c.id);
+            const disabled = incompatibleChannelIds.has(c.id);
             const color = channelColor(c.id, c.color_hue);
             return (
               <button
                 key={c.id}
                 type="button"
                 onClick={() => toggleTarget(c.id)}
+                disabled={disabled}
+                title={disabled ? `${platformLabel(c.platform)} can't publish this post's type` : undefined}
                 className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                  on ? "border-transparent" : "border-border hover:bg-surface-sunken"
+                  disabled
+                    ? "cursor-not-allowed border-border opacity-40"
+                    : on
+                      ? "border-transparent"
+                      : "border-border hover:bg-surface-sunken"
                 }`}
-                style={on ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined}
+                style={on && !disabled ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined}
               >
                 <span className="text-sm text-ink">{c.account_name}</span>
-                <span className="ml-auto text-xs text-muted">{c.platform}</span>
+                <span className="ml-auto text-xs text-muted">
+                  {c.platform}
+                  {disabled ? " — can't post this type" : ""}
+                </span>
               </button>
             );
           })}

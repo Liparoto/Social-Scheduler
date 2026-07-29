@@ -99,6 +99,20 @@ function hdlr(kind) {
   return box("hdlr", p);
 }
 
+/**
+ * stsd (sample description): version+flags(4), entry_count(4), then one sample-entry
+ * box per entry — [size][fourcc][payload] — whose fourcc names the codec (e.g. 'avc1'
+ * for H.264, 'hvc1' for HEVC). Only one entry is ever built here; the payload contents
+ * are never read by readVideoMeta, so it's left as zeroed filler.
+ */
+function stsd(codecFourCC) {
+  const entry = box(codecFourCC, Buffer.alloc(78));
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(0, 0); // version + flags
+  head.writeUInt32BE(1, 4); // entry_count = 1
+  return box("stsd", Buffer.concat([head, entry]));
+}
+
 function file({
   timescale = 600,
   duration = 6000,
@@ -110,11 +124,15 @@ function file({
   rotate270 = false,
   mvhdVersion = 0,
   tkhdVersion = 0,
+  // Codec fourcc for the video track's stsd entry, or null to omit stsd entirely
+  // (the pre-existing fixture shape, which every duration/dimension test below still
+  // relies on). 'avc1' = H.264, 'hvc1' = HEVC.
+  videoCodec = null,
 } = {}) {
   const ftyp = box("ftyp", Buffer.from("isomiso2avc1mp41", "ascii"));
-  const tracks = [
-    box("trak", Buffer.concat([tkhd(w, h, { rotate90, rotate270, version: tkhdVersion }), hdlr("vide")])),
-  ];
+  const videoTrakParts = [tkhd(w, h, { rotate90, rotate270, version: tkhdVersion }), hdlr("vide")];
+  if (videoCodec) videoTrakParts.push(stsd(videoCodec));
+  const tracks = [box("trak", Buffer.concat(videoTrakParts))];
   if (audio) tracks.push(box("trak", Buffer.concat([tkhd(0, 0), hdlr("soun")])));
   const moov = box("moov", Buffer.concat([mvhd(timescale, duration, { version: mvhdVersion }), ...tracks]));
   const mdat = box("mdat", Buffer.alloc(64));
@@ -129,6 +147,8 @@ assert.equal(m.duration_ms, 10_000, "duration");
 assert.equal(m.width, 1080);
 assert.equal(m.height, 1920);
 assert.equal(m.has_audio, true);
+assert.equal(m.moov_before_mdat, true, "moov-first fixture reports moov_before_mdat true");
+assert.equal(m.is_hevc, false, "no stsd at all must not be misread as HEVC");
 
 // No audio track
 assert.equal(readVideoMeta(file({ audio: false })).has_audio, false, "silent video");
@@ -138,7 +158,11 @@ assert.equal(readVideoMeta(file({ timescale: 90_000, duration: 90_000 * 7 })).du
 
 // moov at the END of the file must still parse. This is the iPhone case, and the whole
 // reason the parser walks boxes rather than assuming a layout.
-assert.equal(readVideoMeta(file({ moovFirst: false })).duration_ms, 10_000, "moov-last");
+const moovLast = readVideoMeta(file({ moovFirst: false }));
+assert.equal(moovLast.duration_ms, 10_000, "moov-last");
+// It must ALSO be correctly flagged as such — this is the fact video-spec.ts needs to
+// classify a trailing-moov file as convertible instead of silently passing it through.
+assert.equal(moovLast.moov_before_mdat, false, "moov-last must report moov_before_mdat false");
 
 // Identity-matrix portrait video must still report portrait (pins that the matrix fix
 // doesn't disturb the already-passing, non-rotated case).
@@ -205,6 +229,62 @@ assert.equal(mixedV0MvhdV1Tkhd.duration_ms, 10_000, "mixed v0 mvhd + v1 tkhd: du
 assert.equal(mixedV0MvhdV1Tkhd.width, 720, "mixed v0 mvhd + v1 tkhd: width");
 assert.equal(mixedV0MvhdV1Tkhd.height, 1280, "mixed v0 mvhd + v1 tkhd: height");
 
+// --- Codec detection: HEVC (hvc1/hev1) vs H.264 (avc1), whole-branch review Important 3 ---
+
+// H.264 (avc1) must NOT be flagged as HEVC.
+assert.equal(readVideoMeta(file({ videoCodec: "avc1" })).is_hevc, false, "avc1 is not HEVC");
+
+// hvc1 is one of the two HEVC sample-entry fourccs actually used in the wild (Apple's).
+assert.equal(readVideoMeta(file({ videoCodec: "hvc1" })).is_hevc, true, "hvc1 must be detected as HEVC");
+
+// hev1 is the other standard HEVC fourcc (used when parameter sets are inline rather
+// than out-of-band) — both must be recognized, not just the one Apple happens to emit.
+assert.equal(readVideoMeta(file({ videoCodec: "hev1" })).is_hevc, true, "hev1 must be detected as HEVC");
+
+// The audio track's own (nonexistent, in this fixture) stsd must never be confused with
+// the video track's — codec detection must be scoped to the video (handler type 'vide')
+// track specifically, not "any stsd anywhere in the file".
+const hevcWithAudio = readVideoMeta(file({ videoCodec: "hvc1", audio: true }));
+assert.equal(hevcWithAudio.is_hevc, true, "HEVC video track detected even alongside an audio track");
+assert.equal(hevcWithAudio.has_audio, true, "audio track detection is unaffected by codec detection");
+
+// --- Real-file verification (whole-branch review, Important 3) ---------------------
+// Both real files this fix was written against. Read-only — never modify either.
+{
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+
+  const iphoneOriginal = path.join(os.homedir(), "Downloads", "IMG_3707.MOV");
+  if (fs.existsSync(iphoneOriginal)) {
+    const meta = readVideoMeta(fs.readFileSync(iphoneOriginal));
+    assert.equal(meta.width, 2160, "IMG_3707.MOV: known stored width 2160");
+    assert.equal(meta.height, 3840, "IMG_3707.MOV: known stored height 3840");
+    assert.equal(meta.moov_before_mdat, false, "IMG_3707.MOV: moov is known to be LAST");
+    assert.equal(meta.is_hevc, true, "IMG_3707.MOV: known to be HEVC (hvc1)");
+    console.log("OK — IMG_3707.MOV (real 4K HEVC, moov-last) parses and flags both conditions");
+  } else {
+    console.log("SKIPPED — ~/Downloads/IMG_3707.MOV not present on this machine");
+  }
+
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const convertedReel = path.join(
+    scriptDir, "..", "..", "data", "assets", "pub",
+    "da5ef00137664d28da89e0489bce2f594b922a73df7dd473cbd0f213f6875313.mp4"
+  );
+  if (fs.existsSync(convertedReel)) {
+    const meta = readVideoMeta(fs.readFileSync(convertedReel));
+    assert.equal(meta.width, 1080, "converted reel: known width 1080");
+    assert.equal(meta.height, 1920, "converted reel: known height 1920");
+    assert.equal(meta.moov_before_mdat, true, "converted reel: moov is known to be FIRST");
+    assert.equal(meta.is_hevc, false, "converted reel: known to be H.264 (avc1), not HEVC");
+    console.log("OK — the converted 1080x1920 H.264 reel parses clean on both conditions");
+  } else {
+    console.log("SKIPPED — converted reel fixture not present at data/assets/pub/…f6875313.mp4");
+  }
+}
+
 // Garbage must throw a typed error, never return junk
 assert.throws(() => readVideoMeta(Buffer.from("this is not a video at all")), VideoParseError);
 
@@ -212,4 +292,7 @@ assert.throws(() => readVideoMeta(Buffer.from("this is not a video at all")), Vi
 const trunc = file().subarray(0, 40);
 assert.throws(() => readVideoMeta(trunc), VideoParseError);
 
-console.log("OK — video-meta parses duration, dimensions, audio; handles moov-last and rejects garbage");
+console.log(
+  "OK — video-meta parses duration, dimensions, audio, moov position and HEVC codec; " +
+    "handles moov-last and rejects garbage"
+);

@@ -57,6 +57,23 @@ def test_asset_server_serves_bytes_and_blocks_traversal(tmp_path):
         server.stop()
 
 
+def test_asset_server_serves_mov_as_quicktime(tmp_path):
+    """An in-spec .mov (no conversion needed, so storage_path stays <hash>.mov and
+    publish_path is NULL) must be served with a real video content type — falling
+    through to application/octet-stream is what Meta refuses at publish time. The
+    dashboard's own media route already maps mov -> video/quicktime; this server must
+    agree."""
+    (tmp_path / "hash.mov").write_bytes(b"\x00\x00\x00\x14ftypqt  fake-mov-bytes")
+    server = AssetServer(tmp_path, port=0).start()
+    try:
+        base = f"http://127.0.0.1:{server.port}"
+        with urllib.request.urlopen(f"{base}/hash.mov") as resp:
+            assert resp.status == 200
+            assert resp.headers["Content-Type"] == "video/quicktime"
+    finally:
+        server.stop()
+
+
 # ---- tunnel: URL parsing + missing binary -------------------------------------------
 def test_parse_tunnel_url_from_sample_output():
     sample = (

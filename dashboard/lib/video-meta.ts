@@ -17,6 +17,19 @@ export interface VideoMeta {
   width: number;
   height: number;
   has_audio: boolean;
+  // False when the top-level 'moov' box sits AFTER the top-level 'mdat' box. Meta's
+  // servers require 'moov' (the file's index) at the front so they can validate the
+  // container without reading the whole file — roughly 1 in 4 real iPhone camera
+  // originals write it last, and such a file passes every numeric spec check yet Meta
+  // still refuses it. Re-encoding relocates 'moov' to the front, so this belongs in
+  // video-spec.ts's `convertible` bucket, not `fatal`.
+  moov_before_mdat: boolean;
+  // True when a video track's sample description names an HEVC (H.265) codec (hvc1 or
+  // hev1). iPhone "High Efficiency" mode at 1080p produces an in-spec HEVC file that
+  // passes every numeric check, but Chrome (and this app's own <video> previews/cover
+  // scrubber) cannot decode HEVC, so it renders blank with nothing to explain why.
+  // Conversion transcodes to H.264, which fixes this — same `convertible` reasoning.
+  is_hevc: boolean;
 }
 
 interface Box {
@@ -68,6 +81,59 @@ function findAll(buf: Buffer, from: number, to: number, type: string, out: Box[]
     }
   }
   return out;
+}
+
+/**
+ * Whether the top-level 'moov' box precedes the top-level 'mdat' box. 'mdat' (the raw
+ * media bytes) never nests inside anything, so this only ever needs the direct children
+ * of the file root — no recursion. When there's no top-level 'mdat' at all (unusual, but
+ * not this function's problem to flag) there is nothing for 'moov' to trail, so this
+ * reports true: absence of the problem, not presence of a fix.
+ */
+function moovBeforeMdat(buf: Buffer, moov: Box): boolean {
+  for (const b of boxes(buf, 0, buf.length)) {
+    if (b.type === "mdat") return moov.start < b.start;
+  }
+  return true;
+}
+
+/**
+ * Whether any video track's sample description names an HEVC codec (hvc1 or hev1).
+ *
+ * Scoped per top-level 'trak' (not a single moov-wide search) so a video track's codec
+ * is never confused with an audio track's — deliberately tolerant of exactly where
+ * 'hdlr'/'stsd' sit inside that trak (real ISO files nest them under mdia/minf/stbl;
+ * this codebase's own synthetic test fixtures place 'hdlr' directly under 'trak' with no
+ * 'mdia' wrapper at all), since `find` already recurses through any of the container
+ * types below regardless of depth.
+ *
+ * stsd (sample description box) layout: version+flags(4), entry_count(4), then
+ * `entry_count` sample entries, each itself a box — [size(4)][fourcc(4)][payload] — whose
+ * fourcc names the codec. Only the first entry is read: a track legitimately switching
+ * codecs mid-stream is not a real-world case this app needs to detect.
+ */
+function isHevcVideo(buf: Buffer, moov: Box): boolean {
+  for (const trak of boxes(buf, moov.start, moov.end)) {
+    if (trak.type !== "trak") continue;
+    const hdlrBox = find(buf, trak.start, trak.end, "hdlr");
+    if (!hdlrBox || hdlrBox.end - hdlrBox.start < 12) continue;
+    const handlerType = buf.toString("ascii", hdlrBox.start + 8, hdlrBox.start + 12);
+    if (handlerType !== "vide") continue;
+
+    const stsd = find(buf, trak.start, trak.end, "stsd");
+    if (!stsd || stsd.end - stsd.start < 8) continue;
+    const entryCount = buf.readUInt32BE(stsd.start + 4);
+    let p = stsd.start + 8;
+    for (let i = 0; i < entryCount; i++) {
+      if (p + 8 > stsd.end) break;
+      const size = buf.readUInt32BE(p);
+      const fourcc = buf.toString("ascii", p + 4, p + 8);
+      if (fourcc === "hvc1" || fourcc === "hev1") return true;
+      if (size < 8) break; // malformed entry — stop rather than loop forever
+      p += size;
+    }
+  }
+  return false;
 }
 
 export function readVideoMeta(buf: Buffer): VideoMeta {
@@ -155,5 +221,7 @@ export function readVideoMeta(buf: Buffer): VideoMeta {
     width,
     height,
     has_audio,
+    moov_before_mdat: moovBeforeMdat(buf, moov),
+    is_hevc: isHevcVideo(buf, moov),
   };
 }
