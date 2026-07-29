@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { humanBytes, videoPreviewSrc } from "@/lib/format";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
@@ -16,6 +17,36 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(
     null
   );
+  const router = useRouter();
+  const [pending, startT] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  async function remove(a: AssetWithUsage) {
+    const name = a.original_filename ?? `Asset ${a.id}`;
+    if (
+      !confirm(
+        `Delete "${name}" (${humanBytes(a.byte_size)})?\n\n` +
+          `The file is removed from disk permanently. This cannot be undone.`
+      )
+    )
+      return;
+    setError(null);
+    setBusyId(a.id);
+    try {
+      const res = await fetch(`/api/assets/${a.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(body.error ?? "Could not delete that file.");
+        return;
+      }
+      startT(() => router.refresh());
+    } catch {
+      setError("Could not reach the server. Is the dashboard still running?");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const summary = useMemo(() => {
     const unused = assets.filter((a) => a.post_count === 0);
@@ -40,6 +71,12 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
           </>
         ) : null}
       </p>
+
+      {error ? (
+        <p className="mb-4 rounded-lg bg-accent-weak px-3 py-2 text-sm text-accent-strong">
+          {error}
+        </p>
+      ) : null}
 
       <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         {assets.map((a) => {
@@ -110,7 +147,17 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
                     {a.post_count > 1 ? ` +${a.post_count - 1} more` : ""}
                   </p>
                 ) : (
-                  <p className="text-xs text-faint">Unused</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-faint">Unused</span>
+                    <button
+                      type="button"
+                      onClick={() => remove(a)}
+                      disabled={busyId === a.id || pending}
+                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-status-failed hover:bg-surface-sunken disabled:opacity-50"
+                    >
+                      {busyId === a.id ? "Deleting…" : "Delete"}
+                    </button>
+                  </div>
                 )}
               </div>
             </li>
