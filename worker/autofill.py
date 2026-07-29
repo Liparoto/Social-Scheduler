@@ -64,11 +64,13 @@ def select_candidates(conn, channel_id: int, now):
     platform, not already queued. Ordered: never-posted first, then performance desc,
     then stalest, then oldest.
 
-    Type eligibility is capability-driven, not a hardcoded type list: a single/carousel
-    post is eligible if it has at least one asset (unchanged); a text post is eligible
-    only if the channel's platform declares supports_text in PLATFORM_CAPS. A platform
-    PLATFORM_CAPS doesn't recognize excludes text posts (the safe direction) rather than
-    guessing.
+    Type eligibility is capability-driven, not a hardcoded type list: a single/carousel/
+    reel post is eligible if it has at least one asset (unchanged); a text post is
+    eligible only if the channel's platform declares supports_text in PLATFORM_CAPS. A
+    platform PLATFORM_CAPS doesn't recognize excludes text posts (the safe direction)
+    rather than guessing. Reels are asset-gated the same as single/carousel here — the
+    stricter "exactly one video asset" rule is the publisher's job (worker/publisher.py),
+    not autofill's; autofill only needs to know a reel is a candidate at all.
     """
     platform_row = conn.execute(
         "SELECT platform FROM channels WHERE id = ?", (channel_id,)
@@ -96,7 +98,7 @@ def select_candidates(conn, channel_id: int, now):
         FROM posts p
         WHERE p.content_status = 'ready'
           AND (
-            (p.post_type IN ('single','carousel')
+            (p.post_type IN ('single','carousel','reel')
                AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
             OR (p.post_type = 'text' AND :supports_text = 1)
           )

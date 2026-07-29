@@ -131,6 +131,39 @@ install-wide. Full step-by-step in **docs/meta-setup.md**.
   (community cites Jan 27, 2025). Both naming sets currently appear in Meta docs mapped to
   their respective login configs.
 
+### Reels — verified spec (verified 2026-07-28, IG User Media reference, `#reels-specs`)
+
+| Limit | Value |
+|---|---|
+| Max file size | 300 MB |
+| Duration | 3 seconds minimum, 15 minutes maximum |
+| Max width | 1920 px |
+| Aspect ratio | 0.01:1 to 10:1 (width:height) — 9:16 recommended, but anything in range is accepted |
+| Container | MOV or MP4, no edit lists, **`moov` atom at the front of the file** |
+
+⚠ **Widely-circulated third-party guides claiming a 4 GB cap and a 90-second maximum are
+wrong.** These numbers were re-verified directly against the live docs (not carried over
+from memory or a blog post) — see `dashboard/lib/video-spec.ts`'s `REEL_SPEC`, which is the
+runtime source of truth the app validates against.
+
+The `moov`-at-front requirement is a real container-format rule, not a performance
+suggestion — Meta's own wording is *"moov atom at the front of the file."* iPhone camera
+footage routinely fails it (moov written last, after the full `mdat`); see "Video
+conversion on upload" above for how this project closes that gap on the convertible path,
+and the "Verified: first real Reel" note below for what remains untested (an in-spec file
+that skips conversion).
+
+**`cover_url` vs `thumb_offset` — precedence.** Instagram's REELS container accepts either
+`cover_url` (an actual image file Meta uses directly as the cover) or `thumb_offset` (a
+millisecond offset into the video; Meta extracts that frame itself). Where both are
+possible, an explicit `cover_url` image is the more direct instruction and takes
+precedence over deriving one from `thumb_offset` — there is nothing to derive once a real
+image is supplied. **This project only ever sends `thumb_offset`** (from
+`assets.cover_frame_ms`, via `worker/graph_api.py`'s `create_video_container` →
+`worker/publisher.py`) — a real, uploaded custom cover image via `cover_url` is not
+implemented (deferred, see docs/tasks.md). Absent either field, Meta's documented default
+is frame 0.
+
 ### Facebook Pages publishing (verified 2026-07-23)
 - Single photo: `POST /{page-id}/photos` with `url`, `caption`, `published=true`. The response
   carries both `id` (photo) and **`post_id`** (the feed post) — store `post_id`, since insights

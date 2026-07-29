@@ -562,7 +562,8 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
         so `_validate` and `_build_plan` always agree on which file is being sent.
         Instagram, Facebook and Threads are unchanged. No "platform-native derivative"
         concept was needed after all.
-- [ ] Reels/video (async container, status polling, `video_url`).
+- [x] Reels/video (async container, status polling, `video_url`) — see "Video + cover
+      frames on Instagram Reels" below.
 - [ ] Stories.
 - [ ] First-comment automation (post-publish comment endpoint).
 - [ ] Approval-workflow UI (activates the `requires_approval` flag).
@@ -620,6 +621,107 @@ supplied date/time. The scheduled path is byte-identical to before and still hon
 - [x] Verified: 324 worker tests; dashboard `tsc` clean; two smoke scripts driving the real routes
       against a scratch DB copy; browser-verified on all three surfaces; the live DB left exactly
       as found with `PRAGMA foreign_key_check` empty.
+
+---
+
+## Video + cover frames on Instagram Reels  `[x] done`
+Design: `docs/superpowers/specs/2026-07-28-video-reels-covers-design.md` · Plan:
+`docs/superpowers/plans/2026-07-28-video-reels-covers.md`
+The Phase 6 "Reels/video" line item, plus a cover-frame capability video needs and images
+don't. Ten tasks, dependency-ordered; unlike the FB/Threads/Discord/Telegram adapters this
+was not purely mechanical — there was no video ingest path anywhere in the app to build on.
+- [x] Video as a first-class asset type: migration `0011` adds `assets.duration_ms` /
+      `cover_frame_ms` / `has_audio`. Purely additive — `assets.media_kind` and
+      `posts.post_type` already permitted `'video'`/`'reel'`, so unlike `0008`/`0009` no
+      CHECK-constraint table rebuild was needed.
+- [x] Container header parsing **without ffmpeg** (`dashboard/lib/video-meta.ts`): reads
+      `mvhd`/`tkhd`/`hdlr` directly out of the MP4/MOV box structure (~60 lines, no new
+      dependency) for duration, width/height (tkhd rotation-matrix aware, so a portrait
+      iPhone clip isn't misreported as landscape), and whether an audio track exists. An
+      unparseable file is refused outright rather than accepted with unknown properties.
+- [x] Reels spec validator (`dashboard/lib/video-spec.ts`): 300 MB max, 3s–15min duration,
+      1920px max width, 0.01:1–10:1 aspect — verified against live Meta docs, not the
+      widely-repeated wrong "4 GB / 90 seconds" numbers. Off-vertical aspect and no-audio
+      are **warnings**, never refusals, since Instagram accepts and letterboxes a
+      landscape Reel rather than rejecting it.
+- [x] Upload route accepts MP4/MOV, sets a real `media_kind` instead of the old
+      hardcoded `"image"`, skips image conforming/thumbnailing for video; `media/[id]`'s
+      MIME map gains `mp4`/`mov` (without it the browser downloads the file instead of
+      playing it, which breaks the cover scrubber outright since it's a `<video>` element
+      pointed at that route).
+- [x] Worker: `create_video_container` (REELS container, `video_url`, optional
+      `thumb_offset`); `'reel'` added to `SUPPORTED_POST_TYPES` with a shape rule (exactly
+      one asset, and it must be `media_kind='video'`); a Reels-specific poll budget
+      (`REELS_STATUS_POLL_INTERVAL=10` × `REELS_STATUS_POLL_MAX_TRIES=90`, a 15-minute
+      ceiling vs. the image path's 5 minutes) since video transcoding is materially
+      slower than an image container; budget exhaustion is retryable, never terminal.
+- [x] Cover-frame picker: a scrubber over a `<video>` bounded by `duration_ms`, saving a
+      **millisecond offset** to `assets.cover_frame_ms` — never a generated image, since
+      `thumb_offset` is all the Graph API needs and Meta extracts the frame itself. Reused
+      by the composer and post editor; the same "decide once, remember per asset" pattern
+      `conform_mode`/`needs_review` established for image framing, so evergreen recycling
+      reuses the chosen cover automatically.
+- [x] Composer support: video upload, the cover picker, and channel gating so a Reel only
+      offers Instagram channels (`dashboard/lib/platforms.ts`'s `supportsVideo`).
+- [x] **Live verification:** a real Reel published to the owner's own Instagram — media id
+      `17983260633046217`, `media_product_type: REELS` confirmed by reading the API back
+      rather than trusting our own DB, 60 seconds end to end, `thumb_offset` sent from a
+      chosen cover frame. Full detail (exact numbers, moov-atom before/after,
+      poll-budget headroom) is in `reference.md`'s "Verified: first real Reel published"
+      section — not repeated here.
+- [x] **Task 10 (this task) — auto-fill queues Reels.** `worker/autofill.py`'s candidate
+      query widened to include `post_type='reel'` (`select_candidates`, one line, plus a
+      new `worker/tests/test_autofill.py::test_reels_are_eligible_for_autofill`). Called
+      out explicitly in the design as Decision 7, not an afterthought: leaving it out
+      means a Reel is publishable but never auto-queued — it just silently never appears,
+      with no error anywhere. Recycling evergreen demo footage is a primary goal for this
+      owner, so this was a real hole, not a nicety.
+
+### Decision 1 reversed by the first real file
+The spec's Decision 1 was "validate and explain, never transcode" — reasoned from an
+assumption that the owner's footage was *"mostly fine, occasionally not."* The first real
+file run through the finished pipeline, an unedited iPhone camera clip, disproved that
+assumption on contact: iPhone shoots **4K (2160×3840) by default**, over Instagram's
+1920px width cap, so the case Decision 1 planned to refuse turned out to be the *normal*
+case, not the exception. A scheduler that refuses most of what the owner actually films
+is an obstacle, not a tool. That reversal became its own sub-project — **"Automatic video
+conversion on upload,"** immediately below, with its own design spec and plan — this
+entry doesn't repeat that detail.
+
+### Deferred / known gaps
+- **Threads video is not implemented**, even though Threads' real API supports
+  `media_type=VIDEO`. `dashboard/lib/platforms.ts` hardcodes `supportsVideo: false` for
+  every platform except Instagram — a real, scoped gap, not a structural blocker.
+- **A real custom cover image via `cover_url` is not implemented.** Every Reel publishes
+  with `thumb_offset` only. Meta's documented precedence is `cover_url` wins over
+  `thumb_offset` when both are sent (see `reference.md`) — nothing here conflicts with
+  adding it later.
+- **No video playback controls in the library.** Video assets render as a
+  `<video preload="metadata">` element for a first-frame/cover preview only, not a
+  played-back clip with scrubbing/controls outside the dedicated cover picker.
+- Stories, Facebook video, and video in bulk import (`/import` stays images-only) are all
+  out of scope, per the design spec.
+- **`PlatformCaps.post_types` was never generalised** (Decision 6). Each `_publish_*`
+  function still ends in its own `else: raise _NonRetryable`, which already gives a
+  correct, terminal, clearly-worded refusal for every platform that can't take a Reel —
+  fine for one video-capable platform, worth revisiting only if a second one ever lands.
+- **No delete-asset API exists** — a real, standing gap (same one Export & backup's
+  section flagged for images): a stray test video asset created during verification
+  cannot be removed through the app.
+- **An in-spec HEVC video that never needs conversion is untested end to end.** Everything
+  verified live went through the conversion path, which relocates `moov` to the front as
+  a side effect and re-encodes to H.264. A file that's already ≤1920px/≤300MB/3–15min
+  skips conversion entirely: per the known gap noted in `2a356e4`, it would have no
+  H.264 derivative and would still **preview blank in Chrome** (HEVC is undecodable
+  there), and it would publish with whatever `moov` position the camera actually wrote —
+  the design spec's "Known risk: the moov atom" is closed for the conversion path only,
+  not universally.
+
+### Verification (all passed)
+- [x] `.venv/bin/python -m pytest worker/tests -q` — 337 passed (336 before Task 10's
+      autofill test, +1 after).
+- [x] `cd dashboard && npx tsc --noEmit` — clean.
+- [x] Live: one real Reel published end to end, detailed in `reference.md`.
 
 ---
 
