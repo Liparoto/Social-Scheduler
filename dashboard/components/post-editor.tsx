@@ -21,6 +21,7 @@ import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
 import { CoverFramePicker } from "./cover-frame-picker";
+import { MediaBadge, MediaLightbox, type LightboxAsset } from "./media-lightbox";
 import { PostSendsPanel } from "./post-sends-panel";
 
 const card = "rounded-card border border-border bg-surface p-5";
@@ -60,6 +61,7 @@ export function PostEditor({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -178,6 +180,13 @@ export function PostEditor({
 
   return (
     <div className="space-y-6">
+      {openMedia ? (
+        <MediaLightbox
+          asset={openMedia.asset}
+          label={openMedia.label}
+          onClose={() => setOpenMedia(null)}
+        />
+      ) : null}
       {/* Read-only context strip */}
       <section className={card}>
         <div className="flex items-start gap-4">
@@ -186,16 +195,38 @@ export function PostEditor({
               assets.slice(0, 4).map((a) =>
                 a.media_kind === "video" ? (
                   <div key={a.id} className="w-40">
-                    <CoverFramePicker asset={a} />
+                    {/* The badge sits top-right so it clears the scrubber and Save
+                        control the picker renders underneath its video. */}
+                    <div className="relative">
+                      <CoverFramePicker asset={a} />
+                      <div className="absolute right-1 top-1">
+                        <MediaBadge
+                          mediaKind="video"
+                          label={post.caption ?? undefined}
+                          onOpen={() =>
+                            setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
+                          }
+                        />
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div key={a.id}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`/api/media/${a.id}?variant=thumb`}
-                      alt=""
-                      className="h-16 w-16 rounded-lg object-cover"
-                    />
+                    <div className="relative h-16 w-16">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`/api/media/${a.id}?variant=thumb`}
+                        alt=""
+                        className="h-16 w-16 rounded-lg object-cover"
+                      />
+                      <MediaBadge
+                        mediaKind="image"
+                        label={post.caption ?? undefined}
+                        onOpen={() =>
+                          setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
+                        }
+                      />
+                    </div>
                     {a.needs_review ? (
                       <ConformControl
                         assetId={a.id}

@@ -106,6 +106,13 @@ export function MediaLightbox({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // The setup effect below must run ONCE per open, not on every parent re-render.
+  // Callers pass onClose as an inline arrow, so its identity changes on each render of
+  // the parent; depending on it directly tore the effect down and rebuilt it, which
+  // reset focus to the close button and discarded wherever the user had tabbed to.
+  // Reading it through a ref keeps the handler current with an empty dependency array.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const [mediaError, setMediaError] = useState(false);
 
   // Focus in on open, trap Tab while open, restore focus + body scroll on close/unmount.
@@ -120,7 +127,7 @@ export function MediaLightbox({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -152,7 +159,7 @@ export function MediaLightbox({
       document.body.style.overflow = previousOverflow;
       previouslyFocused.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return createPortal(
     <div
