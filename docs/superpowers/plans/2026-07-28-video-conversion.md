@@ -159,7 +159,9 @@ git add dashboard/lib/video-spec.ts dashboard/scripts/test-video-spec.mjs && git
 
 **Command lines:**
 - `avconvert -s <input> -p Preset1920x1080 -o <output> --replace` — verified working on this Mac; it preserves the aspect ratio (a 2160×3840 portrait becomes 1080×1920, not letterboxed) and writes `moov` at the front.
-- `ffmpeg -y -i <input> -vf "scale='min(1920,iw)':-2" -c:v h264 -c:a aac -movflags +faststart <output>` — `-2` keeps the height even (h264 requires it) while preserving aspect; `+faststart` puts `moov` at the front, matching what Meta's spec asks for.
+- `ffmpeg -y -i <input> -vf "scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2" -c:v h264 -c:a aac -movflags +faststart <output>` — fits the video *inside* a 1920x1920 box preserving aspect, which reproduces `avconvert`'s behaviour in **both** orientations (portrait 2160x3840 -> 1080x1920; landscape 3840x2160 -> 1920x1080). `force_divisible_by=2` keeps both dimensions even, which h264 requires. `+faststart` puts `moov` at the front, matching Meta's spec.
+
+  **An earlier draft of this plan used `scale='min(1920,iw)':-2`, which is wrong.** It caps the *width* only, so a portrait 4K video became 1920x3414 — legal under Meta's "max 1920 horizontal pixels" rule but the wrong shape and a needlessly huge file, and materially different from what `avconvert` produces on macOS. The two converters must agree, or a Mac clone and a Windows clone would publish different output from the same source.
 
 Use `execFile` (not `exec`) so arguments are passed as an array and a path containing spaces or quotes cannot be interpreted by a shell. **Paths here are attacker-influenced only via filenames, but the repo's rule is to validate and never interpolate** — pass arguments, never build a command string.
 
