@@ -185,10 +185,47 @@ export function updateAssetCoverFrame(id: number, coverFrameMs: number): void {
     .run(coverFrameMs, id);
 }
 
-export function recentAssets(limit = 60): Asset[] {
+export interface AssetWithUsage {
+  id: number;
+  content_hash: string;
+  media_kind: "image" | "video";
+  original_filename: string | null;
+  storage_path: string;
+  publish_path: string | null;
+  thumbnail_path: string | null;
+  mime_type: string | null;
+  width: number | null;
+  height: number | null;
+  byte_size: number | null;
+  duration_ms: number | null;
+  cover_frame_ms: number | null;
+  created_at: string;
+  post_count: number;
+  first_post_id: number | null;
+  first_post_status: string | null;
+}
+
+/**
+ * Every asset with how many posts use it. The nested SELECT does the GROUP BY, then the
+ * outer join resolves the post's status — an aggregate (MIN) can't be referenced from a
+ * correlated subquery in the same SELECT list, so it has to happen one level up.
+ */
+export function listAssetsWithUsage(): AssetWithUsage[] {
   return getDb()
-    .prepare("SELECT * FROM assets ORDER BY created_at DESC, id DESC LIMIT ?")
-    .all(limit) as Asset[];
+    .prepare(
+      `SELECT u.*, p.status AS first_post_status
+         FROM (
+           SELECT a.*,
+                  COUNT(pa.post_id) AS post_count,
+                  MIN(pa.post_id)   AS first_post_id
+             FROM assets a
+             LEFT JOIN post_assets pa ON pa.asset_id = a.id
+            GROUP BY a.id
+         ) u
+         LEFT JOIN posts p ON p.id = u.first_post_id
+        ORDER BY u.created_at DESC, u.id DESC`
+    )
+    .all() as AssetWithUsage[];
 }
 
 /** A post's assets in carousel order (for the edit screen's read-only image strip). */
