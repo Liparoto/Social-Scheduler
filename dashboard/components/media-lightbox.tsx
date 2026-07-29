@@ -111,6 +111,8 @@ export function MediaLightbox({
   // the parent; depending on it directly tore the effect down and rebuilt it, which
   // reset focus to the close button and discarded wherever the user had tabbed to.
   // Reading it through a ref keeps the handler current with an empty dependency array.
+  // Whether the viewer has pressed play yet, so the rewind-to-start below happens once.
+  const hasPlayed = useRef(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [mediaError, setMediaError] = useState(false);
@@ -197,6 +199,23 @@ export function MediaLightbox({
             playsInline
             autoPlay={false}
             onError={() => setMediaError(true)}
+            onPlay={(e) => {
+              // The #t= fragment seeks to the chosen cover frame so the video OPENS on
+              // that frame (and so Safari paints anything at all). But that is a poster
+              // position, not a playback position — pressing play should start from the
+              // beginning, not from 3.9s in.
+              //
+              // Only rewind on the first play, and only if the playhead is still sitting
+              // where the fragment put it: if the viewer scrubbed somewhere themselves
+              // and then pressed play, that is where they meant to start.
+              if (hasPlayed.current) return;
+              hasPlayed.current = true;
+              const v = e.currentTarget;
+              const coverSeconds = (asset.cover_frame_ms ?? 0) / 1000;
+              if (coverSeconds > 0 && Math.abs(v.currentTime - coverSeconds) < 0.5) {
+                v.currentTime = 0;
+              }
+            }}
             className="max-h-[85vh] max-w-[90vw] rounded-card bg-black"
           />
         ) : (
