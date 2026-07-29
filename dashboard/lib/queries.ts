@@ -228,6 +228,36 @@ export function listAssetsWithUsage(): AssetWithUsage[] {
     .all() as AssetWithUsage[];
 }
 
+/**
+ * Delete an asset row. The guard lives ON the DELETE so it can't race a compose that
+ * attaches this asset a millisecond from now: if a post_assets row appears in between,
+ * NOT EXISTS fails and the DELETE no-ops (0 rows) instead of the FK throwing.
+ *
+ * The catch is deliberate and broader than post_assets. Any foreign key pointing at
+ * assets gets to veto — including assets.cover_asset_id, which exists on the
+ * custom-cover-image branch (migration 0012) but not here. That branch will not need
+ * to touch this function.
+ */
+export function deleteAsset(id: number): "ok" | "not_found" | "in_use" {
+  const db = getDb();
+  const row = db.prepare("SELECT id FROM assets WHERE id = ?").get(id);
+  if (!row) return "not_found";
+  try {
+    const info = db
+      .prepare(
+        `DELETE FROM assets
+          WHERE id = @id
+            AND NOT EXISTS (SELECT 1 FROM post_assets WHERE asset_id = @id)`
+      )
+      .run({ id });
+    return info.changes > 0 ? "ok" : "in_use";
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? "";
+    if (code.startsWith("SQLITE_CONSTRAINT")) return "in_use";
+    throw err;
+  }
+}
+
 /** A post's assets in carousel order (for the edit screen's read-only image strip). */
 export function getPostAssets(postId: number): Asset[] {
   return getDb()
