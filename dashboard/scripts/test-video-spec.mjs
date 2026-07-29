@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { validateReel, REEL_SPEC, humanDuration, humanBytes } from "../lib/video-spec.ts";
+import { validateReel, classifyReelErrors, REEL_SPEC, humanDuration, humanBytes } from "../lib/video-spec.ts";
 
 const ok = { duration_ms: 30_000, width: 1080, height: 1920, has_audio: true };
 const MB = 1024 * 1024;
@@ -90,3 +90,52 @@ assert.equal(REEL_SPEC.maxBytes, 300 * MB);
 assert.equal(REEL_SPEC.maxDurationMs, 900_000);
 
 console.log("OK — reel spec validator enforces verified limits, warns on ratio/audio");
+
+// --- classifyReelErrors: splits fatal from convertible ---
+
+const okC = { duration_ms: 30_000, width: 1080, height: 1920, has_audio: true };
+const MB2 = 1024 * 1024;
+
+// 4K iPhone portrait — the case that motivated this work. Convertible, not fatal.
+let c = classifyReelErrors({ ...okC, width: 2160, height: 3840 }, 50 * MB2, "video/quicktime");
+assert.deepEqual(c.fatal, [], "4K must NOT be fatal — downscaling fixes it");
+assert.equal(c.convertible.length, 1, "4K width must be convertible");
+assert.match(c.convertible[0], /2160/, "must name the measured width");
+
+// Oversize is convertible
+c = classifyReelErrors(okC, 400 * MB2, "video/mp4");
+assert.deepEqual(c.fatal, []);
+assert.equal(c.convertible.length, 1);
+
+// Wrong container is convertible
+c = classifyReelErrors(okC, MB2, "video/x-matroska");
+assert.deepEqual(c.fatal, []);
+assert.equal(c.convertible.length, 1);
+
+// Duration is FATAL — conversion cannot honestly fix it
+c = classifyReelErrors({ ...okC, duration_ms: 964_000 }, MB2, "video/mp4");
+assert.equal(c.fatal.length, 1, "too long must be fatal");
+assert.deepEqual(c.convertible, [], "and must not offer conversion");
+assert.match(c.fatal[0], /16m04s/, "must name the real duration");
+
+c = classifyReelErrors({ ...okC, duration_ms: 2_000 }, MB2, "video/mp4");
+assert.equal(c.fatal.length, 1, "too short must be fatal");
+
+// A 16-minute 4K video has BOTH a fatal problem and convertible ones. The classifier
+// reports both honestly; the upload route is what guarantees the fatal check runs first
+// so no time is wasted transcoding a video that will be refused for length anyway.
+c = classifyReelErrors({ ...okC, duration_ms: 964_000, width: 2160 }, 400 * MB2, "video/mp4");
+assert.equal(c.fatal.length, 1, "duration is fatal");
+assert.ok(c.convertible.length >= 1, "and the width/size problems are still reported");
+
+// Warnings are unchanged and never block
+c = classifyReelErrors({ ...okC, width: 1920, height: 1080, has_audio: false }, MB2, "video/mp4");
+assert.deepEqual(c.fatal, []);
+assert.deepEqual(c.convertible, []);
+assert.equal(c.warnings.length, 2, "landscape + silent both warn");
+
+// A clean video classifies as entirely clean
+c = classifyReelErrors(okC, 40 * MB2, "video/mp4");
+assert.deepEqual([c.fatal, c.convertible, c.warnings], [[], [], []]);
+
+console.log("OK — classifyReelErrors splits fatal from convertible");

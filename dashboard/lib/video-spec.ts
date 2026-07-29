@@ -32,6 +32,74 @@ export interface ReelCheck {
 }
 
 /**
+ * Splits Reels validation failures into three buckets:
+ * - `fatal` — trimming (duration) is an editorial decision the app must never make, and no
+ *   amount of re-encoding adds footage back. These can never be fixed by conversion.
+ * - `convertible` — too wide, too large, or the wrong container. Downscaling/re-encoding
+ *   genuinely fixes these, so a caller may offer to convert and retry.
+ * - `warnings` — never block a post; Instagram accepts and letterboxes/publishes anyway.
+ *
+ * This reports every bucket's problems honestly and independently — it does not suppress
+ * `convertible` when `fatal` is non-empty. "Don't waste time converting a video that's going
+ * to be refused for length anyway" is the upload route's job (check `fatal` first, return
+ * before considering conversion), not this classifier's. A classifier describes the video;
+ * it doesn't encode a policy about what the caller should do next.
+ */
+export interface ReelClassification {
+  fatal: string[];
+  convertible: string[];
+  warnings: string[];
+}
+
+export function classifyReelErrors(meta: VideoMeta, byteSize: number, mime: string): ReelClassification {
+  const fatal: string[] = [];
+  const convertible: string[] = [];
+  const warnings: string[] = [];
+
+  if (!REEL_MIME_TYPES[mime]) {
+    convertible.push(
+      `Reels must be MP4 or MOV. This file is ${mime || "of an unknown type"}.`
+    );
+  }
+  if (byteSize > REEL_SPEC.maxBytes) {
+    convertible.push(
+      `This file is ${humanBytes(byteSize)}. Instagram caps Reels at 300 MB. ` +
+        `Export it at a lower quality, or trim it.`
+    );
+  }
+  if (meta.duration_ms < REEL_SPEC.minDurationMs) {
+    fatal.push(
+      `This is ${humanDuration(meta.duration_ms, "floor")}. Reels must be at least 3 seconds.`
+    );
+  }
+  if (meta.duration_ms > REEL_SPEC.maxDurationMs) {
+    fatal.push(
+      `This is ${humanDuration(meta.duration_ms, "ceil")}. Reels cap at 15 minutes. ` +
+        `Trim it in Photos and upload again.`
+    );
+  }
+  if (meta.width > REEL_SPEC.maxWidth) {
+    convertible.push(
+      `This video is ${meta.width} pixels wide. Instagram caps Reels at 1920. ` +
+        `Export it at 1080p and upload again.`
+    );
+  }
+
+  const ratio = meta.width / meta.height;
+  if (ratio < REEL_SPEC.warnBelowRatio || ratio > REEL_SPEC.warnAboveRatio) {
+    warnings.push(
+      `This video is ${meta.width}×${meta.height}. Reels are vertical (9:16), so this ` +
+        `will letterbox — Instagram will still publish it.`
+    );
+  }
+  if (!meta.has_audio) {
+    warnings.push("This video has no audio track.");
+  }
+
+  return { fatal, convertible, warnings };
+}
+
+/**
  * Formats a duration for display. `direction` controls which way partial units round:
  * - "floor" (default): round down. Used when reporting a value that is BELOW a minimum,
  *   so the displayed number can never reach the minimum it's being rejected for.
@@ -79,48 +147,6 @@ export function humanBytes(bytes: number): string {
  * miserable way to find out.
  */
 export function validateReel(meta: VideoMeta, byteSize: number, mime: string): ReelCheck {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  if (!REEL_MIME_TYPES[mime]) {
-    errors.push(
-      `Reels must be MP4 or MOV. This file is ${mime || "of an unknown type"}.`
-    );
-  }
-  if (byteSize > REEL_SPEC.maxBytes) {
-    errors.push(
-      `This file is ${humanBytes(byteSize)}. Instagram caps Reels at 300 MB. ` +
-        `Export it at a lower quality, or trim it.`
-    );
-  }
-  if (meta.duration_ms < REEL_SPEC.minDurationMs) {
-    errors.push(
-      `This is ${humanDuration(meta.duration_ms, "floor")}. Reels must be at least 3 seconds.`
-    );
-  }
-  if (meta.duration_ms > REEL_SPEC.maxDurationMs) {
-    errors.push(
-      `This is ${humanDuration(meta.duration_ms, "ceil")}. Reels cap at 15 minutes. ` +
-        `Trim it in Photos and upload again.`
-    );
-  }
-  if (meta.width > REEL_SPEC.maxWidth) {
-    errors.push(
-      `This video is ${meta.width} pixels wide. Instagram caps Reels at 1920. ` +
-        `Export it at 1080p and upload again.`
-    );
-  }
-
-  const ratio = meta.width / meta.height;
-  if (ratio < REEL_SPEC.warnBelowRatio || ratio > REEL_SPEC.warnAboveRatio) {
-    warnings.push(
-      `This video is ${meta.width}×${meta.height}. Reels are vertical (9:16), so this ` +
-        `will letterbox — Instagram will still publish it.`
-    );
-  }
-  if (!meta.has_audio) {
-    warnings.push("This video has no audio track.");
-  }
-
-  return { errors, warnings };
+  const c = classifyReelErrors(meta, byteSize, mime);
+  return { errors: [...c.fatal, ...c.convertible], warnings: c.warnings };
 }
