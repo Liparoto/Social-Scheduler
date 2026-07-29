@@ -641,7 +641,7 @@ Through `/media`, delete every remaining unused test asset (originally ids 2, 4,
 du -sh data/assets && sqlite3 data/socialscheduler.db "SELECT count(*) FROM assets;"
 ```
 
-Expected: about 110 MB down to roughly 10 MB, and 2 assets remaining (1 and 8).
+Expected: 2 assets remaining (1 and 8), and roughly **45 MB reclaimed** — corrected from the estimate written before Task 1 ran. The live page reports the unused set as 45.3 MB, not ~100 MB, because the 49.4 MB `IMG_3707.MOV` is asset 8 and is *in use* by the Reel. `du -sh data/assets` will not fall as far as the byte_size total suggests, since asset 8's converted derivative under `pub/` stays too.
 
 - [ ] **Step 3: Confirm nothing else broke**
 
