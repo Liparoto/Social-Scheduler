@@ -623,6 +623,76 @@ supplied date/time. The scheduled path is byte-identical to before and still hon
 
 ---
 
+## Automatic video conversion on upload  `[x] done`
+Design/plan: `docs/superpowers/specs/2026-07-28-video-conversion-design.md` and
+`docs/superpowers/plans/2026-07-28-video-conversion.md`
+
+**This reverses Decision 1 of the Reels spec** ("validate and explain, never transcode").
+That decision assumed the owner's footage was "mostly fine, occasionally not" — and the
+first real file uploaded through the finished Reels pipeline, `IMG_3707.MOV`, disproved
+it: a straight iPhone camera original, no edits, is **2160×3840**, over Instagram's
+1920px width cap. iPhone records 4K **by default**, so the case the old design refused is
+not the rare one — it's the normal one. A scheduler that rejects most of what the owner
+actually films is an obstacle, not a tool.
+
+Four tasks:
+- [x] **Task 1 — split validation into fatal vs convertible**
+      (`dashboard/lib/video-spec.ts`, `classifyReelErrors`). Duration is **fatal, never
+      convertible** — trimming is an editorial decision (which seconds to cut) and the app
+      must not make content choices on the owner's behalf. Width/size/container failures
+      are convertible: re-encoding genuinely fixes them.
+- [x] **Task 2 — the converter module** (`dashboard/lib/video-convert.ts`). Probes
+      `avconvert` (ships with every Mac) → `ffmpeg` (PATH) → refuses conversion (never
+      silently skips it). `execFile` with an array of args (no shell), a timeout that
+      kills and cleans up a partial output, and a generous `maxBuffer` so a chatty
+      converter can't spuriously fail an otherwise-successful conversion.
+- [x] **Task 3 — convert on upload** (the video branch of
+      `dashboard/app/api/assets/upload/route.ts`). Ordering is the point: fatal is checked
+      **before** convertible so a 16-minute 4K video is refused for length without wasting
+      a conversion attempt on a file that's getting rejected regardless. The derivative is
+      re-validated after conversion — a still-too-wide or still-too-large output is refused,
+      never silently published. Original stays at `storage_path`, untouched; only the
+      derivative at `publish_path` is ever handed to Meta. Review follow-up fixed
+      `public_url` pointing at the unpublishable original for converted video, image-only
+      `ConformControl` rendering (and 500ing) on a converted video asset, a converter-name
+      typo silently falling open, and a 422 body that leaked temp paths/command lines.
+- [x] **Task 4 — tell the owner, and verify end to end.** The composer now renders
+      `converted: { from, to }` next to the existing Reels warnings, in the same
+      `bg-accent-weak`/`text-accent-strong` pill language as `conform-control.tsx`'s
+      "Auto-cropped — review framing" notice: *"Converted to 1080×1920 so Instagram will
+      accept it. Your original is untouched."* Browser-verified against the real 4K
+      fixture: accepted (not refused), notice appears, cover scrubber bounded at the
+      converted 7.6s duration and seeks correctly, and both the composer preview and the
+      Library list thumbnail render the actual video (not a broken image) — see
+      `reference.md`'s "Video conversion on upload" section for the measured before/after
+      numbers, including that conversion also moved the `moov` atom to the front of the
+      file.
+
+### Verification (all passed)
+- [x] `npx tsc --noEmit` clean.
+- [x] `dashboard/scripts/smoke-video-convert-upload.mjs` — 4 scenarios (default converter,
+      `VIDEO_CONVERTER=off`, forced-converter-failure, bad-output), all passing against the
+      real 4K fixture where present.
+- [x] Full `smoke-*.mjs` sweep — all pass except `smoke-content-model.mjs`'s pre-existing,
+      unrelated `channels.color_hue` failure (confirmed byte-for-byte identical to a
+      pre-implementation baseline, both before and after this sub-project).
+- [x] `.venv/bin/python -m pytest worker/tests -q` — 336 passed (no worker file touched;
+      `_resolve_url` already preferred `publish_path`, confirmed by reading it directly).
+- [x] Browser-verified the whole flow with the dev server already running on :3939 (worker
+      confirmed stopped first, so nothing could actually publish): dropped the real 4K
+      `~/Downloads/IMG_3707.MOV`, confirmed acceptance + notice + scrubber + video
+      rendering, then cleaned up through the app's own `DELETE /api/posts/[id]` (no raw
+      SQL) — posts 2→1, post_assets 2→1, publications unchanged at 3,
+      `PRAGMA foreign_key_check` empty both before and after. The one converted video
+      asset row (no delete API exists for assets) is left in place, orphaned but harmless,
+      alongside the pre-existing test assets from earlier sub-projects.
+
+**Deferred:** no worker change (the design's premise that `_resolve_url` already prefers
+`publish_path` held — verified, not assumed). Facebook Pages/Stories video and an
+asset-delete API remain out of scope, as before.
+
+---
+
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
 - [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
       Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing

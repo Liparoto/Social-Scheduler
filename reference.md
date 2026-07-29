@@ -287,6 +287,88 @@ in every platform registry (`clients._BASE_URLS`/`_API_VERSIONS`/`PLATFORM_CAPS`
 
 ---
 
+## Video conversion on upload (dashboard, added 2026-07-28)
+
+The upload route (`dashboard/app/api/assets/upload/route.ts`) no longer refuses every
+out-of-spec Reel. It classifies each Reels-spec failure as **convertible** (re-encoding
+genuinely fixes it) or **fatal** (nothing can), and only converts on the convertible path.
+This matters in practice, not in theory: an iPhone's default camera setting **is** 4K
+(2160×3840), which is over Instagram's 1920px width cap — so the "failing" case this
+feature handles is the *normal* case for footage shot on a phone, not an edge case.
+
+### Convertible versus fatal (`dashboard/lib/video-spec.ts`, `classifyReelErrors`)
+
+| Failure | Bucket | Why |
+|---|---|---|
+| Wrong container (not MP4/MOV) | convertible | Re-encoding changes the container. |
+| Over 300 MB | convertible | Re-encoding at a lower bitrate shrinks the file. |
+| Width over 1920px | convertible | Downscaling fixes this exactly — see below. |
+| Under 3 seconds | **fatal** | Nothing to trim *to* — there's no footage to add back. |
+| Over 15 minutes | **fatal** | The only fix is trimming, and trimming is an **editorial**
+  decision — which seconds to cut is a choice about content, not a technical transform. The
+  app converts pixels and containers; it does not decide what a Reel is *about*. Refuse and
+  tell the owner to trim in Photos and re-upload. |
+
+Off-vertical aspect ratio and no audio track remain **warnings** in both cases — Instagram
+publishes and letterboxes a landscape Reel, so there's nothing to convert or refuse.
+
+The route checks `fatal` before ever looking at `convertible`: a video that's both 40
+minutes long *and* 4K is refused for length without wasting a 300-second conversion
+attempt on a file that's getting rejected regardless.
+
+### Converter probe order (`dashboard/lib/video-convert.ts`, `findConverter`)
+
+1. **`avconvert`** — `/usr/bin/avconvert`, ships with every macOS install, zero extra
+   dependency. Preferred.
+2. **`ffmpeg`** — fallback for a clone not on macOS, or where `avconvert` is somehow
+   missing. Probed on `PATH`.
+3. **Refuse** — neither is present (or `VIDEO_CONVERTER=off`): 422, with the same
+   convertible messages plus an "install ffmpeg" hint. No conversion is silently skipped.
+
+Exact command lines (`buildArgs`):
+
+```
+avconvert -s <input> -p Preset1920x1080 -o <output> --replace
+
+ffmpeg -y -nostdin -loglevel error -nostats -i <input> \
+  -vf scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2 \
+  -c:v h264 -c:a aac -movflags +faststart <output>
+```
+
+Both fit the video inside a 1920×1920 box without cropping, padding, or upscaling
+(`force_original_aspect_ratio=decrease`), rounded to even pixel dimensions
+(`force_divisible_by=2`, required by h264) — this is deliberately equivalent to what
+`avconvert`'s `Preset1920x1080` does for both landscape and portrait input, so the two
+converters produce the same shape from the same source regardless of which one a given
+install has.
+
+### Measured result — the real 4K fixture (`~/Downloads/IMG_3707.MOV`)
+
+Verified via the composer, end to end, using `avconvert` (this Mac has it) on
+2026-07-29:
+
+| | Original | Converted |
+|---|---|---|
+| Dimensions | 2160×3840 (portrait; sensor stores 3840×2160 landscape + a rotation matrix — see `video-meta.ts`'s tkhd matrix parsing) | 1080×1920 |
+| File size | 51,798,715 bytes (49.4 MB) | 15,512,907 bytes (14.8 MB) |
+| Duration | 7.637 s (unchanged — conversion never touches duration) | 7.637 s |
+| Container | `mdat` before `moov` — `moov` at offset 51,778,986, right after a 51.8 MB `mdat` (typical of an unprocessed phone recording: the player must read to the end for metadata) | `moov` at offset 28, immediately after `ftyp` and *before* `mdat` |
+
+That last row is a side effect neither converter's Reels-facing docs advertise but both
+produce: `avconvert`'s export and ffmpeg's explicit `-movflags +faststart` both relocate
+the `moov` atom to the front. This isn't why the video is converted, but it's a genuine,
+measured improvement — a player (or Meta's own ingestion) can start reading metadata
+without seeking to the end of a 50 MB file first.
+
+The original file is retained untouched at `storage_path`; only the derivative at
+`publish_path` is what actually gets published (`worker/publisher.py`'s `_resolve_url`
+prefers `publish_path`). The asset row gets `conform_mode: "downscale"` and
+`needs_review: 1`, and the composer surfaces `converted: { from, to }` next to the
+existing Reels warnings so the owner is told plainly what happened — see
+`dashboard/components/composer.tsx`.
+
+---
+
 ## Stack references (fetch current docs before version-sensitive decisions)
 - **Next.js (App Router):** use Context7 / official docs for route handlers, server actions,
   and `better-sqlite3` usage in server-side code.

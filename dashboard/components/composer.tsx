@@ -23,13 +23,17 @@ interface ChannelLite {
   color_hue: number | null;
 }
 // Wraps the full Asset row the upload API returns (needed as-is for <CoverFramePicker>)
-// plus the two bits that only make sense while composing: whether this upload matched
-// an existing asset by content hash, and any non-blocking warnings the Reels validator
-// raised (e.g. "no audio track") that the API returns but a plain image upload never has.
+// plus the bits that only make sense while composing: whether this upload matched
+// an existing asset by content hash, any non-blocking warnings the Reels validator
+// raised (e.g. "no audio track") that the API returns but a plain image upload never
+// has, and — when an out-of-spec video was silently rewritten to fit Instagram's
+// limits — the before/after dimensions, so the owner can be told plainly what
+// happened instead of just noticing the framing changed.
 interface UploadedAsset {
   asset: Asset;
   deduped: boolean;
   warnings: string[];
+  converted?: { from: string; to: string };
 }
 
 export function Composer({
@@ -191,7 +195,15 @@ export function Composer({
       setAssets((prev) =>
         prev.some((a) => a.asset.id === body.asset.id)
           ? prev
-          : [...prev, { asset: body.asset, deduped: body.deduped, warnings: body.warnings ?? [] }]
+          : [
+              ...prev,
+              {
+                asset: body.asset,
+                deduped: body.deduped,
+                warnings: body.warnings ?? [],
+                converted: body.converted,
+              },
+            ]
       );
       if (body.asset.media_kind === "video") {
         // Mirrors toggleTextOnly's deselect below: a video just became this post's only
@@ -393,6 +405,12 @@ export function Composer({
             ) : hasVideo ? (
               <div className="max-w-xs space-y-2">
                 <CoverFramePicker asset={assets[0].asset} />
+                {assets[0].converted ? (
+                  <p className="inline-block rounded bg-accent-weak px-1.5 py-0.5 text-[11px] font-medium text-accent-strong">
+                    Converted to {assets[0].converted.to} so Instagram will accept it. Your
+                    original is untouched.
+                  </p>
+                ) : null}
                 {assets[0].warnings.length > 0 ? (
                   <ul className="space-y-1">
                     {assets[0].warnings.map((w, i) => (
