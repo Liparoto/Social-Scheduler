@@ -26,12 +26,20 @@ export async function GET(
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
   const variant = req.nextUrl.searchParams.get("variant");
+  // Video defaults to the DERIVATIVE, not the original. An iPhone original is routinely
+  // HEVC, which Chrome cannot decode (canPlayType('video/mp4; codecs="hvc1"') === "") —
+  // the <video> element loads metadata, sizes itself correctly, and then paints nothing.
+  // That silently broke every preview AND the cover-frame scrubber, so a cover could only
+  // be chosen blind. The derivative is H.264 by construction (see lib/video-convert.ts),
+  // and is also the smaller file. Falls back to the original when no derivative exists.
   const rel =
-    variant === "thumb" && asset.thumbnail_path
-      ? asset.thumbnail_path
-      : variant === "publish"
-        ? (asset.publish_path ?? asset.storage_path)
-        : asset.storage_path;
+    asset.media_kind === "video"
+      ? (asset.publish_path ?? asset.storage_path)
+      : variant === "thumb" && asset.thumbnail_path
+        ? asset.thumbnail_path
+        : variant === "publish"
+          ? (asset.publish_path ?? asset.storage_path)
+          : asset.storage_path;
 
   const base = path.resolve(config.assetStorageDir);
   const abs = path.resolve(base, rel);
