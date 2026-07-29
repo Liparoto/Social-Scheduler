@@ -460,6 +460,10 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
 
 export interface PostLibraryRow extends Post {
   first_asset_id: number | null;
+  first_asset_media_kind: "image" | "video" | null;
+  first_asset_cover_frame_ms: number | null;
+  first_asset_width: number | null;
+  first_asset_height: number | null;
   asset_count: number;
   scheduled_count: number;
   posted_count: number;
@@ -478,6 +482,14 @@ export function listPosts(limit = 200): PostLibraryRow[] {
       `SELECT p.*,
          (SELECT pa.asset_id FROM post_assets pa WHERE pa.post_id = p.id
             ORDER BY pa.sort_order LIMIT 1) AS first_asset_id,
+         (SELECT a.media_kind FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_media_kind,
+         (SELECT a.cover_frame_ms FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_cover_frame_ms,
+         (SELECT a.width FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_width,
+         (SELECT a.height FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_height,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status IN ('scheduled','pending_approval','publishing')) AS scheduled_count,
