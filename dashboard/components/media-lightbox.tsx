@@ -85,7 +85,7 @@ export function MediaBadge({
       }}
       aria-label={accessibleName}
       title={accessibleName}
-      className="absolute bottom-1 right-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-ink/70 text-white transition-colors hover:bg-ink/85"
+      className="absolute bottom-1 right-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white transition-colors hover:bg-black/85"
     >
       {mediaKind === "video" ? <PlayGlyph /> : <ExpandGlyph />}
     </button>
@@ -156,7 +156,7 @@ export function MediaLightbox({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
       onClick={onClose}
     >
       <div
@@ -190,7 +190,7 @@ export function MediaLightbox({
             playsInline
             autoPlay={false}
             onError={() => setMediaError(true)}
-            className="max-h-[85vh] max-w-[90vw] rounded-card bg-ink-soft"
+            className="max-h-[85vh] max-w-[90vw] rounded-card bg-black"
           />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
