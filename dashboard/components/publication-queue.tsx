@@ -107,12 +107,27 @@ export function PublicationQueue({
                     <div className="flex items-start gap-3">
                       <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
                         {p.first_asset_id ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={`/api/media/${p.first_asset_id}?variant=thumb`}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
+                          p.post_type === "reel" ? (
+                            // No thumbnail file exists for video (no ffmpeg dependency
+                            // by design) — render the real file with
+                            // preload="metadata" so the browser decodes just the first
+                            // frame, same approach as post-editor.tsx /
+                            // cover-frame-picker.tsx.
+                            <video
+                              src={`/api/media/${p.first_asset_id}`}
+                              preload="metadata"
+                              muted
+                              playsInline
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={`/api/media/${p.first_asset_id}?variant=thumb`}
+                              alt=""
+                              className="h-full w-full object-cover"
+                            />
+                          )
                         ) : null}
                       </div>
                       <div className="min-w-0">

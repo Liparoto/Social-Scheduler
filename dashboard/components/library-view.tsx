@@ -304,12 +304,26 @@ export function LibraryView({
                   className="hover:underline"
                 >
                   {p.first_asset_id ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={`/api/media/${p.first_asset_id}?variant=thumb`}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
+                    p.post_type === "reel" ? (
+                      // No thumbnail file exists for video (no ffmpeg dependency by
+                      // design) — render the real file with preload="metadata" so the
+                      // browser decodes just the first frame, same approach as
+                      // post-editor.tsx / cover-frame-picker.tsx.
+                      <video
+                        src={`/api/media/${p.first_asset_id}`}
+                        preload="metadata"
+                        muted
+                        playsInline
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`/api/media/${p.first_asset_id}?variant=thumb`}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    )
                   ) : p.post_type === "text" ? (
                     <div className="flex h-full w-full items-center justify-center text-center text-[10px] text-faint">
                       Text post

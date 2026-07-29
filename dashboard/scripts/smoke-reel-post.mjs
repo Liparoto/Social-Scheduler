@@ -6,9 +6,12 @@
 // (no platform publishes a mixed carousel); a reel targeted at a Threads channel -> 400
 // (platforms.ts's incompatibleChannelsForPost now gates 'reel' on supportsVideo, the
 // same way it already gated 'text' on supportsText); two images -> 'carousel'
-// (regression); and an unknown asset id -> 400 (the new validation Task 9 added — see
+// (regression); an unknown asset id -> 400 (the new validation Task 9 added — see
 // dashboard/app/api/posts/route.ts's asset lookup, mirroring the pre-existing channel
-// lookup directly above it).
+// lookup directly above it); and saving a single-video DRAFT (posts/draft/route.ts)
+// -> post_type 'reel', not 'single' (that route's own, separate asset-count-only
+// derivation doesn't know about video, so isReel must be threaded through explicitly
+// into the createDraftPost call — this was previously unguarded by any smoke test).
 //
 // Run: node scripts/smoke-reel-post.mjs
 //
@@ -85,6 +88,7 @@ async function main() {
   // 2) Import the real query layer + the actual route handler under test.
   const queries = await import("../lib/queries.ts");
   const postsRoute = await import("../app/api/posts/route.ts");
+  const draftRoute = await import("../app/api/posts/draft/route.ts");
   const { NextRequest } = await import("next/server");
 
   const igChannel = queries.createChannel({
@@ -146,6 +150,14 @@ async function main() {
 
   function postReq(body) {
     return new NextRequest("http://localhost/api/posts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function draftReq(body) {
+    return new NextRequest("http://localhost/api/posts/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -237,6 +249,26 @@ async function main() {
   assert(
     typeof body5.error === "string" && body5.error.includes(String(bogusAssetId)),
     `expected the error to name the unknown asset id, got ${JSON.stringify(body5.error)}`
+  );
+
+  // ---- Scenario 6: saving a single-video DRAFT persists post_type 'reel' ----------
+  // Regression guard for Task 9's fix (c): posts/draft/route.ts computed isReel for
+  // validation only and originally never passed it to createDraftPost, which has its
+  // own separate asset-count-only derivation — so a saved draft reel would have been
+  // persisted as post_type 'single'. This was the one fix in the report unguarded by
+  // any smoke test.
+  const res6 = await draftRoute.POST(
+    draftReq({
+      asset_ids: [videoAsset.id],
+      created_by: "smoke-test",
+    })
+  );
+  assert(res6.status === 201, `expected 201 for a single-video draft, got ${res6.status}`);
+  const body6 = await res6.json();
+  const post6 = queries.getPost(body6.postId);
+  assert(
+    post6.post_type === "reel",
+    `expected draft post_type 'reel', got '${post6.post_type}'`
   );
 
   console.log("PASS");

@@ -41,7 +41,20 @@ export async function POST(req: NextRequest) {
   const hash = crypto.createHash("sha256").update(buf).digest("hex");
   const existing = getAssetByHash(hash);
   if (existing) {
-    return NextResponse.json({ asset: existing, deduped: true });
+    // Re-derive the Reels validator's non-blocking warnings (e.g. "no audio track",
+    // letterbox) on dedup too — otherwise re-uploading the same silent/landscape video
+    // shows the caution once and never again, even though it's still true every time.
+    let warnings: string[] = [];
+    if (existing.media_kind === "video") {
+      try {
+        const meta = readVideoMeta(buf);
+        warnings = validateReel(meta, buf.length, mime).warnings;
+      } catch {
+        // Best-effort only — dedup already succeeded against a previously-validated
+        // asset; a re-parse failure here shouldn't block reusing it.
+      }
+    }
+    return NextResponse.json({ asset: existing, deduped: true, warnings });
   }
 
   // ---- Video: validate, never process ------------------------------------------

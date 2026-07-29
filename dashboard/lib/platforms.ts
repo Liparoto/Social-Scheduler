@@ -163,11 +163,12 @@ export function maxCarousel(value: string): number {
 
 // ---- Post-type / channel compatibility -------------------------------------------
 // The single place that decides "can this post_type go to this channel" client- and
-// server-side. Today only 'text' (caption, no media) is gated — every other post_type
-// carries assets and every platform we know about accepts images/carousels. The worker
-// (worker/publisher.py's _validate) is the real gate and re-checks this at publish
-// time; this exists purely so the UI/API can reject (or hide) the mistake before it
-// ever becomes a publication that dies terminally after being "scheduled".
+// server-side. 'text' (caption, no media) is gated on supportsText, 'reel' is gated on
+// supportsVideo — every other post_type carries assets and every platform we know about
+// accepts images/carousels. The worker (worker/publisher.py's _validate) is the real
+// gate and re-checks this at publish time; this exists purely so the UI/API can reject
+// (or hide) the mistake before it ever becomes a publication that dies terminally after
+// being "scheduled".
 export interface ChannelLikeForCompat {
   id: number;
   platform: string;
@@ -178,8 +179,9 @@ export function incompatibleChannelsForPostType<T extends ChannelLikeForCompat>(
   postType: string,
   channels: T[]
 ): T[] {
-  if (postType !== "text") return [];
-  return channels.filter((c) => !supportsText(c.platform));
+  if (postType === "text") return channels.filter((c) => !supportsText(c.platform));
+  if (postType === "reel") return channels.filter((c) => !supportsVideo(c.platform));
+  return [];
 }
 
 /** "Account name (Platform)" — the consistent way to name an offending channel in an error. */

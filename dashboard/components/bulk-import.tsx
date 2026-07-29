@@ -19,6 +19,7 @@ type Item = {
   deduped: boolean;
   conformMode: ConformMode;
   needsReview: number;
+  mediaKind: "image" | "video";
 };
 
 const card = "rounded-card border border-border bg-surface p-5";
@@ -79,6 +80,7 @@ export function BulkImport({
           deduped: body.deduped,
           conformMode: body.asset.conform_mode,
           needsReview: body.asset.needs_review,
+          mediaKind: body.asset.media_kind,
         },
       ]);
     }
@@ -157,12 +159,26 @@ export function BulkImport({
             {items.map((it, i) => (
               <div key={it.uid} className="flex gap-3">
                 <div className="shrink-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`/api/media/${it.assetId}?variant=thumb`}
-                    alt=""
-                    className="h-20 w-20 rounded-lg object-cover"
-                  />
+                  {it.mediaKind === "video" ? (
+                    // No thumbnail file exists for video (no ffmpeg dependency by
+                    // design) — render the real file with preload="metadata" so the
+                    // browser decodes just the first frame, same approach as
+                    // post-editor.tsx / cover-frame-picker.tsx.
+                    <video
+                      src={`/api/media/${it.assetId}`}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="h-20 w-20 rounded-lg object-cover"
+                    />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/media/${it.assetId}?variant=thumb`}
+                      alt=""
+                      className="h-20 w-20 rounded-lg object-cover"
+                    />
+                  )}
                   {it.needsReview ? (
                     <ConformControl
                       assetId={it.assetId}
