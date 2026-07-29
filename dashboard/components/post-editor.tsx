@@ -195,11 +195,12 @@ export function PostEditor({
               assets.slice(0, 4).map((a) =>
                 a.media_kind === "video" ? (
                   <div key={a.id} className="w-40">
-                    {/* The badge sits top-right so it clears the scrubber and Save
-                        control the picker renders underneath its video. */}
-                    <div className="relative">
-                      <CoverFramePicker asset={a} />
-                      <div className="absolute right-1 top-1">
+                    {/* MediaBadge positions itself bottom-right of its nearest positioned
+                        ancestor, so the slot goes around the picker's VIDEO — not around
+                        the whole picker, whose scrubber and Save control sit underneath. */}
+                    <CoverFramePicker
+                      asset={a}
+                      overlay={
                         <MediaBadge
                           mediaKind="video"
                           label={post.caption ?? undefined}
@@ -207,8 +208,8 @@ export function PostEditor({
                             setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
                           }
                         />
-                      </div>
-                    </div>
+                      }
+                    />
                   </div>
                 ) : (
                   <div key={a.id}>

@@ -148,7 +148,11 @@ set PORT=3939
 echo Starting the dashboard. A browser tab will open at http://localhost:%PORT%
 echo If it doesn't, open that address yourself. Close this window to stop the dashboard.
 echo.
-start "" "http://localhost:%PORT%"
+REM Wait until the dashboard actually answers before opening the browser. This used to
+REM fire immediately, one line before the server was even started, so the tab always
+REM opened on a dead port and showed a connection error. Spawns a helper window that
+REM polls with curl (present on Windows 10+) for up to 90s, then gives up quietly.
+start "SocialScheduler Browser" /min cmd /c "for /l %%i in (1,1,90) do (curl -sf -o NUL http://localhost:%PORT% && (start "" "http://localhost:%PORT%" & exit) || timeout /t 1 /nobreak >NUL)"
 pushd dashboard
 call npm run dev
 popd

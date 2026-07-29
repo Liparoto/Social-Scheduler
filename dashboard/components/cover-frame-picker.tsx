@@ -9,7 +9,15 @@ import { videoPreviewSrc } from "@/lib/format";
  *  What is stored is a single millisecond offset — Instagram extracts the frame itself
  *  via thumb_offset, so nothing is uploaded. The <video> here is preview only.
  *  Because the choice lives on the asset, a recycled evergreen video reuses it. */
-export function CoverFramePicker({ asset }: { asset: Asset }) {
+/** `overlay` is rendered over the video itself (not over the scrubber below it), so a
+ *  caller can place a control such as the lightbox badge without knowing this layout. */
+export function CoverFramePicker({
+  asset,
+  overlay,
+}: {
+  asset: Asset;
+  overlay?: React.ReactNode;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [ms, setMs] = useState(asset.cover_frame_ms ?? 0);
   const [saved, setSaved] = useState(asset.cover_frame_ms);
@@ -48,13 +56,15 @@ export function CoverFramePicker({ asset }: { asset: Asset }) {
 
   return (
     <div className="space-y-2">
+      <div className="relative w-full max-w-xs">
+      {overlay}
       <video
         ref={videoRef}
         src={videoPreviewSrc(asset.id, asset.cover_frame_ms)}
         preload="metadata"
         muted
         playsInline
-        className="w-full max-w-xs rounded-md border border-border"
+        className="w-full rounded-md border border-border"
         onLoadedMetadata={(e) => {
           // Same value the URL's #t= fragment already seeked to, so this doesn't fight
           // it — it's the fallback for browsers that ignore media fragments, and the
@@ -62,6 +72,7 @@ export function CoverFramePicker({ asset }: { asset: Asset }) {
           e.currentTarget.currentTime = (ms > 0 ? ms : 100) / 1000;
         }}
       />
+      </div>
       <label className="block text-sm font-medium">
         Cover frame
         <input

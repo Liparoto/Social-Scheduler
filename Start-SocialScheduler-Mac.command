@@ -141,6 +141,18 @@ export PORT=3939
 echo "Starting the dashboard. A browser tab will open at http://localhost:$PORT"
 echo "If it doesn't, open that address yourself. Close this window to stop everything."
 echo
-( sleep 4 && open "http://localhost:$PORT" ) &
+# Wait until the dashboard actually answers before opening the browser. A fixed sleep
+# guessed wrong on a cold start — Next.js compiles on first run, so the tab opened on a
+# dead port, showed a connection error, and you had to type the address in yourself.
+# Polls for up to 90s, then gives up quietly (the message above still tells you the URL).
+(
+  for _ in $(seq 1 90); do
+    if curl -sf -o /dev/null "http://localhost:$PORT"; then
+      open "http://localhost:$PORT"
+      exit 0
+    fi
+    sleep 1
+  done
+) &
 cd dashboard || pause_and_exit "Couldn't find the 'dashboard' folder."
 npm run dev
