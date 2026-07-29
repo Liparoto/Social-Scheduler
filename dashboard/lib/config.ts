@@ -38,12 +38,24 @@ function resolveRepoPath(p: string): string {
   return path.isAbsolute(p) ? p : path.join(REPO_ROOT, p);
 }
 
+// VIDEO_CONVERT_TIMEOUT is seconds in .env (matching the other human-facing interval
+// envs like WORKER_POLL_INTERVAL) but consumed in ms by convertVideo()'s execFile
+// timeout. Guard against a blank/garbage value resolving to 0 (which would time out
+// every conversion instantly) by falling back to the 300s default.
+const videoConvertTimeoutSec = Number(get("VIDEO_CONVERT_TIMEOUT", "300"));
+
 export const config = {
   repoRoot: REPO_ROOT,
   databasePath: resolveRepoPath(get("DATABASE_PATH", "data/socialscheduler.db")),
   assetStorageDir: resolveRepoPath(get("ASSET_STORAGE_DIR", "data/assets")),
   publicAssetBaseUrl: get("PUBLIC_ASSET_BASE_URL", ""),
   defaultTimezone: get("DEFAULT_TIMEZONE", "UTC"),
+  // "auto" | "avconvert" | "ffmpeg" | "off" — see lib/video-convert.ts's findConverter().
+  videoConverter: get("VIDEO_CONVERTER", "auto"),
+  videoConvertTimeoutMs:
+    (Number.isFinite(videoConvertTimeoutSec) && videoConvertTimeoutSec > 0
+      ? videoConvertTimeoutSec
+      : 300) * 1000,
 };
 
 // ---- Live safety-switch reads (DRY_RUN / KILL_SWITCH) -----------------------------

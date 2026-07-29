@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { config } from "@/lib/config";
 import { getAssetByHash, upsertAssetByHash } from "@/lib/queries";
-import { conformImage } from "@/lib/conform";
+import { conformImage, type ConformMode } from "@/lib/conform";
 import { readVideoMeta, VideoParseError } from "@/lib/video-meta";
-import { validateReel, REEL_MIME_TYPES } from "@/lib/video-spec";
+import { validateReel, classifyReelErrors, REEL_MIME_TYPES } from "@/lib/video-spec";
+import { findConverter, convertVideo, ConvertError } from "@/lib/video-convert";
 
 export const runtime = "nodejs";
 
@@ -57,10 +59,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ asset: existing, deduped: true, warnings });
   }
 
-  // ---- Video: validate, never process ------------------------------------------
-  // No transcoding by design (see the design spec, Decision 1) — we check the file
-  // against Instagram's Reels spec and refuse with a specific reason if it can't be
-  // published, rather than silently rewriting the owner's footage.
+  // ---- Video: validate, converting when the spec allows it ----------------------
+  // classifyReelErrors splits problems into `fatal` (too short/long — trimming is an
+  // editorial call this app must never make, and no re-encode adds footage back) and
+  // `convertible` (too wide/large/wrong container — a downscale/re-encode genuinely
+  // fixes these). `fatal` is checked FIRST and returns immediately: a 15-minute 4K
+  // video must be refused in milliseconds, not after a multi-minute transcode that
+  // was always going to be refused anyway.
   if (isVideo) {
     let meta;
     try {
@@ -71,14 +76,121 @@ export async function POST(req: NextRequest) {
       }
       throw err;
     }
-    const check = validateReel(meta, buf.length, mime);
-    if (check.errors.length > 0) {
-      return NextResponse.json({ error: check.errors.join(" ") }, { status: 422 });
+
+    const check = classifyReelErrors(meta, buf.length, mime);
+    if (check.fatal.length > 0) {
+      return NextResponse.json({ error: check.fatal.join(" ") }, { status: 422 });
     }
 
     const storageRel = `${hash}.${ext}`;
+
+    if (check.convertible.length === 0) {
+      // In spec already — today's path, unchanged: no conform derivative, publish_path
+      // stays NULL, so the worker's existing _resolve_url precedence falls through to
+      // storage_path with no worker change.
+      await fs.mkdir(config.assetStorageDir, { recursive: true });
+      await fs.writeFile(path.join(config.assetStorageDir, storageRel), buf);
+
+      const { asset, deduped } = upsertAssetByHash({
+        content_hash: hash,
+        media_kind: "video",
+        original_filename: file.name || null,
+        storage_path: storageRel,
+        public_url: config.publicAssetBaseUrl
+          ? `${config.publicAssetBaseUrl.replace(/\/$/, "")}/${storageRel}`
+          : null,
+        // No thumbnail file: sharp cannot read video and ffmpeg is deliberately not a
+        // dependency. Surfaces render a <video> element instead (design spec, Components).
+        thumbnail_path: null,
+        mime_type: mime,
+        width: meta.width,
+        height: meta.height,
+        byte_size: buf.length,
+        publish_path: null,
+        duration_ms: meta.duration_ms,
+        has_audio: meta.has_audio ? 1 : 0,
+      });
+      return NextResponse.json({ asset, deduped, warnings: check.warnings });
+    }
+
+    // Convertible: too wide, too large, or the wrong container. Try to fix it instead
+    // of refusing footage the owner's phone recorded by default.
+    const converter = findConverter(config.videoConverter);
+    if (!converter) {
+      return NextResponse.json(
+        {
+          error:
+            `${check.convertible.join(" ")} Installing ffmpeg ` +
+            `(\`brew install ffmpeg\`) would let this app convert and publish it automatically.`,
+        },
+        { status: 422 }
+      );
+    }
+
+    const tmpStamp = `${hash}-${process.pid}-${Date.now()}`;
+    const inputTmp = path.join(os.tmpdir(), `ss-convert-in-${tmpStamp}.${ext}`);
+    const outputTmp = path.join(os.tmpdir(), `ss-convert-out-${tmpStamp}.mp4`);
+    const cleanupTemps = async () => {
+      await Promise.all([
+        fs.rm(inputTmp, { force: true }),
+        fs.rm(outputTmp, { force: true }),
+      ]);
+    };
+
+    await fs.writeFile(inputTmp, buf);
+    try {
+      await convertVideo(inputTmp, outputTmp, {
+        converter,
+        timeoutMs: config.videoConvertTimeoutMs,
+      });
+    } catch (err) {
+      await cleanupTemps();
+      if (err instanceof ConvertError) {
+        return NextResponse.json(
+          { error: `Converting this video failed: ${err.message}` },
+          { status: 422 }
+        );
+      }
+      throw err;
+    }
+
+    // Never trust the converter's output blindly — re-parse and re-validate the
+    // derivative with the exact same checks the original went through.
+    let derivBuf: Buffer;
+    let derivMeta;
+    try {
+      derivBuf = await fs.readFile(outputTmp);
+      derivMeta = readVideoMeta(derivBuf);
+    } catch (err) {
+      await cleanupTemps();
+      const msg = err instanceof VideoParseError ? err.message : String(err);
+      return NextResponse.json(
+        { error: `Conversion produced an unreadable video: ${msg}` },
+        { status: 422 }
+      );
+    }
+    const derivCheck = classifyReelErrors(derivMeta, derivBuf.length, "video/mp4");
+    if (derivCheck.fatal.length > 0 || derivCheck.convertible.length > 0) {
+      await cleanupTemps();
+      return NextResponse.json(
+        {
+          error:
+            `Conversion did not produce a usable video. ` +
+            `${[...derivCheck.fatal, ...derivCheck.convertible].join(" ")}`,
+        },
+        { status: 422 }
+      );
+    }
+
+    // Everything checks out — write the ORIGINAL to storage_path (retained, untouched)
+    // and the DERIVATIVE to pub/<hash>.mp4 (what actually gets published).
+    const publishRel = `pub/${hash}.mp4`;
+    const publishAbs = path.join(config.assetStorageDir, publishRel);
     await fs.mkdir(config.assetStorageDir, { recursive: true });
+    await fs.mkdir(path.dirname(publishAbs), { recursive: true });
     await fs.writeFile(path.join(config.assetStorageDir, storageRel), buf);
+    await fs.writeFile(publishAbs, derivBuf);
+    await cleanupTemps();
 
     const { asset, deduped } = upsertAssetByHash({
       content_hash: hash,
@@ -88,20 +200,29 @@ export async function POST(req: NextRequest) {
       public_url: config.publicAssetBaseUrl
         ? `${config.publicAssetBaseUrl.replace(/\/$/, "")}/${storageRel}`
         : null,
-      // No thumbnail file: sharp cannot read video and ffmpeg is deliberately not a
-      // dependency. Surfaces render a <video> element instead (design spec, Components).
       thumbnail_path: null,
       mime_type: mime,
-      width: meta.width,
-      height: meta.height,
       byte_size: buf.length,
-      // No conform derivative — publish_path stays NULL, so the worker's existing
-      // _resolve_url precedence falls through to storage_path with no worker change.
-      publish_path: null,
-      duration_ms: meta.duration_ms,
-      has_audio: meta.has_audio ? 1 : 0,
+      publish_path: publishRel,
+      conform_mode: "downscale",
+      needs_review: 1,
+      // Dimensions/duration/audio describe the DERIVATIVE — that's the file that's
+      // actually published, and the cover-frame scrubber is bounded by its duration.
+      width: derivMeta.width,
+      height: derivMeta.height,
+      duration_ms: derivMeta.duration_ms,
+      has_audio: derivMeta.has_audio ? 1 : 0,
     });
-    return NextResponse.json({ asset, deduped, warnings: check.warnings });
+
+    return NextResponse.json({
+      asset,
+      deduped,
+      warnings: derivCheck.warnings,
+      converted: {
+        from: `${meta.width}×${meta.height}`,
+        to: `${derivMeta.width}×${derivMeta.height}`,
+      },
+    });
   }
 
   const storageRel = `${hash}.${ext}`;
@@ -134,7 +255,11 @@ export async function POST(req: NextRequest) {
   // alongside the original. Never let a conform failure fail the upload — the worker
   // falls back to the original when publish_path is null.
   let publishPath: string | null = null;
-  let conformMode: "none" | "crop" | "pad" = "none";
+  // Typed via ConformMode (not the narrower "none"|"crop"|"pad") only because that type
+  // now includes "downscale" for the video path below — conformImage() itself (called
+  // a few lines down) never returns "downscale"; this is a type-compatibility widening,
+  // not a behavior change.
+  let conformMode: ConformMode = "none";
   let needsReview = 0;
   try {
     const conformed = await conformImage(buf, "crop");
