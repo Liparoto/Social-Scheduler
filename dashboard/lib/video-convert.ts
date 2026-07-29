@@ -70,7 +70,17 @@ interface ConvertOpts {
   timeoutMs: number;
 }
 
-function buildArgs(converter: Converter, input: string, output: string): string[] {
+// Fits the video inside a 1920x1920 box, preserving aspect ratio, matching what avconvert's
+// Preset1920x1080 does for both landscape and portrait input:
+// - force_original_aspect_ratio=decrease scales down to fit inside the w/h box without
+//   distorting or padding (it never scales up, and never crops).
+// - force_divisible_by=2 rounds the resulting dimensions to the nearest even number, which
+//   h264 requires. This replaces the old "-2" shorthand, which only kept one derived
+//   dimension even and, combined with a width-only cap, let portrait video balloon past a
+//   1080x1920 shape (2160x3840 -> 1920x3414 instead of 1080x1920).
+const FFMPEG_SCALE_FILTER = "scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2";
+
+export function buildArgs(converter: Converter, input: string, output: string): string[] {
   if (converter === "avconvert") {
     return ["-s", input, "-p", "Preset1920x1080", "-o", output, "--replace"];
   }
@@ -79,7 +89,7 @@ function buildArgs(converter: Converter, input: string, output: string): string[
     "-i",
     input,
     "-vf",
-    "scale='min(1920,iw)':-2",
+    FFMPEG_SCALE_FILTER,
     "-c:v",
     "h264",
     "-c:a",
