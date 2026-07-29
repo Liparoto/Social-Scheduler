@@ -7,7 +7,7 @@ import type { ConformMode } from "@/lib/conform";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
-import { channelColor } from "@/lib/format";
+import { channelColor, videoPreviewSrc } from "@/lib/format";
 
 // `uid` is a per-tile client id: two tiles can share an assetId (re-importing a
 // deduped image), so React keys must not be the assetId.
@@ -20,6 +20,7 @@ type Item = {
   conformMode: ConformMode;
   needsReview: number;
   mediaKind: "image" | "video";
+  coverFrameMs: number | null;
 };
 
 const card = "rounded-card border border-border bg-surface p-5";
@@ -81,6 +82,10 @@ export function BulkImport({
           conformMode: body.asset.conform_mode,
           needsReview: body.asset.needs_review,
           mediaKind: body.asset.media_kind,
+          // Already on the upload response — a fresh upload's is always null, but a
+          // deduped re-upload of a video that already has a chosen cover reuses it, so
+          // the preview shows the actual cover instead of frame 0.
+          coverFrameMs: body.asset.cover_frame_ms ?? null,
         },
       ]);
     }
@@ -163,9 +168,10 @@ export function BulkImport({
                     // No thumbnail file exists for video (no ffmpeg dependency by
                     // design) — render the real file with preload="metadata" so the
                     // browser decodes just the first frame, same approach as
-                    // post-editor.tsx / cover-frame-picker.tsx.
+                    // post-editor.tsx / cover-frame-picker.tsx. videoPreviewSrc's #t=
+                    // fragment is what makes that frame actually paint in Safari.
                     <video
-                      src={`/api/media/${it.assetId}`}
+                      src={videoPreviewSrc(it.assetId, it.coverFrameMs)}
                       preload="metadata"
                       muted
                       playsInline

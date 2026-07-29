@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
-import { channelColor } from "@/lib/format";
+import { channelColor, videoPreviewSrc } from "@/lib/format";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 
@@ -142,9 +142,12 @@ export function ScheduleFromLibrary({
                     // No thumbnail file exists for video (no ffmpeg dependency by
                     // design) — render the real file with preload="metadata" so the
                     // browser decodes just the first frame, same approach as
-                    // post-editor.tsx / cover-frame-picker.tsx.
+                    // post-editor.tsx / cover-frame-picker.tsx. videoPreviewSrc's #t=
+                    // fragment is what makes that frame actually paint in Safari; this
+                    // list doesn't load cover_frame_ms (would need a new query), so it
+                    // always uses the small non-zero fallback offset.
                     <video
-                      src={`/api/media/${p.first_asset_id}`}
+                      src={videoPreviewSrc(p.first_asset_id)}
                       preload="metadata"
                       muted
                       playsInline
@@ -184,8 +187,12 @@ export function ScheduleFromLibrary({
           <div className="flex gap-3">
             {selected.first_asset_id ? (
               selected.post_type === "reel" ? (
+                // videoPreviewSrc's #t= fragment forces Safari to paint a frame for a
+                // preload="metadata" video (Chrome already does this for free). No
+                // cover_frame_ms on this row (would need a new query), so it falls
+                // back to a small non-zero offset.
                 <video
-                  src={`/api/media/${selected.first_asset_id}`}
+                  src={videoPreviewSrc(selected.first_asset_id)}
                   preload="metadata"
                   muted
                   playsInline

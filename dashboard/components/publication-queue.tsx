@@ -6,7 +6,7 @@ import type { PublicationStatus, Platform } from "@/lib/types";
 import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
-import { formatInTz, tzAbbrev } from "@/lib/format";
+import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
 
 type StatusFilter = "all" | PublicationStatus;
 
@@ -112,9 +112,12 @@ export function PublicationQueue({
                             // by design) — render the real file with
                             // preload="metadata" so the browser decodes just the first
                             // frame, same approach as post-editor.tsx /
-                            // cover-frame-picker.tsx.
+                            // cover-frame-picker.tsx. videoPreviewSrc's #t= fragment is
+                            // what makes that frame actually paint in Safari; this row
+                            // doesn't load cover_frame_ms (would need a new query), so
+                            // it always uses the small non-zero fallback offset.
                             <video
-                              src={`/api/media/${p.first_asset_id}`}
+                              src={videoPreviewSrc(p.first_asset_id)}
                               preload="metadata"
                               muted
                               playsInline

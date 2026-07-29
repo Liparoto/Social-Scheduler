@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { channelColor } from "@/lib/format";
+import { channelColor, videoPreviewSrc } from "@/lib/format";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
 import type { Asset, Period, PeriodMode, Tag } from "@/lib/types";
@@ -697,8 +697,12 @@ export function Composer({
               <div className="aspect-square bg-surface-sunken">
                 {assets[0] ? (
                   hasVideo ? (
+                    // videoPreviewSrc's #t= fragment forces Safari to paint a frame on
+                    // load (Chrome already does this for free); the owner's chosen
+                    // cover frame is already in hand here, so the preview shows the
+                    // same frame as the cover picker above instead of frame 0.
                     <video
-                      src={`/api/media/${assets[0].asset.id}`}
+                      src={videoPreviewSrc(assets[0].asset.id, assets[0].asset.cover_frame_ms)}
                       className="h-full w-full object-cover"
                       muted
                       playsInline

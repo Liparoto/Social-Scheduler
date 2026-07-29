@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { Asset } from "@/lib/types";
+import { videoPreviewSrc } from "@/lib/format";
 
 /** Pick which frame of a video becomes its cover.
  *
@@ -23,6 +24,12 @@ export function CoverFramePicker({ asset }: { asset: Asset }) {
     if (videoRef.current) videoRef.current.currentTime = next / 1000;
   }
 
+  // Mirrors videoPreviewSrc's fallback: seeking to exactly 0 doesn't reliably force
+  // Safari to paint a frame, so the very first seek (on load, before the owner has
+  // touched the scrubber) nudges off zero. Any real scrub value (including one the
+  // owner deliberately drags back to 0 afterward) is honored as-is — only the initial,
+  // never-touched "0" is suspect.
+
   async function save() {
     setBusy(true);
     setError(null);
@@ -43,13 +50,16 @@ export function CoverFramePicker({ asset }: { asset: Asset }) {
     <div className="space-y-2">
       <video
         ref={videoRef}
-        src={`/api/media/${asset.id}`}
+        src={videoPreviewSrc(asset.id, asset.cover_frame_ms)}
         preload="metadata"
         muted
         playsInline
         className="w-full max-w-xs rounded-md border border-border"
         onLoadedMetadata={(e) => {
-          e.currentTarget.currentTime = ms / 1000;
+          // Same value the URL's #t= fragment already seeked to, so this doesn't fight
+          // it — it's the fallback for browsers that ignore media fragments, and the
+          // mechanism the scrubber itself uses for every seek after this first one.
+          e.currentTarget.currentTime = (ms > 0 ? ms : 100) / 1000;
         }}
       />
       <label className="block text-sm font-medium">

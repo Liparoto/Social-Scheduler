@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { channelColor, formatInTz } from "@/lib/format";
+import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 
 interface PostLite {
@@ -308,9 +308,12 @@ export function LibraryView({
                       // No thumbnail file exists for video (no ffmpeg dependency by
                       // design) — render the real file with preload="metadata" so the
                       // browser decodes just the first frame, same approach as
-                      // post-editor.tsx / cover-frame-picker.tsx.
+                      // post-editor.tsx / cover-frame-picker.tsx. The #t= fragment
+                      // (videoPreviewSrc) is what actually makes that frame paint in
+                      // Safari; this list doesn't load cover_frame_ms (would need a new
+                      // query), so it always uses the small non-zero fallback offset.
                       <video
-                        src={`/api/media/${p.first_asset_id}`}
+                        src={videoPreviewSrc(p.first_asset_id)}
                         preload="metadata"
                         muted
                         playsInline
