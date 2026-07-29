@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
+import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 
 interface PostLite {
   id: number;
@@ -12,6 +13,10 @@ interface PostLite {
   post_type: string;
   status: string;
   first_asset_id: number | null;
+  first_asset_media_kind: "image" | "video" | null;
+  first_asset_cover_frame_ms: number | null;
+  first_asset_width: number | null;
+  first_asset_height: number | null;
   asset_count: number;
   scheduled_count: number;
   posted_count: number;
@@ -62,6 +67,9 @@ export function LibraryView({
   const [kindFilter, setKindFilter] = useState<"all" | "evergreen" | "one_time">("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
+  const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(
+    null
+  );
 
   function toggle(id: number) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -284,10 +292,12 @@ export function LibraryView({
               tabIndex={0}
               onClick={() => toggle(p.id)}
               onKeyDown={(e) => {
-                // Let keyboard activation of the nested title/thumbnail link navigate
-                // without also toggling selection (stopPropagation on the link guards
-                // click, not the bubbling keydown).
-                if ((e.target as HTMLElement).closest("a")) return;
+                // Let keyboard activation of the nested title/thumbnail link, or the
+                // media badge button, do its own thing without also toggling selection
+                // (stopPropagation on their onClick guards mouse clicks, not the bubbling
+                // keydown — and without this guard, this handler's preventDefault() below
+                // would also cancel the button's own Enter/Space activation).
+                if ((e.target as HTMLElement).closest("a, button")) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   toggle(p.id);
@@ -337,6 +347,24 @@ export function LibraryView({
                   <span className="data absolute inset-0 flex items-center justify-center bg-brand/70 text-sm font-semibold text-white">
                     {order}
                   </span>
+                ) : null}
+                {p.first_asset_id && p.first_asset_media_kind ? (
+                  <MediaBadge
+                    mediaKind={p.first_asset_media_kind}
+                    label={p.caption ?? undefined}
+                    onOpen={() =>
+                      setOpenMedia({
+                        label: p.caption || `Post ${p.id}`,
+                        asset: {
+                          id: p.first_asset_id as number,
+                          media_kind: p.first_asset_media_kind as "image" | "video",
+                          cover_frame_ms: p.first_asset_cover_frame_ms,
+                          width: p.first_asset_width,
+                          height: p.first_asset_height,
+                        },
+                      })
+                    }
+                  />
                 ) : null}
               </div>
               <div className="min-w-0 flex-1">
@@ -523,6 +551,14 @@ export function LibraryView({
           </div>
         </div>
       </div>
+
+      {openMedia ? (
+        <MediaLightbox
+          asset={openMedia.asset}
+          label={openMedia.label}
+          onClose={() => setOpenMedia(null)}
+        />
+      ) : null}
     </div>
   );
 }
