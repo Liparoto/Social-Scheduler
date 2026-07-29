@@ -44,14 +44,34 @@ function resolveRepoPath(p: string): string {
 // every conversion instantly) by falling back to the 300s default.
 const videoConvertTimeoutSec = Number(get("VIDEO_CONVERT_TIMEOUT", "300"));
 
+// "auto" | "avconvert" | "ffmpeg" | "off" — see lib/video-convert.ts's findConverter().
+// Validated the same way asBoolLive() below validates DRY_RUN/KILL_SWITCH: an explicit
+// allow-list, matched case-insensitively so "Off"/"OFF" behave like "off" rather than
+// silently falling through to auto-detect. "off" is a safety switch — failing OPEN
+// (running a conversion the operator meant to disable) on a typo is the wrong direction
+// to fail, so an unrecognized value falls back to "auto" (today's default) with a loud
+// warning, rather than being guessed at silently. A blank value is the documented way to
+// request "auto" (see .env.example) and warns for nothing.
+const VALID_VIDEO_CONVERTERS = new Set(["auto", "off", "avconvert", "ffmpeg"]);
+function resolveVideoConverter(): string {
+  const raw = get("VIDEO_CONVERTER", "auto");
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "") return "auto";
+  if (VALID_VIDEO_CONVERTERS.has(normalized)) return normalized;
+  console.warn(
+    `VIDEO_CONVERTER="${raw}" is not one of auto/off/avconvert/ffmpeg — falling back to ` +
+      `"auto". If you meant to disable conversion, set VIDEO_CONVERTER=off exactly.`
+  );
+  return "auto";
+}
+
 export const config = {
   repoRoot: REPO_ROOT,
   databasePath: resolveRepoPath(get("DATABASE_PATH", "data/socialscheduler.db")),
   assetStorageDir: resolveRepoPath(get("ASSET_STORAGE_DIR", "data/assets")),
   publicAssetBaseUrl: get("PUBLIC_ASSET_BASE_URL", ""),
   defaultTimezone: get("DEFAULT_TIMEZONE", "UTC"),
-  // "auto" | "avconvert" | "ffmpeg" | "off" — see lib/video-convert.ts's findConverter().
-  videoConverter: get("VIDEO_CONVERTER", "auto"),
+  videoConverter: resolveVideoConverter(),
   videoConvertTimeoutMs:
     (Number.isFinite(videoConvertTimeoutSec) && videoConvertTimeoutSec > 0
       ? videoConvertTimeoutSec

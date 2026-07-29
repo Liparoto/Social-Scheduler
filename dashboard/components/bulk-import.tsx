@@ -179,7 +179,7 @@ export function BulkImport({
                       className="h-20 w-20 rounded-lg object-cover"
                     />
                   )}
-                  {it.needsReview ? (
+                  {it.mediaKind !== "video" && it.needsReview ? (
                     <ConformControl
                       assetId={it.assetId}
                       conformMode={it.conformMode}

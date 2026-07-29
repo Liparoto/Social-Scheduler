@@ -146,8 +146,13 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       await cleanupTemps();
       if (err instanceof ConvertError) {
+        // Keep the raw ConvertError (temp file paths, the full converter command line)
+        // server-side only — it's useful for debugging but is noise the owner shouldn't
+        // have to read in an upload-failure toast. No secrets in it either way; this is
+        // purely about signal-to-noise for the 422 body.
+        console.error("Video conversion failed:", err.message);
         return NextResponse.json(
-          { error: `Converting this video failed: ${err.message}` },
+          { error: "Converting this video failed — it may be corrupt or in an unsupported format." },
           { status: 422 }
         );
       }
@@ -163,9 +168,14 @@ export async function POST(req: NextRequest) {
       derivMeta = readVideoMeta(derivBuf);
     } catch (err) {
       await cleanupTemps();
-      const msg = err instanceof VideoParseError ? err.message : String(err);
+      // Same reasoning as above: log the real cause (absolute temp path, parse error)
+      // server-side, return a short owner-facing message.
+      console.error(
+        "Conversion produced an unreadable derivative:",
+        err instanceof VideoParseError ? err.message : String(err)
+      );
       return NextResponse.json(
-        { error: `Conversion produced an unreadable video: ${msg}` },
+        { error: "Converting this video didn't produce a usable file. Please try a different video." },
         { status: 422 }
       );
     }
@@ -197,8 +207,15 @@ export async function POST(req: NextRequest) {
       media_kind: "video",
       original_filename: file.name || null,
       storage_path: storageRel,
+      // MUST point at the DERIVATIVE (publishRel), not the original (storageRel).
+      // worker/publisher.py's _resolve_url gives public_url absolute precedence over
+      // publish_path, so on any install with PUBLIC_ASSET_BASE_URL set, handing it the
+      // original here would mean Meta gets cURL'd the exact 2160-wide footage this
+      // route just proved Reels will refuse — silently defeating the whole conversion.
+      // (Contrast the image branch below, which deliberately keeps public_url on the
+      // original — see the comment there for why that asymmetry is fine.)
       public_url: config.publicAssetBaseUrl
-        ? `${config.publicAssetBaseUrl.replace(/\/$/, "")}/${storageRel}`
+        ? `${config.publicAssetBaseUrl.replace(/\/$/, "")}/${publishRel}`
         : null,
       thumbnail_path: null,
       mime_type: mime,
@@ -247,6 +264,15 @@ export async function POST(req: NextRequest) {
     // Thumbnail is a nicety — if sharp chokes, keep the original and move on.
   }
 
+  // Deliberately points at the ORIGINAL, not the (possibly-conformed) publish_path
+  // derivative — asymmetric with the video branch above, and intentionally so. An
+  // un-cropped image is still a legal Instagram post: Meta accepts any aspect ratio in
+  // its own range and will itself crop/letterbox on publish (see video-spec.ts's
+  // warnAboveRatio/warnBelowRatio comment for the video equivalent of this behavior).
+  // A too-wide VIDEO, by contrast, is hard-refused by Reels — there is no server-side
+  // fallback, so public_url must resolve to something Meta will actually accept. If
+  // that ever stops being true for images (e.g. a future spec req makes conform
+  // mandatory), this needs the same fix as the video branch.
   const publicUrl = config.publicAssetBaseUrl
     ? `${config.publicAssetBaseUrl.replace(/\/$/, "")}/${storageRel}`
     : null;

@@ -73,7 +73,83 @@ if (!process.env[REEXEC_FLAG]) {
   if (defaultStatus !== 0) process.exit(defaultStatus);
 
   const offStatus = runChild("off", { VIDEO_CONVERTER: "off" });
-  process.exit(offStatus);
+  if (offStatus !== 0) process.exit(offStatus);
+
+  // ---- Minor 8 (review follow-up): conversion-failure and derivative-still-invalid --
+  // Both scenarios need a converter outcome that's deterministic regardless of what's
+  // actually installed on this machine (and regardless of whether real encoded video
+  // data would happen to convert). VIDEO_CONVERTER=ffmpeg bypasses the real
+  // avconvert/ffmpeg probe entirely (findConverter() returns an explicit override
+  // as-is — see lib/video-convert.ts), and a fake "ffmpeg" script placed first on PATH
+  // stands in for the real binary.
+  const fakeFfmpegFailDir = makeFakeFfmpegScript();
+  const convertFailStatus = runChild("convert-fail", {
+    VIDEO_CONVERTER: "ffmpeg",
+    FAKE_FFMPEG_MODE: "fail",
+    PATH: `${fakeFfmpegFailDir}${path.delimiter}${process.env.PATH || ""}`,
+  });
+  fs.rmSync(fakeFfmpegFailDir, { recursive: true, force: true });
+  if (convertFailStatus !== 0) process.exit(convertFailStatus);
+
+  const fakeFfmpegBadOutputDir = makeFakeFfmpegScript();
+  const badOutputFixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "ss-bad-output-fixture-"));
+  const badOutputFixture = path.join(badOutputFixtureDir, "bad-output.mp4");
+  fs.writeFileSync(
+    badOutputFixture,
+    file({ timescale: 600, duration: 6000, w: 2200, h: 3911, audio: true })
+  );
+  const badOutputStatus = runChild("bad-output", {
+    VIDEO_CONVERTER: "ffmpeg",
+    FAKE_FFMPEG_MODE: "bad-output",
+    FAKE_FFMPEG_BAD_OUTPUT_SRC: badOutputFixture,
+    PATH: `${fakeFfmpegBadOutputDir}${path.delimiter}${process.env.PATH || ""}`,
+  });
+  fs.rmSync(fakeFfmpegBadOutputDir, { recursive: true, force: true });
+  fs.rmSync(badOutputFixtureDir, { recursive: true, force: true });
+  process.exit(badOutputStatus);
+}
+
+/**
+ * Writes a fake "ffmpeg" shell script to a fresh scratch directory and returns that
+ * directory (to be prepended to the child's PATH). Behavior is chosen at run time via
+ * FAKE_FFMPEG_MODE, read from the child's env:
+ * - "fail": always exits 1 (simulates ConvertError — a real converter choking on this
+ *   input).
+ * - "bad-output": copies FAKE_FFMPEG_BAD_OUTPUT_SRC to whatever path was passed as the
+ *   last CLI argument (buildArgs() in lib/video-convert.ts always puts the output path
+ *   last for both converters), then exits 0 — simulates a "successful" conversion that
+ *   still doesn't satisfy the Reels spec.
+ */
+function makeFakeFfmpegScript() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ss-fake-ffmpeg-"));
+  const scriptPath = path.join(dir, "ffmpeg");
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "#!/bin/sh",
+      "# Fake ffmpeg for scripts/smoke-video-convert-upload.mjs — see makeFakeFfmpegScript()",
+      "# in that file for what each FAKE_FFMPEG_MODE does and why this exists.",
+      'case "$FAKE_FFMPEG_MODE" in',
+      "  fail)",
+      '    echo "fake ffmpeg: simulated failure for smoke test" 1>&2',
+      "    exit 1",
+      "    ;;",
+      "  bad-output)",
+      '    out=""',
+      '    for a in "$@"; do out="$a"; done',
+      '    cp "$FAKE_FFMPEG_BAD_OUTPUT_SRC" "$out"',
+      "    exit 0",
+      "    ;;",
+      "  *)",
+      '    echo "fake ffmpeg: FAKE_FFMPEG_MODE not set to fail|bad-output" 1>&2',
+      "    exit 1",
+      "    ;;",
+      "esac",
+      "",
+    ].join("\n")
+  );
+  fs.chmodSync(scriptPath, 0o755);
+  return dir;
 }
 
 function fail(reason) {
@@ -168,6 +244,29 @@ function countAssetRows(Database, dbFile, contentHash) {
   }
 }
 
+/** Every scratch DB is fresh per child process, so on the convert-fail/bad-output
+ *  children (a single upload attempt each) this is equivalent to "no row inserted at
+ *  all" without needing to compute the upload's content hash. */
+function countAllAssetRows(Database, dbFile) {
+  const db = new Database(dbFile, { readonly: true });
+  try {
+    return db.prepare("SELECT COUNT(*) AS n FROM assets").get().n;
+  } finally {
+    db.close();
+  }
+}
+
+/** Recursive listing of the OS tmpdir entries this app's own conversion path creates
+ *  (scripts/smoke-video-convert-upload.mjs's Minor-8 scenarios check this stays empty
+ *  after a 422 — cleanupTemps() in the upload route must always run). Not recursive:
+ *  ss-convert-* files are written flat into os.tmpdir(), never in a subdirectory. */
+function listTmpConvertFiles() {
+  return fs
+    .readdirSync(os.tmpdir())
+    .filter((f) => f.startsWith("ss-convert-"))
+    .sort();
+}
+
 async function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const dbPath = process.env.DATABASE_PATH;
@@ -249,6 +348,95 @@ async function main() {
       JSON.stringify(beforeListing) === JSON.stringify(afterListing),
       `expected nothing written to the asset store when VIDEO_CONVERTER=off; ` +
         `before=${JSON.stringify(beforeListing)} after=${JSON.stringify(afterListing)}`
+    );
+    console.log("PASS");
+    return;
+  }
+
+  if (mode === "convert-fail") {
+    // ---- Minor 8: conversion-failure path (ConvertError) --------------------------
+    assert(
+      config.videoConverter === "ffmpeg",
+      `expected config.videoConverter === "ffmpeg" in the convert-fail child, got ${config.videoConverter}`
+    );
+    const tooWide = file({ timescale: 600, duration: 6000, w: 2200, h: 3911, audio: true });
+    const beforeListing = listFiles(assetDir);
+    const beforeTmp = listTmpConvertFiles();
+    const res = await uploadRoute.POST(
+      uploadReq(new File([tooWide], "toowide.mp4", { type: "video/mp4" }))
+    );
+    assert(res.status === 422, `expected 422 when the converter itself fails, got ${res.status}`);
+    const body = await res.json();
+    assert(
+      body.error === "Converting this video failed — it may be corrupt or in an unsupported format.",
+      `expected the sanitized conversion-failure message, got ${JSON.stringify(body.error)}`
+    );
+    assert(
+      !body.error.includes("/") && !body.error.toLowerCase().includes("ffmpeg "),
+      `expected no temp file paths or converter command line leaked into the error body, ` +
+        `got ${JSON.stringify(body.error)}`
+    );
+    const afterListing = listFiles(assetDir);
+    assert(
+      JSON.stringify(beforeListing) === JSON.stringify(afterListing),
+      `expected no files written to the asset store on a conversion failure; ` +
+        `before=${JSON.stringify(beforeListing)} after=${JSON.stringify(afterListing)}`
+    );
+    assert(
+      countAllAssetRows(Database, dbPath) === 0,
+      "expected no assets row inserted on a conversion failure"
+    );
+    const afterTmp = listTmpConvertFiles();
+    assert(
+      JSON.stringify(beforeTmp) === JSON.stringify(afterTmp),
+      `expected no leftover ss-convert-* temp files after a conversion failure; ` +
+        `before=${JSON.stringify(beforeTmp)} after=${JSON.stringify(afterTmp)}`
+    );
+    console.log("PASS");
+    return;
+  }
+
+  if (mode === "bad-output") {
+    // ---- Minor 8: derivative-still-invalid path ------------------------------------
+    assert(
+      config.videoConverter === "ffmpeg",
+      `expected config.videoConverter === "ffmpeg" in the bad-output child, got ${config.videoConverter}`
+    );
+    const tooWide = file({ timescale: 600, duration: 6000, w: 2400, h: 4267, audio: true });
+    const beforeListing = listFiles(assetDir);
+    const beforeTmp = listTmpConvertFiles();
+    const res = await uploadRoute.POST(
+      uploadReq(new File([tooWide], "toowide2.mp4", { type: "video/mp4" }))
+    );
+    assert(
+      res.status === 422,
+      `expected 422 when the "converted" derivative is still out of spec, got ${res.status}`
+    );
+    const body = await res.json();
+    assert(
+      typeof body.error === "string" &&
+        body.error.includes("Conversion did not produce a usable video"),
+      `expected the derivative-still-invalid message, got ${JSON.stringify(body.error)}`
+    );
+    assert(
+      body.error.includes("1920"),
+      `expected the derivative-still-invalid message to name the width cap, got ${JSON.stringify(body.error)}`
+    );
+    const afterListing = listFiles(assetDir);
+    assert(
+      JSON.stringify(beforeListing) === JSON.stringify(afterListing),
+      `expected no files written to the asset store when the derivative is still invalid; ` +
+        `before=${JSON.stringify(beforeListing)} after=${JSON.stringify(afterListing)}`
+    );
+    assert(
+      countAllAssetRows(Database, dbPath) === 0,
+      "expected no assets row inserted when the derivative is still invalid"
+    );
+    const afterTmp = listTmpConvertFiles();
+    assert(
+      JSON.stringify(beforeTmp) === JSON.stringify(afterTmp),
+      `expected no leftover ss-convert-* temp files when the derivative is still invalid; ` +
+        `before=${JSON.stringify(beforeTmp)} after=${JSON.stringify(afterTmp)}`
     );
     console.log("PASS");
     return;
