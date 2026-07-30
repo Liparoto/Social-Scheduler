@@ -390,3 +390,61 @@ class GraphClient:
                 values = item.get("values") or [{}]
                 out[name] = values[0].get("value")
         return out
+
+    # -- profile photos ----------------------------------------------------------------
+    # Each lookup distinguishes "no photo" (None) from "the request failed" (raises).
+    # avatars.py depends on that: None is a normal state that falls back to the initial
+    # circle, while an exception means keep the existing photo and record an error.
+
+    def get_instagram_profile_picture_url(self, ig_user_id: str, token: str) -> str | None:
+        data = self._get(ig_user_id, {"fields": "profile_picture_url", "access_token": token})
+        return data.get("profile_picture_url") or None
+
+    def get_page_picture_url(self, page_id: str, token: str) -> str | None:
+        """Page profile picture. Nested one level deeper than IG's flat field.
+
+        `is_silhouette` means the Page never set a picture and Meta is handing back its
+        generic grey figure. That is worse than our own initial circle, which at least
+        says which account it is — so it is treated as "no photo".
+        """
+        data = self._get(
+            page_id,
+            {"fields": "picture.width(320).height(320)", "access_token": token},
+        )
+        picture = ((data.get("picture") or {}).get("data")) or {}
+        if picture.get("is_silhouette"):
+            return None
+        return picture.get("url") or None
+
+    def get_threads_profile_picture_url(self, threads_user_id: str, token: str) -> str | None:
+        data = self._get(
+            threads_user_id,
+            {"fields": "threads_profile_picture_url", "access_token": token},
+        )
+        return data.get("threads_profile_picture_url") or None
+
+    def download_image_bytes(self, url: str, max_bytes: int = 5_000_000) -> bytes:
+        """Fetch raw bytes from an absolute CDN URL (NOT a Graph path, so it does not go
+        through _get). Streams so an unexpectedly huge or endless response is stopped at
+        max_bytes rather than read into memory in full.
+        """
+        try:
+            with self.session.get(url, timeout=self.timeout, stream=True) as resp:
+                if not resp.ok:
+                    raise GraphAPIError(
+                        f"GET avatar -> {resp.status_code}: {redact(resp.text)}"
+                    )
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise GraphAPIError(
+                            f"avatar download too large (> {max_bytes} bytes)"
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
+        except requests.RequestException as exc:
+            raise GraphAPIError(f"GET avatar -> request failed: {redact(str(exc))}") from None
