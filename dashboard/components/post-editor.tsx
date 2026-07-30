@@ -295,8 +295,19 @@ export function PostEditor({
                 }`}
                 style={on && !disabled ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined}
               >
-                <span className="text-sm text-ink">{c.account_name}</span>
-                <span className="ml-auto text-xs text-muted">
+                {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
+                    chip must take its paired dark `fg` — on `text-ink` alone the name is
+                    near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
+                <span
+                  className="text-sm text-ink"
+                  style={on && !disabled ? { color: color.fg } : undefined}
+                >
+                  {c.account_name}
+                </span>
+                <span
+                  className="ml-auto text-xs text-muted"
+                  style={on && !disabled ? { color: color.fg, opacity: 0.75 } : undefined}
+                >
                   {c.platform}
                   {disabled ? " — can't post this type" : ""}
                 </span>

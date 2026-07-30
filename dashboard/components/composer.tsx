@@ -554,11 +554,20 @@ export function Composer({
                   >
                     {on && !disabled ? <span className="text-[10px] text-white">✓</span> : null}
                   </span>
+                  {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
+                      chip must take its paired dark `fg` — on `text-ink` alone the name is
+                      near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
                   <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium text-ink">
+                    <span
+                      className="block truncate text-sm font-medium text-ink"
+                      style={on && !disabled ? { color: color.fg } : undefined}
+                    >
                       {c.account_name}
                     </span>
-                    <span className="data block text-[11px] text-muted">
+                    <span
+                      className="data block text-[11px] text-muted"
+                      style={on && !disabled ? { color: color.fg, opacity: 0.75 } : undefined}
+                    >
                       {textDisabled
                         ? `${platformLabel(c.platform)} can't post text-only`
                         : videoDisabled

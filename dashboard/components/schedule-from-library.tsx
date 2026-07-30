@@ -287,8 +287,19 @@ export function ScheduleFromLibrary({
                   }}
                   aria-hidden
                 />
-                <span className="text-sm text-ink">{c.account_name}</span>
-                <span className="ml-auto text-xs text-muted">
+                {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
+                    chip must take its paired dark `fg` — on `text-ink` alone the name is
+                    near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
+                <span
+                  className="text-sm text-ink"
+                  style={on && !disabled ? { color: color.fg } : undefined}
+                >
+                  {c.account_name}
+                </span>
+                <span
+                  className="ml-auto text-xs text-muted"
+                  style={on && !disabled ? { color: color.fg, opacity: 0.75 } : undefined}
+                >
                   {disabled ? `${platformLabel(c.platform)} can't post this type` : c.platform}
                 </span>
               </button>
