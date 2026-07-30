@@ -738,6 +738,11 @@ export interface PostLibraryRow extends Post {
   first_asset_width: number | null;
   first_asset_height: number | null;
   asset_count: number;
+  // Every asset this post holds, in slide order, as a comma-joined string of ids —
+  // GROUP_CONCAT can't return an array, so the caller (app/library/page.tsx) splits it.
+  // Exists so the merge-into-carousel modal can seed SlideReorder from Library data alone,
+  // without an N+1 getPostAssets() call per selected post.
+  asset_ids_csv: string | null;
   scheduled_count: number;
   posted_count: number;
   last_posted_at: string | null;
@@ -747,6 +752,11 @@ export interface PostLibraryRow extends Post {
   time_of_day_tags: string | null;
   topic_tags: string | null;
   target_platforms: string | null;
+  // Distinct from scheduled_count (which also counts 'publishing'): specifically the
+  // statuses that mergePostsIntoCarousel's cascade DELETE would silently wipe out for a
+  // non-surviving post. 'posted'/'publishing' posts are already refused by the merge API,
+  // so those don't belong in this warning — see the merge modal's queued-send notice.
+  queued_publication_count: number;
 }
 
 export function listPosts(limit = 200): PostLibraryRow[] {
@@ -764,6 +774,9 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT a.height FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
             WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_height,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
+         (SELECT GROUP_CONCAT(sub.asset_id) FROM (
+            SELECT asset_id FROM post_assets WHERE post_id = p.id ORDER BY sort_order ASC
+          ) sub) AS asset_ids_csv,
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status IN ('scheduled','pending_approval','publishing')) AS scheduled_count,
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
@@ -780,7 +793,9 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
             WHERE pt.post_id = p.id AND t.kind = 'topic') AS topic_tags,
          (SELECT GROUP_CONCAT(DISTINCT c.platform) FROM post_targets pt2
-            JOIN channels c ON c.id = pt2.channel_id WHERE pt2.post_id = p.id) AS target_platforms
+            JOIN channels c ON c.id = pt2.channel_id WHERE pt2.post_id = p.id) AS target_platforms,
+         (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status IN ('scheduled','pending_approval')) AS queued_publication_count
        FROM posts p
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`

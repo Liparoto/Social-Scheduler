@@ -6,6 +6,7 @@ import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
+import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
 
 interface PostLite {
   id: number;
@@ -18,6 +19,7 @@ interface PostLite {
   first_asset_width: number | null;
   first_asset_height: number | null;
   asset_count: number;
+  asset_ids: number[];
   scheduled_count: number;
   posted_count: number;
   last_posted_at: string | null;
@@ -29,6 +31,7 @@ interface PostLite {
   time_of_day_tags: string | null;
   topic_tags: string | null;
   target_platforms: string | null;
+  has_queued_publication: boolean;
 }
 interface ChannelLite {
   id: number;
@@ -81,6 +84,7 @@ export function LibraryView({
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(
     null
   );
+  const [mergeOpen, setMergeOpen] = useState(false);
 
   function toggle(id: number) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -197,6 +201,23 @@ export function LibraryView({
     () => new Set([...chans].filter((id) => !incompatibleChannelIds.has(id))),
     [chans, incompatibleChannelIds]
   );
+
+  // In SELECTION order (not `posts` order) — `selected` is the ordered array, and the merge
+  // API treats its first entry as the surviving post. A stale id (deleted between load and
+  // click, or filtered out of the current view) is dropped rather than crashing the modal.
+  const selectedForMerge: MergeCandidatePost[] = selected.flatMap((id) => {
+    const p = posts.find((post) => post.id === id);
+    return p
+      ? [{ id: p.id, caption: p.caption, asset_ids: p.asset_ids, has_queued_publication: p.has_queued_publication }]
+      : [];
+  });
+
+  function onMerged() {
+    setMergeOpen(false);
+    setSelected([]);
+    setNotice("Merged into one carousel.");
+    startT(() => router.refresh());
+  }
 
   const sorted = [...shown].sort((a, b) => {
     if (sort === "newest") return b.id - a.id;
@@ -602,6 +623,21 @@ export function LibraryView({
             </button>
           </div>
         </div>
+
+        <div className="mt-3 border-t border-border pt-3">
+          <p className="mb-1.5 text-[11px] text-faint">
+            Fold several single-image drafts into one carousel, in review before anything is
+            deleted.
+          </p>
+          <button
+            onClick={() => setMergeOpen(true)}
+            disabled={pending || selected.length < 2}
+            title={selected.length < 2 ? "Select at least two posts to merge." : undefined}
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+          >
+            Merge into carousel
+          </button>
+        </div>
       </div>
 
       {openMedia ? (
@@ -609,6 +645,14 @@ export function LibraryView({
           asset={openMedia.asset}
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
+        />
+      ) : null}
+
+      {mergeOpen ? (
+        <MergeModal
+          posts={selectedForMerge}
+          onClose={() => setMergeOpen(false)}
+          onMerged={onMerged}
         />
       ) : null}
     </div>

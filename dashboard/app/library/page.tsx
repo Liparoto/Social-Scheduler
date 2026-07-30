@@ -17,6 +17,10 @@ export default function LibraryPage() {
     first_asset_width: p.first_asset_width,
     first_asset_height: p.first_asset_height,
     asset_count: p.asset_count,
+    // GROUP_CONCAT can only return a string — split it back into slide order here so the
+    // merge-into-carousel modal can seed SlideReorder straight from the selection, with no
+    // extra per-post fetch. A post with zero assets (a text post) has a null csv.
+    asset_ids: p.asset_ids_csv ? p.asset_ids_csv.split(",").map(Number) : [],
     scheduled_count: p.scheduled_count,
     posted_count: p.posted_count,
     last_posted_at: p.last_posted_at,
@@ -28,6 +32,10 @@ export default function LibraryPage() {
     time_of_day_tags: p.time_of_day_tags,
     topic_tags: p.topic_tags,
     target_platforms: p.target_platforms,
+    // See PostLibraryRow.queued_publication_count — merging deletes every non-surviving
+    // post, and its scheduled/pending_approval publications cascade away with it. The merge
+    // modal warns about that before the owner confirms; boolean is all it needs.
+    has_queued_publication: p.queued_publication_count > 0,
   }));
   const channels = getActiveChannels().map((c) => ({
     id: c.id,
