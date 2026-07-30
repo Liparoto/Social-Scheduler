@@ -40,8 +40,10 @@ Discord and Telegram channels keep `avatar_path` NULL and render the initial cir
 is the expected state for them, not a failure: no `avatar_error` is recorded and nothing
 is retried on a cadence for those platforms.
 
-The Facebook fetch extends the fields on the existing `get_page_info`, which preflight
-already calls — no new Page request is introduced.
+Facebook's response nests the URL one level deeper than Instagram's flat field, and
+carries an `is_silhouette` flag meaning the Page never set a picture and Meta is returning
+its generic grey figure. That counts as **no photo**: our own initial circle at least says
+which account it is, so storing the silhouette would be strictly worse.
 
 ## Storage
 
@@ -50,8 +52,9 @@ already calls — no new Page request is introduced.
 silently becomes a broken image once the signature expires, and every dashboard page load
 would issue a request to Meta from the owner's Mac.
 
-Bytes are written to `data/assets/avatars/<channel_id>.jpg`, under the existing
-`config.assetStorageDir`. That directory is already gitignored and per-install, so this
+Bytes are written to `data/assets/avatars/<channel_id>.<ext>`, under the existing
+`config.assetStorageDir`. The extension comes from the downloaded file's own magic bytes,
+never from the CDN URL — so the dashboard can trust it when setting a Content-Type. That directory is already gitignored and per-install, so this
 introduces no new storage concept.
 
 **Avatars are deliberately not added to the export/backup bundle.** The export walks rows
