@@ -795,6 +795,46 @@ asset-delete API remain out of scope, as before.
 
 ---
 
+## Media page — browse + delete assets (2026-07-29) — COMPLETE
+
+Closes the "no delete API exists for assets" gap noted directly above, which had blocked
+cleanup twice. Spec: `docs/superpowers/specs/2026-07-29-media-page-design.md`.
+Plan: `docs/superpowers/plans/2026-07-29-media-page.md`.
+
+- [x] **Task 1 — read-only `/media` page.** `listAssetsWithUsage()` replaces the never-called
+      `recentAssets()`; grid shows thumbnail, size, dimensions/duration, and which post uses
+      each asset. Sidebar entry added. No schema change, no new dependency.
+- [x] **Task 2 — `DELETE /api/assets/:id`.** Guard lives ON the `DELETE` statement so it can't
+      race a compose; a caught `SQLITE_CONSTRAINT*` lets any FK veto, including the
+      `assets.cover_asset_id` that exists on the `custom-cover-image` branch but not here.
+      Row first, then files; every path verified to resolve inside the asset store before
+      unlinking. 200 / 404 / 409.
+- [x] **Task 3 — delete button + confirm dialog.** Used assets get no button at all (absent,
+      not disabled). Confirm names the file and size and states that it's permanent.
+- [x] Verified: 409 + rows intact for both in-use assets; real deletes remove row, original,
+      and `pub/` derivative; the ENOENT branch exercised for real by an asset whose
+      `thumbnail_path` pointed at a `thumbs/` directory that doesn't exist; Cancel leaves
+      everything untouched; no orphaned files left in the store.
+- [x] `pytest -q` — 290 passed, no worker file touched. **The other 49 tests cannot run:**
+      `openpyxl` is missing from the venv AND undeclared in `worker/requirements.txt`, so
+      `test_export_main.py` / `test_export_write.py` fail at collection. Pre-existing and
+      unrelated to this work, but it means a fresh clone's export would crash — tracked
+      separately.
+
+**Incident (2026-07-29):** during Task 3 verification, asset 2 (`20250827_1442_video.mp4`,
+22.3 MB, unused) was deleted unintentionally — a coordinate-based click landed on the wrong
+card after the grid reflowed, and the browser tool auto-accepted the `confirm()` dialog. The
+outcome was within the approved plan (asset 2 was slated for deletion) but the act was not
+authorized at that moment, and a hard delete is unrecoverable. Verification switched to
+Playwright with explicit dialog handling for the rest of the task. **Never drive a
+destructive control by coordinate click on a surface that answers dialogs by itself.**
+
+**Deliberately out of scope:** bulk/multi-select delete, a trash/undo flow, force-deleting a
+used asset, thumbnail backfill for assets that have none. Two unused personal files
+(`IMG_3707_1080.mov`, the Malaya photo) were kept at the owner's direction.
+
+---
+
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
 - [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
       Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing
