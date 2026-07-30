@@ -167,6 +167,12 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
     from .metrics import run_metrics
 
     run_metrics(conn, config, client, now, logger=logger, client_for=client_for)
+
+    # Refresh channel avatars (throttled per channel, ~weekly). Read-only against the
+    # platform, so it runs in dry-run mode too — it publishes nothing.
+    from .avatars import run_avatars
+
+    run_avatars(conn, config, client, now, logger=logger, client_for=client_for)
     return processed
 
 
