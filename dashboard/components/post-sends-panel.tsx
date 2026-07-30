@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PostPublicationRow, PostType } from "@/lib/types";
 import type { Channel } from "@/lib/types";
 import { ChannelChip, StatusBadge } from "@/components/ui";
-import { formatInTz, tzAbbrev } from "@/lib/format";
+import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
 import { incompatibleChannelsForPostType } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
@@ -222,7 +222,7 @@ export function PostSendsPanel({
   dirty?: boolean;
 }) {
   const router = useRouter();
-  const [channelId, setChannelId] = useState<number | "">("");
+  const [targets, setTargets] = useState<Set<number>>(new Set());
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [postNow, setPostNow] = useState(false);
@@ -239,10 +239,41 @@ export function PostSendsPanel({
   const incompatibleIds = new Set(incompatibleChannelsForPostType(postType, channels).map((c) => c.id));
   const pickable = channels.filter((c) => !busyChannelIds.has(c.id) && !incompatibleIds.has(c.id));
 
+  // Adding a send makes that channel un-pickable (it now has a live send), so a previously
+  // ticked channel can go stale the moment the list refreshes. Derive the usable set from
+  // `pickable` instead of writing it back into state — same "derive, don't sync" approach
+  // as schedule-from-library.tsx's effectiveTargets and library-view.tsx's effectiveChans.
+  const pickableIds = useMemo(() => new Set(pickable.map((c) => c.id)), [pickable]);
+  const effectiveTargets = useMemo(
+    () => new Set([...targets].filter((id) => pickableIds.has(id))),
+    [targets, pickableIds]
+  );
+  const toggleTarget = (id: number) => {
+    setTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // The count is what makes a multi-target send legible before it fires — "Post now to 2
+  // accounts" is the last thing read before something is published for real. At zero the
+  // button is disabled, so it just names the action rather than saying "0 sends".
+  const n = effectiveTargets.size;
+  const addLabel =
+    n === 0
+      ? postNow
+        ? "Post now →"
+        : "Add send"
+      : postNow
+        ? `Post now to ${n} ${n === 1 ? "account" : "accounts"} →`
+        : `Add ${n} ${n === 1 ? "send" : "sends"}`;
+
   async function addSend() {
     setError(null);
-    if (!channelId) {
-      setError("Pick a channel.");
+    if (effectiveTargets.size === 0) {
+      setError("Pick at least one account.");
       return;
     }
     if (postNow && dirty) {
@@ -258,7 +289,7 @@ export function PostSendsPanel({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        channel_ids: [channelId],
+        channel_ids: Array.from(effectiveTargets),
         ...(postNow ? { post_now: true } : { date, time }),
       }),
     });
@@ -268,7 +299,7 @@ export function PostSendsPanel({
       setError(b.error ?? "Could not add send.");
       return;
     }
-    setChannelId("");
+    setTargets(new Set());
     setDate("");
     setTime("");
     setPostNow(false);
@@ -320,22 +351,62 @@ export function PostSendsPanel({
             </button>
           </div>
         </div>
+        <div className="mb-3">
+          <label className="mb-1.5 block text-[11px] font-medium text-ink-soft">
+            Accounts — each one gets its own send
+          </label>
+          {pickable.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-border-strong bg-surface px-3 py-3 text-center text-xs text-muted">
+              Every account that can take this post already has a send queued.
+            </p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {pickable.map((c) => {
+                const on = effectiveTargets.has(c.id);
+                const color = channelColor(c.id, c.color_hue);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleTarget(c.id)}
+                    className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                      on ? "border-transparent" : "border-border hover:bg-surface-sunken"
+                    }`}
+                    style={
+                      on
+                        ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` }
+                        : undefined
+                    }
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{
+                        backgroundColor: on ? color.dot : "transparent",
+                        border: on ? "none" : "1.5px solid var(--color-border-strong)",
+                      }}
+                      aria-hidden
+                    />
+                    {/* channelColor's bg is a fixed LIGHT tint in every theme, so the
+                        label has to take its paired dark `fg` when selected — leaving it
+                        on `text-ink` makes it near-invisible in the dark themes (light
+                        text on a light chip). Same pairing ui.tsx's ChannelChip uses. */}
+                    <span className="text-sm text-ink" style={on ? { color: color.fg } : undefined}>
+                      {c.account_name}
+                    </span>
+                    <span
+                      className="ml-auto text-xs text-muted"
+                      style={on ? { color: color.fg, opacity: 0.75 } : undefined}
+                    >
+                      {c.platform}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-ink-soft">Channel</label>
-            <select
-              className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand"
-              value={channelId}
-              onChange={(e) => setChannelId(e.target.value ? Number(e.target.value) : "")}
-            >
-              <option value="">Choose…</option>
-              {pickable.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.account_name} ({c.platform})
-                </option>
-              ))}
-            </select>
-          </div>
           {!postNow ? (
             <>
               <div>
@@ -360,10 +431,10 @@ export function PostSendsPanel({
           ) : null}
           <button
             onClick={addSend}
-            disabled={busy || (postNow && dirty)}
+            disabled={busy || effectiveTargets.size === 0 || (postNow && dirty)}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
-            {busy ? (postNow ? "Sending…" : "Adding…") : postNow ? "Post now →" : "Add"}
+            {busy ? (postNow ? "Sending…" : "Adding…") : addLabel}
           </button>
         </div>
         {postNow && dirty ? (
