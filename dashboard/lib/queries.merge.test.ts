@@ -100,7 +100,7 @@ test("caption is written to BOTH posts.caption and caption_variants", async () =
     "the worker prefers variants over posts.caption");
 });
 
-test("targets and tags are unioned from every merged post", async () => {
+test("targets are unioned from every merged post", async () => {
   const { q, db, mkAsset, mkDraft } = await setup();
   const ch = (n: string) => Number(db.prepare(
     "INSERT INTO channels (platform, account_name) VALUES ('instagram', ?)"

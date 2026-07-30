@@ -859,8 +859,8 @@ images, many of them really slides of the same carousel.
 - [x] **Task 2 — `lib/merge-plan.ts`.** Pure guards + slide ordering, imports nothing but
       `./platforms`, so every rejection path is testable without SQLite.
 - [x] **Task 3 — `mergePostsIntoCarousel`.** One `.immediate()` transaction. Rebuilds the
-      `post_assets` rows on the survivor *before* deleting the emptied posts, and flips
-      `post_type` to `carousel`.
+      `post_assets` rows on the survivor *before* deleting the emptied posts, and sets
+      `post_type` to match the resulting slide count (`carousel` for 2+, `single` for exactly 1).
 - [x] **Task 4 — `POST /api/posts/merge`.** Thin passthrough; all guards live below it.
 - [x] **Task 5 — extracted `components/slide-reorder.tsx`** from the composer so the merge modal
       reuses the one drag/keyboard reorder implementation instead of copying it.
@@ -896,6 +896,8 @@ carousel outside a merge, merging from the Media page.
       from asset count alone and ignores `media_kind`, so a single *video* saved as a draft
       becomes `single` rather than `reel` — which the worker then refuses to publish. Confirmed
       live 2026-07-30.
+- [ ] **Follow-up — publish-in-flight race: merge can cascade-delete a publication the worker is actively sending.** The worker fetches `status='scheduled'` publications, loads the post and assets into Python memory, does an HTTP quota check, and only *then* writes `'publishing'` to the database. During that window the row still reads `scheduled`, so the merge's guard (which blocks `posted`/`publishing`) lets it through. The merge deletes the post, CASCADE removes the publication, and the worker's later status writes silently update 0 rows. Outcome: a real Instagram post exists with no database record, and the same photo sits in the merged carousel ready to post a second time. Pre-existing — `deletePost` has the identical guard — but merging widens the exposure because the merge modal explicitly invites merging posts that have queued sends. **Fix is worker-side:** claim the publication row conditionally before loading it — `UPDATE publications SET status='publishing' WHERE id=? AND status='scheduled'` — and abort if it updates 0 rows. The dashboard's `.immediate()` transaction cannot help because the worker is not writing during the window; it is holding state in memory.
+- [ ] **Follow-up — spec gap: caption-length guard never implemented.** The design doc's §5 lists a `captionLimitError` guard (reusing the per-post-type limit from `lib/caption-limits.ts`) that was never implemented — `planMerge` never receives the caption at all, so the check cannot run. Only reachable if someone merges posts with a caption that exceeds the `carousel` limit (where `single` captions were within bounds). The worker re-validates at publish and fails visibly at send rather than silently, so it surfaces eventually; low priority but the design doc currently overstates what ships.
 
 ---
 

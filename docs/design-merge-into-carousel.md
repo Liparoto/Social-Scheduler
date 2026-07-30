@@ -79,7 +79,8 @@ Nothing in the schema enforces the correspondence — there are no triggers. So 
 the assets but forgot `post_type` would look completely correct in the dashboard and then fail
 at send time with `carousel needs 2-10 assets, has 1`.
 
-**Therefore: the merge transaction must set `post_type = 'carousel'` on the surviving post.**
+**Therefore: the merge transaction must set `post_type` to match the resulting slide count —
+`carousel` for 2 or more, `single` for exactly 1.** Getting this wrong fails silently until publish time.
 This is the single highest-risk line in the feature and gets a dedicated test.
 
 The same invariant is why merging *away from* a post is safe here but would not be in general:
@@ -139,7 +140,7 @@ One `db.transaction(...)` in `lib/queries.ts`:
 3. Move every `post_assets` row onto the survivor, assigning `sort_order` from `asset_order`.
    This renumbers the survivor's own existing rows too, since its slides may have been
    reordered relative to the incoming ones.
-4. `UPDATE posts SET post_type = 'carousel', caption = ?, updated_at = ? WHERE id = survivor`.
+4. `UPDATE posts SET post_type = ?, caption = ?, updated_at = ? WHERE id = survivor` (where `post_type` is derived from `slides.length > 1 ? "carousel" : "single"`).
 5. Write the chosen caption as a `caption_variants` row too, not only `posts.caption` — the
    worker's `_select_caption` prefers variants and falls back to `posts.caption`, and every
    other write path in this codebase maintains both.
