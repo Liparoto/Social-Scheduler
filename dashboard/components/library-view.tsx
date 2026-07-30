@@ -77,6 +77,10 @@ export function LibraryView({
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
+  // Deliberately separate from statusFilter: content_status is the lifecycle (is this piece
+  // usable), sendFilter is publication history (has it actually gone out). Folding them into
+  // one select would cost the most useful query in the Library — "Ready but never posted".
+  const [sendFilter, setSendFilter] = useState<"all" | "posted" | "never">("all");
   const [kindFilter, setKindFilter] = useState<"all" | "evergreen" | "one_time">("all");
   const [formatFilter, setFormatFilter] = useState<"all" | PostFormat>("all");
   const [search, setSearch] = useState("");
@@ -180,6 +184,10 @@ export function LibraryView({
       if (!splitTags(p.target_platforms).includes(platformFilter)) return false;
     }
     if (statusFilter !== "all" && p.content_status !== statusFilter) return false;
+    // posted_count counts publications that actually reached "posted", so a post sitting in
+    // the queue still reads as never posted here — matching the card's own badge.
+    if (sendFilter === "posted" && p.posted_count === 0) return false;
+    if (sendFilter === "never" && p.posted_count > 0) return false;
     if (kindFilter !== "all" && p.content_kind !== kindFilter) return false;
     if (formatFilter !== "all" && p.post_type !== formatFilter) return false;
     if (q && !(p.caption ?? "").toLowerCase().includes(q)) return false;
@@ -269,6 +277,16 @@ export function LibraryView({
           <option value="draft">Draft</option>
           <option value="ready">Ready</option>
           <option value="retired">Retired</option>
+        </select>
+        <select
+          className={field}
+          aria-label="Filter by publication history"
+          value={sendFilter}
+          onChange={(e) => setSendFilter(e.target.value as typeof sendFilter)}
+        >
+          <option value="all">Posted &amp; not</option>
+          <option value="posted">Posted</option>
+          <option value="never">Never posted</option>
         </select>
         <select className={field} value={kindFilter} onChange={(e) => setKindFilter(e.target.value as typeof kindFilter)}>
           <option value="all">All kinds</option>
