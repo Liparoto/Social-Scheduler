@@ -1,31 +1,8 @@
 import { NextResponse } from "next/server";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { config } from "@/lib/config";
+import { unlinkInsideStore } from "@/lib/asset-files";
 import { deleteAsset, getAsset } from "@/lib/queries";
 
 export const runtime = "nodejs";
-
-/**
- * Unlink a stored file, but only if it really resolves inside the asset store — these
- * paths come out of the database, and a path that escapes the store must never be
- * deleted. Same containment check as api/media/[id]/route.ts:46.
- * Returns the path if it could NOT be removed, so the caller can report leftovers.
- */
-async function unlinkInsideStore(rel: string | null): Promise<string | null> {
-  if (!rel) return null;
-  const base = path.resolve(config.assetStorageDir);
-  const abs = path.resolve(base, rel);
-  if (!abs.startsWith(base + path.sep)) return rel;
-  try {
-    await fs.unlink(abs);
-    return null;
-  } catch (err) {
-    // Already gone is success — the row is what the UI reads.
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    return rel;
-  }
-}
 
 export async function DELETE(
   _req: Request,
