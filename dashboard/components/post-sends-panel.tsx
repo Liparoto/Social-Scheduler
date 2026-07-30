@@ -9,32 +9,7 @@ import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
 import { incompatibleChannelsForPostType } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
-
-// Split a UTC ISO instant into {date, time} strings in a given IANA timezone,
-// suitable for prefilling <input type="date"> / <input type="time">. Same
-// approach as publication-actions.tsx.
-function splitInTz(iso: string | null, timeZone: string): { date: string; time: string } {
-  if (!iso) return { date: "", time: "" };
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
-  try {
-    const date = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(d); // en-CA -> YYYY-MM-DD
-    const time = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).format(d); // en-GB -> HH:MM
-    return { date, time };
-  } catch {
-    return { date: "", time: "" };
-  }
-}
+import { splitInTz } from "@/lib/time";
 
 const READ_ONLY_STATUSES = new Set(["posted", "publishing"]);
 const dateTimeInputCls =

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { PLATFORMS, accountIdLabel, usesAccountId, usesLinkedPage, platformLabel } from "@/lib/platforms";
 import { ColorSwatchPicker } from "@/components/color-swatch-picker";
+import { TimezonePicker } from "@/components/timezone-picker";
 
 const field =
   "w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand";
@@ -26,6 +27,9 @@ export function ChannelForm({
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // The picker owns timezone validation (only it knows what's in its Custom box),
+  // so it reports validity up here to gate Save.
+  const [tzValid, setTzValid] = useState(true);
   const [form, setForm] = useState({
     // `as string`: PLATFORMS[0].value is a non-fresh literal ("instagram"), which TS
     // would NOT widen during useState's generic inference (unlike a literal written
@@ -124,12 +128,12 @@ export function ChannelForm({
           />
         </div>
         <div>
-          <label className={label}>Timezone (IANA)</label>
-          <input
-            className={field}
-            placeholder="America/New_York"
+          <label className={label}>Timezone</label>
+          <TimezonePicker
             value={form.timezone}
-            onChange={(e) => set("timezone", e.target.value)}
+            onChange={(tz) => set("timezone", tz)}
+            onValidityChange={setTzValid}
+            className={field}
           />
         </div>
         {usesAccountId(form.platform) ? (
@@ -197,7 +201,7 @@ export function ChannelForm({
       <div className="mt-4 flex justify-end">
         <button
           onClick={submit}
-          disabled={pending}
+          disabled={pending || !tzValid}
           className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
         >
           {pending ? "Saving…" : "Save channel"}

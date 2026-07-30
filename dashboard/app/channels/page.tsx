@@ -6,6 +6,7 @@ import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
 import { ChannelCredentials } from "@/components/channel-credentials";
 import { ChannelColor } from "@/components/channel-color";
+import { ChannelTimezone } from "@/components/channel-timezone";
 import { AutofillConfig } from "@/components/autofill-config";
 import { tzAbbrev } from "@/lib/format";
 
@@ -98,6 +99,8 @@ export default function ChannelsPage() {
                   platform={c.platform}
                   remoteAccountId={c.remote_account_id}
                 />
+
+                <ChannelTimezone channelId={c.id} timezone={c.timezone} />
 
                 <ChannelColor
                   channelId={c.id}

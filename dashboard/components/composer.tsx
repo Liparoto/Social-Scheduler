@@ -14,6 +14,7 @@ import { ConformControl } from "@/components/conform-control";
 import { CoverFramePicker } from "@/components/cover-frame-picker";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { SlideReorder, type Slide } from "@/components/slide-reorder";
+import { TimezonePicker } from "@/components/timezone-picker";
 
 interface ChannelLite {
   id: number;
@@ -60,6 +61,9 @@ export function Composer({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [textOnly, setTextOnly] = useState(false);
   const [timezone, setTimezone] = useState(defaultTimezone);
+  // Reported up by TimezonePicker; gates scheduling on a valid zone. Irrelevant
+  // when postNow is on, since that path never converts a wall clock.
+  const [tzValid, setTzValid] = useState(true);
   const [scheduledLocal, setScheduledLocal] = useState("");
   const [postNow, setPostNow] = useState(false);
   const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
@@ -620,12 +624,12 @@ export function Composer({
                 />
               </div>
               <div>
-                <label className={label}>Timezone (IANA)</label>
-                <input
-                  className={fieldCls}
+                <label className={label}>Timezone</label>
+                <TimezonePicker
                   value={timezone}
-                  onChange={(e) => setTimezone(e.target.value)}
-                  placeholder="America/New_York"
+                  onChange={setTimezone}
+                  onValidityChange={setTzValid}
+                  className={fieldCls}
                 />
               </div>
             </div>
@@ -746,7 +750,7 @@ export function Composer({
 
         <button
           onClick={submit}
-          disabled={submitting || overCaptionLimit}
+          disabled={submitting || overCaptionLimit || (!postNow && !tzValid)}
           className="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
         >
           {submitting ? (postNow ? "Sending…" : "Scheduling…") : postNow ? "Post now" : "Schedule post"}

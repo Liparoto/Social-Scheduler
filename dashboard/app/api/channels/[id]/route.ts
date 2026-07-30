@@ -31,7 +31,14 @@ export async function PATCH(
   const fields: Record<string, unknown> = {};
   if (typeof body.account_name === "string") fields.account_name = body.account_name.trim();
   if ("business_label" in body) fields.business_label = body.business_label || null;
-  if (typeof body.timezone === "string") fields.timezone = body.timezone;
+  // `timezone` is intentionally NOT accepted here — it goes through
+  // POST /api/channels/[id]/timezone, which also rebases the pending queue.
+  if ("timezone" in body) {
+    return NextResponse.json(
+      { error: "Change the timezone via POST /api/channels/[id]/timezone." },
+      { status: 400 }
+    );
+  }
   if ("remote_account_id" in body) fields.remote_account_id = body.remote_account_id || null;
   if ("linked_page_id" in body) fields.linked_page_id = body.linked_page_id || null;
   if ("access_token" in body) fields.access_token = body.access_token || null;

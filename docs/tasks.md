@@ -79,6 +79,10 @@ Make the process legible; compose → schedule → watch it publish.
 - [x] Channel config: add form (credentials, timezone, IG/Page ids, approval), inline
       approval + active toggles.
       (Cadence config is Phase 4; a dashboard kill-switch toggle deferred — env switch works.)
+- [x] Channel timezone is **editable after creation** (was create-only): US shortlist
+      dropdown + custom IANA entry, and changing it rebases every pending send so the wall
+      clock is preserved. Invalid zone names are now rejected instead of crashing render.
+      See `docs/superpowers/specs/2026-07-30-channel-timezone-editing-design.md`.
 
 ### Verification (all passed — via the real API endpoints the UI calls)
 - [x] Compose a post → two channels → two `publications` at the same instant; TZ converted

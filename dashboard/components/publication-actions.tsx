@@ -4,31 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { PublicationStatus } from "@/lib/types";
 import { supportsMetrics } from "@/lib/platforms";
-
-// Split a UTC ISO instant into {date, time} strings in a given IANA timezone,
-// suitable for prefilling <input type="date"> / <input type="time">.
-function splitInTz(iso: string | null, timeZone: string): { date: string; time: string } {
-  if (!iso) return { date: "", time: "" };
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
-  try {
-    const date = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(d); // en-CA -> YYYY-MM-DD
-    const time = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).format(d); // en-GB -> HH:MM
-    return { date, time };
-  } catch {
-    return { date: "", time: "" };
-  }
-}
+import { splitInTz } from "@/lib/time";
 
 // Is the given date/time (interpreted in timeZone) already in the past?
 function isPastInTz(date: string, time: string, timeZone: string): boolean {

@@ -77,7 +77,9 @@ export function updateChannel(
   fields: Partial<{
     account_name: string;
     business_label: string | null;
-    timezone: string;
+    // NOTE: `timezone` is deliberately absent. It moves through
+    // changeChannelTimezone() below, which also rebases the pending queue —
+    // routing it through here would silently skip that. Enforced by the type.
     remote_account_id: string | null;
     linked_page_id: string | null;
     access_token: string | null;
@@ -97,6 +99,86 @@ export function updateChannel(
   getDb()
     .prepare(`UPDATE channels SET ${setClause}, updated_at = @updated_at WHERE id = @id`)
     .run({ ...fields, id, updated_at: nowIso() });
+}
+
+/**
+ * The sends a timezone change would move: everything still waiting to go out on
+ * this channel.
+ *
+ * 'publishing' is excluded on purpose — the worker already has that row in
+ * flight, and moving its scheduled_at mid-publish is a race we gain nothing
+ * from. 'posted'/'failed'/'canceled' are history and must stay honest.
+ *
+ * Held sends ARE included: is_held is a pause, not a cancellation, so they are
+ * still pending and the owner still expects them at the wall-clock time shown.
+ */
+export function getPendingPublicationsForChannel(
+  channelId: number
+): { id: number; post_id: number; scheduled_at: string; is_held: number }[] {
+  return getDb()
+    .prepare(
+      `SELECT id, post_id, scheduled_at, is_held
+         FROM publications
+        WHERE channel_id = @channelId
+          AND status IN ('scheduled', 'pending_approval')
+        ORDER BY scheduled_at`
+    )
+    .all({ channelId }) as {
+    id: number;
+    post_id: number;
+    scheduled_at: string;
+    is_held: number;
+  }[];
+}
+
+/**
+ * Change a channel's timezone, keeping every pending send at the same WALL CLOCK
+ * time (a 9:00 AM send stays 9:00 AM in the new zone, so its UTC instant moves).
+ *
+ * The timezone write and the queue rebase happen in ONE transaction. Splitting
+ * them would let a crash land the channel on the new zone while its sends still
+ * hold instants computed for the old one — every queued post silently off by the
+ * offset difference, with nothing on screen to indicate it.
+ *
+ * `rebase` is injected rather than imported so this stays a dumb data layer and
+ * the (pure, unit-tested) time math has exactly one home.
+ *
+ * Unlike reschedulePublication(), this does NOT clear next_retry_at. A row
+ * retrying after a failure keeps status='scheduled' with a backoff stamp, and
+ * the worker gates on scheduled_at AND next_retry_at (worker/db.py). Clearing it
+ * would collapse a deliberate backoff into an immediate re-attempt — the owner
+ * corrected a timezone, they didn't ask to retry now.
+ */
+export function changeChannelTimezone(
+  channelId: number,
+  fromTz: string,
+  toTz: string,
+  rebase: (iso: string, fromTz: string, toTz: string) => string
+): { moved: number } {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE channels SET timezone = @tz, updated_at = @now WHERE id = @id").run({
+      tz: toTz,
+      now: nowIso(),
+      id: channelId,
+    });
+
+    if (fromTz === toTz) return { moved: 0 };
+
+    const pending = getPendingPublicationsForChannel(channelId);
+    const move = db.prepare(
+      "UPDATE publications SET scheduled_at = @at, updated_at = @now WHERE id = @id"
+    );
+    let moved = 0;
+    for (const p of pending) {
+      const next = rebase(p.scheduled_at, fromTz, toTz);
+      if (next === p.scheduled_at) continue; // zone changed, this instant didn't
+      move.run({ at: next, now: nowIso(), id: p.id });
+      moved += 1;
+    }
+    return { moved };
+  });
+  return tx();
 }
 
 // ---- Assets ---------------------------------------------------------------------

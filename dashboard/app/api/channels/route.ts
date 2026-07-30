@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createChannel, getChannels } from "@/lib/queries";
 import { isPlatform, PLATFORMS } from "@/lib/platforms";
+import { isValidTimezone } from "@/lib/timezones";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,16 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+  // An unvalidated typo here is a render crash, not a bad value: formatInTz()
+  // hands the string straight to Intl.DateTimeFormat, which throws RangeError on
+  // an unknown zone and takes out the Channels and Queue pages.
+  const timezone = (body.timezone || "UTC").trim();
+  if (!isValidTimezone(timezone)) {
+    return NextResponse.json(
+      { error: `"${timezone}" isn't a timezone name. Use an IANA name like America/New_York.` },
+      { status: 400 }
+    );
+  }
   if (
     body.color_hue !== undefined &&
     body.color_hue !== null &&
@@ -40,7 +51,7 @@ export async function POST(req: NextRequest) {
     platform,
     account_name,
     business_label: body.business_label,
-    timezone: body.timezone || "UTC",
+    timezone,
     remote_account_id: body.remote_account_id,
     linked_page_id: body.linked_page_id,
     access_token: body.access_token,
