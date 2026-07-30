@@ -170,21 +170,93 @@ test("a merge that would leave zero slides is rejected", async () => {
   assert.ok(q.getPost(b));
 });
 
-test("a null caption leaves the survivor's own caption alone", async () => {
+// ---- The caption contract: null and "" both CLEAR, identically ----------------------
+// The merge modal's "No caption" option has to actually remove the text. posts.caption and
+// caption_variants must always be cleared together — the worker prefers the variants, so a
+// leftover variant is what would really go out.
+
+for (const [label, caption] of [
+  ["null", null],
+  ["an empty string", ""],
+] as const) {
+  test(`a caption of ${label} clears both posts.caption and caption_variants`, async () => {
+    const { q, db, mkAsset } = await setup();
+    const ids = [mkAsset(1), mkAsset(2)];
+    const survivor = q.createDraftPost({
+      caption: "old text",
+      first_comment: "",
+      asset_ids: [ids[0]],
+      caption_variants: [{ platform: null, body: "old text", sort_order: 0 }],
+    });
+    const other = q.createDraftPost({ caption: "", first_comment: "", asset_ids: [ids[1]] });
+
+    const res = q.mergePostsIntoCarousel([survivor, other], ids, caption);
+    assert.equal(res.ok, true);
+    assert.equal(q.getPost(survivor)?.caption, null, "posts.caption is cleared");
+    const vars = db.prepare("SELECT body FROM caption_variants WHERE post_id = ?")
+      .all(survivor) as { body: string }[];
+    assert.deepEqual(vars, [], "and every variant goes with it");
+  });
+}
+
+test("a real caption replaces the survivor's existing caption and variants", async () => {
   const { q, db, mkAsset } = await setup();
   const ids = [mkAsset(1), mkAsset(2)];
   const survivor = q.createDraftPost({
-    caption: "keep me",
+    caption: "old text",
     first_comment: "",
     asset_ids: [ids[0]],
-    caption_variants: [{ platform: null, body: "keep me", sort_order: 0 }],
+    caption_variants: [{ platform: null, body: "old text", sort_order: 0 }],
   });
   const other = q.createDraftPost({ caption: "", first_comment: "", asset_ids: [ids[1]] });
 
-  const res = q.mergePostsIntoCarousel([survivor, other], ids, null);
+  const res = q.mergePostsIntoCarousel([survivor, other], ids, "new text");
   assert.equal(res.ok, true);
-  assert.equal(q.getPost(survivor)?.caption, "keep me");
-  const vars = db.prepare("SELECT body FROM caption_variants WHERE post_id = ?")
-    .all(survivor) as { body: string }[];
-  assert.deepEqual(vars.map((v) => v.body), ["keep me"]);
+  assert.equal(q.getPost(survivor)?.caption, "new text");
+  const vars = db.prepare("SELECT body, platform, sort_order FROM caption_variants WHERE post_id = ?")
+    .all(survivor);
+  assert.deepEqual(vars, [{ body: "new text", platform: null, sort_order: 0 }],
+    "replaced, not appended — the old variant describes the pre-merge post");
+});
+
+// ---- The cap comes from the real target channels, not the fallback -------------------
+
+test("the cap is read from the merged posts' own target channels", async () => {
+  const { q, db, mkAsset, mkDraft } = await setup();
+  const ch = (platform: string, name: string) => Number(db.prepare(
+    "INSERT INTO channels (platform, account_name) VALUES (?, ?)"
+  ).run(platform, name).lastInsertRowid);
+
+  // Threads allows 20 per carousel, so 11 slides is fine here — and only fine because the
+  // cap came from the channel rows. The untargeted fallback (Instagram, 10) would reject it.
+  const threads = ch("threads", "threads-only");
+  const ids = Array.from({ length: 11 }, (_, i) => mkAsset(i + 1));
+  const posts = ids.map((a) => mkDraft([a]));
+  for (const p of posts) q.setPostTargets(p, [threads]);
+
+  const res = q.mergePostsIntoCarousel(posts, ids, null);
+  assert.equal(res.ok, true, "11 slides is within Threads' cap of 20");
+  if (!res.ok) return;
+  assert.equal(q.getPost(res.post_id)?.post_type, "carousel");
+});
+
+test("one strict target channel caps the whole merge", async () => {
+  const { q, db, mkAsset, mkDraft } = await setup();
+  const ch = (platform: string, name: string) => Number(db.prepare(
+    "INSERT INTO channels (platform, account_name) VALUES (?, ?)"
+  ).run(platform, name).lastInsertRowid);
+
+  // Same 11 slides, but one of the posts also goes to Instagram. planMerge takes the
+  // STRICTEST cap across the union, so Instagram's 10 has to win over Threads' 20.
+  const threads = ch("threads", "th");
+  const insta = ch("instagram", "ig");
+  const ids = Array.from({ length: 11 }, (_, i) => mkAsset(i + 1));
+  const posts = ids.map((a) => mkDraft([a]));
+  for (const p of posts) q.setPostTargets(p, [threads]);
+  q.setPostTargets(posts[3], [insta]);
+
+  const res = q.mergePostsIntoCarousel(posts, ids, null);
+  assert.equal(res.ok, false);
+  if (res.ok) return;
+  assert.equal(res.problem.code, "carousel_too_large");
 });

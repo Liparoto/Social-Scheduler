@@ -560,16 +560,18 @@ function loadMergeCandidate(
  * The distinct platforms the merged post could end up going to — planMerge caps the carousel
  * at the STRICTEST of these (Instagram 10, Threads 20).
  *
- * The `?? ["instagram"]` is load-bearing, not a nicety. planMerge computes the cap with
- * `Math.min(...platforms.map(...))`, and `Math.min()` of an empty array is **Infinity** — so
- * handing it an empty list silently switches the size cap off completely and a 30-photo merge
- * would sail through here only to die at publish time. A draft with no target channels yet is
- * completely normal (that is the whole state the 135 imported drafts are in), so this case is
- * the common one, not the exotic one. Falling back to Instagram is the conservative choice:
- * 10 is the strictest cap any platform here has, it matches platforms.ts's own `maxCarousel`
- * default for an unrecognised platform, and it makes planMerge's "Instagram allows at most 10"
- * message literally true. An untargeted draft can be pointed at any channel later, so it has
- * to satisfy the tightest limit, not the loosest.
+ * Never return an empty list. planMerge computes the cap with `Math.min(...platforms.map(...))`,
+ * and `Math.min()` of an empty array is **Infinity** — an empty list does not mean "no cap
+ * known", it silently switches the size cap off completely, and a 30-photo merge would sail
+ * through here only to die at publish time. Targets are optional on a post, so the empty case
+ * is reachable whenever every merged post happens to be untargeted (a freshly composed draft,
+ * or one whose only target channel was deleted).
+ *
+ * Falling back to Instagram is the conservative choice: 10 is the strictest cap any platform
+ * here has, it matches platforms.ts's own `maxCarousel` default for an unrecognised platform,
+ * and it makes planMerge's "Instagram allows at most 10" message literally true. An untargeted
+ * draft can be pointed at any channel later, so it has to satisfy the tightest limit, not the
+ * loosest.
  */
 function mergeTargetPlatforms(db: ReturnType<typeof getDb>, postIds: number[]): Platform[] {
   if (postIds.length === 0) return ["instagram"];
@@ -589,6 +591,14 @@ function mergeTargetPlatforms(db: ReturnType<typeof getDb>, postIds: number[]): 
  * Fold several draft posts into a single carousel: the first id in `postIds` survives and
  * collects every asset in `assetOrder`, the rest are emptied and deleted. Assets themselves
  * are never touched — only the post_assets join rows move.
+ *
+ * **Caption contract — `null` and `""` mean the same thing: CLEAR the caption.** Both wipe
+ * `posts.caption` to NULL *and* delete every `caption_variants` row on the survivor. There is
+ * no "leave the existing caption alone" value; the merge modal's "No caption" option has to
+ * genuinely clear the text, or it doesn't mean what it says. The two are cleared together,
+ * never one without the other: the worker prefers `caption_variants` over `posts.caption`, so
+ * clearing only one would publish text the post record says isn't there. A non-empty string
+ * sets `posts.caption` and replaces the survivor's variants with that single body.
  *
  * Returns the plan's own problem (with its HTTP status) on rejection, having written nothing.
  */
@@ -652,30 +662,25 @@ export function mergePostsIntoCarousel(
     );
     for (const slide of plan.slides) link.run(survivor, slide.asset_id, slide.sort_order);
 
+    // See the caption contract in this function's doc comment. `null` and `""` are
+    // deliberately NOT distinguished — both collapse to an empty body here, which clears
+    // posts.caption and leaves the survivor with zero caption_variants rows. Keeping one
+    // code path for all three cases is what guarantees the two never drift apart.
     const now = nowIso();
-    if (caption === null) {
-      // null means "no caption was chosen", NOT "blank the caption". Writing NULL here would
-      // destroy the survivor's existing text — and leave posts.caption disagreeing with its
-      // caption_variants rows, which the worker actually prefers. So leave both untouched.
+    const body = (caption ?? "").trim();
+    db.prepare(
+      `UPDATE posts SET post_type = @post_type, caption = @caption, updated_at = @now
+        WHERE id = @id`
+    ).run({ post_type: postType, caption: body || null, now, id: survivor });
+    // Replace, don't add: the survivor's old variants describe the pre-merge post, and the
+    // worker reads caption_variants in preference to posts.caption — a stale variant left
+    // behind here is the text that would actually go out.
+    db.prepare("DELETE FROM caption_variants WHERE post_id = ?").run(survivor);
+    if (body) {
       db.prepare(
-        "UPDATE posts SET post_type = @post_type, updated_at = @now WHERE id = @id"
-      ).run({ post_type: postType, now, id: survivor });
-    } else {
-      const body = caption.trim();
-      db.prepare(
-        `UPDATE posts SET post_type = @post_type, caption = @caption, updated_at = @now
-          WHERE id = @id`
-      ).run({ post_type: postType, caption: body || null, now, id: survivor });
-      // The worker reads caption_variants in preference to posts.caption, so a caption that
-      // only lands in posts.caption would not be the one that goes out. Replace, don't add:
-      // the survivor's old variants describe the pre-merge post.
-      db.prepare("DELETE FROM caption_variants WHERE post_id = ?").run(survivor);
-      if (body) {
-        db.prepare(
-          `INSERT INTO caption_variants (post_id, platform, body, sort_order)
-           VALUES (?, NULL, ?, 0)`
-        ).run(survivor, body);
-      }
+        `INSERT INTO caption_variants (post_id, platform, body, sort_order)
+         VALUES (?, NULL, ?, 0)`
+      ).run(survivor, body);
     }
 
     if (others.length > 0) {
@@ -703,7 +708,13 @@ export function mergePostsIntoCarousel(
 
     return { ok: true, post_id: survivor };
   });
-  return tx();
+  // .immediate() takes the write lock at BEGIN instead of on the first write statement.
+  // This function reads the rows it validates (loadMergeCandidate) and then writes based on
+  // what it read, so a deferred transaction only holds together thanks to WAL snapshot
+  // isolation — and under a concurrent writer it would surface as an opaque SQLITE_BUSY
+  // mid-merge rather than a clean result. deletePost avoids this by folding its guard into
+  // the DELETE itself; a multi-statement plan-then-write can't, so it takes the lock up front.
+  return tx.immediate();
 }
 
 /** A post's publications joined with their channel, for the edit screen's per-channel queue view. */
