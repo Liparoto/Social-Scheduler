@@ -37,6 +37,20 @@ export function getChannel(id: number): Channel | undefined {
     | undefined;
 }
 
+/**
+ * Ask the worker to re-fetch this channel's profile photo on its next cycle.
+ *
+ * This sets a flag and nothing else — the dashboard never calls a platform API. Same
+ * dashboard-to-worker handoff as metrics_refresh_requested_at on publications. The worker
+ * clears the flag whether the fetch succeeds or fails, so a persistently failing channel
+ * cannot wedge itself into retrying every cycle.
+ */
+export function requestAvatarRefresh(channelId: number): void {
+  getDb()
+    .prepare("UPDATE channels SET avatar_refresh_requested = 1 WHERE id = ?")
+    .run(channelId);
+}
+
 export interface CreateChannelInput {
   platform: Platform;
   account_name: string;
