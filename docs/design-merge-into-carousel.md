@@ -156,10 +156,25 @@ So a naive `UPDATE post_assets SET post_id = @survivor` collides with the surviv
 rows, and an in-place renumber like `SET sort_order = sort_order + 1` collides with itself
 partway through the set.
 
-Approach: within the transaction, first move every row to a **non-colliding high offset**
-(e.g. `sort_order = 1000 + n`), then assign the final `0..n-1` values in a second pass. This is
-the established workaround and needs a comment saying why, because the code looks redundant
-otherwise.
+Approach: **delete every involved `post_assets` row, then re-insert them on the survivor** in
+`asset_order`, inside the same transaction:
+
+```sql
+DELETE FROM post_assets WHERE post_id IN (<all merged posts>);
+-- then one INSERT per asset, sort_order = 0..n-1, post_id = survivor
+```
+
+A `post_assets` row carries no data worth preserving — it is `(id, post_id, asset_id,
+sort_order)` and nothing references its `id`. So rebuilding is simpler and provably
+collision-free, rather than shuffling rows through a high offset and hoping the intermediate
+state never collides.
+
+`ON DELETE RESTRICT` on `asset_id` does **not** block this: RESTRICT governs deleting the
+*asset*, not the join row.
+
+**Ordering matters here.** The join rows must be rebuilt on the survivor *before* the
+non-survivor posts are deleted. Deleting the posts first would cascade their join rows away and
+take the asset links with them.
 
 There is currently **no code anywhere in the repo that UPDATEs or DELETEs a `post_assets` row** —
 this feature establishes that pattern, so there is no existing convention to match.
@@ -216,6 +231,34 @@ reordering reachable without a mouse, and the 1-based index badges.
 ---
 
 ## 8. Testing
+
+### The harness (new — the dashboard has none today)
+
+The worker has 34 pytest files; the dashboard has **zero tests and no test framework**. This
+feature is the wrong one to keep that streak: it deletes posts and rewrites foreign-key rows,
+and §3's failure mode is invisible until publish time.
+
+Verified working on 2026-07-30 with **no new dependencies** — Node 23.10 runs TypeScript
+natively and ships a test runner:
+
+```bash
+DATABASE_PATH=<tmp>/t.db node --conditions=react-server --import ./test/hook.mjs --test <files>
+```
+
+Three details make it work, each needed for a specific reason:
+- `--conditions=react-server` — `lib/db.ts` imports `server-only`, which throws in plain Node;
+  the package maps that condition to a no-op.
+- `test/hook.mjs` — ~12 lines using the built-in `node:module` `registerHooks` to append `.ts`
+  to extensionless relative imports, which Next's bundler resolves and Node's ESM resolver
+  does not.
+- `DATABASE_PATH` — already env-overridable via `lib/config.ts`, so tests point at a throwaway
+  DB built by `DATABASE_PATH=… python3 migrate.py`. **Never the real database.**
+
+This beats adding vitest: no dependency tree, and it exercises the *real* `queries.ts` against a
+*real* SQLite file with the *real* migrations, which is exactly where the FK and UNIQUE
+behaviour being relied on lives.
+
+### Cases
 
 Verification is against the real dashboard, but destructive confirmation paths must **not** be
 driven through the in-app browser: it auto-accepts `confirm()` dialogs, which previously caused
