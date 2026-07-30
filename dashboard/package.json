@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --conditions=react-server --import ./test/hook.mjs --test --test-concurrency=1 \"lib/*.test.ts\" \"test/*.test.ts\""
   },
   "dependencies": {
     "better-sqlite3": "^13.0.1",
