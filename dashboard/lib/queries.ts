@@ -15,7 +15,8 @@ import type {
   Tag,
 } from "./types";
 import type { Platform } from "./platforms";
-import { describeChannel, incompatibleChannelsForPostType } from "./platforms";
+import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
+import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -509,6 +510,200 @@ export function deletePost(id: number): "ok" | "not_found" | "has_live" {
     )
     .run({ id });
   return info.changes > 0 ? "ok" : "has_live";
+}
+
+// ---- Merge several drafts into one carousel --------------------------------------
+// The decision half of this lives in lib/merge-plan.ts (pure, no DB). Everything here is
+// the other half: load the rows planMerge needs, then — only if it says yes — perform the
+// writes. No guard from spec §5 is re-implemented here; if a rule is missing, it belongs
+// in merge-plan.ts so the unit tests can see it.
+
+/**
+ * Everything merge-plan.ts needs to judge one post, and nothing else. Returns undefined for
+ * an id that no longer exists (deleted between page load and submit) so planMerge reports it
+ * as post_not_found rather than crashing on an undefined candidate.
+ */
+function loadMergeCandidate(
+  db: ReturnType<typeof getDb>,
+  postId: number
+): MergeCandidate | undefined {
+  const post = db
+    .prepare("SELECT id, post_type, status FROM posts WHERE id = ?")
+    .get(postId) as { id: number; post_type: string; status: string } | undefined;
+  if (!post) return undefined;
+  const slides = db
+    .prepare(
+      `SELECT pa.asset_id, a.media_kind
+         FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+        WHERE pa.post_id = ? ORDER BY pa.sort_order ASC`
+    )
+    .all(postId) as { asset_id: number; media_kind: string }[];
+  // Same live-send definition deletePost uses: 'posted' means it exists on the platform,
+  // 'publishing' means the worker is mid-flight with it right now.
+  const live = db
+    .prepare(
+      `SELECT 1 FROM publications
+        WHERE post_id = ? AND status IN ('posted','publishing') LIMIT 1`
+    )
+    .get(postId);
+  return {
+    post_id: post.id,
+    post_type: post.post_type,
+    status: post.status,
+    has_live_publication: live !== undefined,
+    asset_ids: slides.map((s) => s.asset_id),
+    media_kinds: slides.map((s) => s.media_kind),
+  };
+}
+
+/**
+ * The distinct platforms the merged post could end up going to — planMerge caps the carousel
+ * at the STRICTEST of these (Instagram 10, Threads 20).
+ *
+ * The `?? ["instagram"]` is load-bearing, not a nicety. planMerge computes the cap with
+ * `Math.min(...platforms.map(...))`, and `Math.min()` of an empty array is **Infinity** — so
+ * handing it an empty list silently switches the size cap off completely and a 30-photo merge
+ * would sail through here only to die at publish time. A draft with no target channels yet is
+ * completely normal (that is the whole state the 135 imported drafts are in), so this case is
+ * the common one, not the exotic one. Falling back to Instagram is the conservative choice:
+ * 10 is the strictest cap any platform here has, it matches platforms.ts's own `maxCarousel`
+ * default for an unrecognised platform, and it makes planMerge's "Instagram allows at most 10"
+ * message literally true. An untargeted draft can be pointed at any channel later, so it has
+ * to satisfy the tightest limit, not the loosest.
+ */
+function mergeTargetPlatforms(db: ReturnType<typeof getDb>, postIds: number[]): Platform[] {
+  if (postIds.length === 0) return ["instagram"];
+  const placeholders = postIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT c.platform
+         FROM post_targets pt JOIN channels c ON c.id = pt.channel_id
+        WHERE pt.post_id IN (${placeholders})`
+    )
+    .all(...postIds) as { platform: string }[];
+  const platforms = rows.map((r) => r.platform).filter(isPlatform);
+  return platforms.length > 0 ? platforms : ["instagram"];
+}
+
+/**
+ * Fold several draft posts into a single carousel: the first id in `postIds` survives and
+ * collects every asset in `assetOrder`, the rest are emptied and deleted. Assets themselves
+ * are never touched — only the post_assets join rows move.
+ *
+ * Returns the plan's own problem (with its HTTP status) on rejection, having written nothing.
+ */
+export function mergePostsIntoCarousel(
+  postIds: number[],
+  assetOrder: number[],
+  caption: string | null
+): { ok: true; post_id: number } | { ok: false; problem: MergeProblem } {
+  const db = getDb();
+  const tx = db.transaction(():
+    | { ok: true; post_id: number }
+    | { ok: false; problem: MergeProblem } => {
+    // The same id twice would otherwise be deleted twice and counted twice; collapse it
+    // once, up front, so every list below is a true set of posts.
+    const merged = [...new Set(postIds)];
+    const candidates = merged
+      .map((id) => loadMergeCandidate(db, id))
+      .filter((c): c is MergeCandidate => c !== undefined);
+
+    const plan = planMerge(
+      candidates,
+      { post_ids: postIds, asset_order: assetOrder },
+      mergeTargetPlatforms(db, merged)
+    );
+    // Rejected: return before a single write happens. (The transaction commits empty.)
+    if (!plan.ok) return { ok: false, problem: plan.problem };
+
+    // spec §3: post_type is not decoration. worker/publisher.py re-validates it against the
+    // real asset count at publish time and fails NON-retryably on a mismatch — a merge that
+    // moves the photos but hardcodes 'carousel' looks perfect in the UI and then dies at send
+    // time. So it is DERIVED from the slides about to be written. Merging a text post (no
+    // assets) into one single-image draft legitimately leaves one slide, which is 'single'.
+    if (plan.slides.length === 0) {
+      return {
+        ok: false,
+        problem: {
+          code: "no_assets",
+          message: "Those posts have no photos to merge.",
+          status: 400,
+        },
+      };
+    }
+    const postType: PostType = plan.slides.length > 1 ? "carousel" : "single";
+
+    const survivor = plan.survivorId;
+    const others = merged.filter((id) => id !== survivor);
+    const allPlaceholders = merged.map(() => "?").join(",");
+
+    // post_assets carries no data worth preserving — (id, post_id, asset_id, sort_order), and
+    // nothing references its id. So instead of shuffling rows through a temporary high offset
+    // to dodge UNIQUE (post_id, sort_order) — which SQLite checks per-row, immediately — we
+    // delete every involved row and rebuild them on the survivor. Simpler and provably
+    // collision-free.
+    //
+    // Order matters: the join rows must be rebuilt BEFORE the emptied posts are deleted.
+    // Deleting the posts first would cascade their join rows away and take the asset links
+    // with them.
+    db.prepare(`DELETE FROM post_assets WHERE post_id IN (${allPlaceholders})`).run(...merged);
+    const link = db.prepare(
+      "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, ?)"
+    );
+    for (const slide of plan.slides) link.run(survivor, slide.asset_id, slide.sort_order);
+
+    const now = nowIso();
+    if (caption === null) {
+      // null means "no caption was chosen", NOT "blank the caption". Writing NULL here would
+      // destroy the survivor's existing text — and leave posts.caption disagreeing with its
+      // caption_variants rows, which the worker actually prefers. So leave both untouched.
+      db.prepare(
+        "UPDATE posts SET post_type = @post_type, updated_at = @now WHERE id = @id"
+      ).run({ post_type: postType, now, id: survivor });
+    } else {
+      const body = caption.trim();
+      db.prepare(
+        `UPDATE posts SET post_type = @post_type, caption = @caption, updated_at = @now
+          WHERE id = @id`
+      ).run({ post_type: postType, caption: body || null, now, id: survivor });
+      // The worker reads caption_variants in preference to posts.caption, so a caption that
+      // only lands in posts.caption would not be the one that goes out. Replace, don't add:
+      // the survivor's old variants describe the pre-merge post.
+      db.prepare("DELETE FROM caption_variants WHERE post_id = ?").run(survivor);
+      if (body) {
+        db.prepare(
+          `INSERT INTO caption_variants (post_id, platform, body, sort_order)
+           VALUES (?, NULL, ?, 0)`
+        ).run(survivor, body);
+      }
+    }
+
+    if (others.length > 0) {
+      const otherPlaceholders = others.map(() => "?").join(",");
+      // Union, not replace: a merge should never lose a channel/tag/season the user had
+      // already set on one of the slides. OR IGNORE absorbs the overlap, which is the
+      // common case (the same drafts usually share targets).
+      db.prepare(
+        `INSERT OR IGNORE INTO post_targets (post_id, channel_id)
+           SELECT ?, channel_id FROM post_targets WHERE post_id IN (${otherPlaceholders})`
+      ).run(survivor, ...others);
+      db.prepare(
+        `INSERT OR IGNORE INTO post_tags (post_id, tag_id)
+           SELECT ?, tag_id FROM post_tags WHERE post_id IN (${otherPlaceholders})`
+      ).run(survivor, ...others);
+      db.prepare(
+        `INSERT OR IGNORE INTO post_periods (post_id, period_id, mode)
+           SELECT ?, period_id, mode FROM post_periods WHERE post_id IN (${otherPlaceholders})`
+      ).run(survivor, ...others);
+
+      // Last, once nothing else needs to read from them. CASCADE clears their remaining
+      // side-table rows; assets are ON DELETE RESTRICT and are not deleted by any of this.
+      db.prepare(`DELETE FROM posts WHERE id IN (${otherPlaceholders})`).run(...others);
+    }
+
+    return { ok: true, post_id: survivor };
+  });
+  return tx();
 }
 
 /** A post's publications joined with their channel, for the edit screen's per-channel queue view. */
