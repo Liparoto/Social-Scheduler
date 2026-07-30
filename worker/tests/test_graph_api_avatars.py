@@ -20,13 +20,16 @@ class FakeResponse:
         self.content = content
         self.text = text
         self.headers = {}
+        self.yielded = 0  # Track total bytes yielded for early-stop validation
 
     def json(self):
         return self._payload
 
     def iter_content(self, chunk_size=8192):
         for i in range(0, len(self.content), chunk_size):
-            yield self.content[i : i + chunk_size]
+            chunk = self.content[i : i + chunk_size]
+            self.yielded += len(chunk)
+            yield chunk
 
     def __enter__(self):
         return self
@@ -104,6 +107,18 @@ def test_download_returns_the_raw_bytes():
 
 
 def test_download_refuses_a_response_larger_than_max_bytes():
-    client, _ = _client(FakeResponse(content=b"x" * 5000))
+    # Payload must be > chunk_size (8192) so iter_content yields multiple chunks.
+    # This tests that the download stops early rather than buffering everything
+    # and checking the size afterward — a naive implementation would buffer all 30000
+    # bytes before checking > 1000, while the real streaming one stops after ~1000.
+    response = FakeResponse(content=b"x" * 30000)
+    client, _ = _client(response)
     with pytest.raises(GraphAPIError, match="too large"):
         client.download_image_bytes("https://cdn/ig.jpg", max_bytes=1000)
+    # Assert the download stopped early: yielded total must be well below the full 30000.
+    # We allow a few chunks worth of overshoot (8192 * 1 = ~8KB overhead), but nowhere
+    # near all 30000 bytes.
+    assert response.yielded < 10000, (
+        f"expected early stop (< 10000 bytes yielded), but got {response.yielded}; "
+        f"streaming check failed — naive buffer-then-check would not stop early"
+    )
