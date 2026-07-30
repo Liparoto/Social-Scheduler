@@ -842,6 +842,63 @@ used asset, thumbnail backfill for assets that have none. Two unused personal fi
 
 ---
 
+## Merge posts into a carousel (2026-07-30)
+
+**Design:** `docs/design-merge-into-carousel.md` · **Plan:** `docs/plan-merge-into-carousel.md`
+
+Select 2+ draft posts in the Library, review the slide order, and merge them into one carousel
+draft. Motivated by the bulk import creating one draft per photo: 135 of 147 drafts were single
+images, many of them really slides of the same carousel.
+
+- [x] **Task 1 — test harness.** The dashboard had NO tests (the worker has 34 pytest files).
+      Added one with **zero new dependencies**: Node 23 runs TypeScript natively and ships
+      `node --test`. Needs three things — `--conditions=react-server` (because `lib/db.ts`
+      imports `server-only`, which throws in plain Node), a 12-line `node:module` resolver hook
+      (Node's ESM resolver won't resolve the extensionless `./db` that Next's bundler does), and
+      `DATABASE_PATH` pointed at a temp DB built by `migrate.py`. Run it: `cd dashboard && npm test`.
+- [x] **Task 2 — `lib/merge-plan.ts`.** Pure guards + slide ordering, imports nothing but
+      `./platforms`, so every rejection path is testable without SQLite.
+- [x] **Task 3 — `mergePostsIntoCarousel`.** One `.immediate()` transaction. Rebuilds the
+      `post_assets` rows on the survivor *before* deleting the emptied posts, and flips
+      `post_type` to `carousel`.
+- [x] **Task 4 — `POST /api/posts/merge`.** Thin passthrough; all guards live below it.
+- [x] **Task 5 — extracted `components/slide-reorder.tsx`** from the composer so the merge modal
+      reuses the one drag/keyboard reorder implementation instead of copying it.
+- [x] **Task 6 — merge modal + Library bulk action**, including the two owner decisions below.
+- [x] **Task 7 — end-to-end verified** through the real UI with Playwright.
+
+**Two traps this feature exists around, both worth remembering:**
+1. **`posts.post_type` is frozen at write time** and only re-validated by the Python worker at
+   publish. A merge that moved assets but forgot `post_type` would look perfectly correct in the
+   dashboard and then fail at send with `carousel needs 2-10 assets, has 1`. This is why the
+   transaction sets it, and why there is a dedicated test.
+2. **`UNIQUE (post_id, sort_order)` is checked per-row and immediately.** Renumbering in place
+   collides with itself. The transaction deletes the involved join rows and rebuilds them — a
+   join row carries nothing worth preserving.
+
+**Owner decisions (2026-07-30):**
+- **Scheduled sends are warned about, not silently destroyed.** Merging deletes non-survivor
+  drafts, which cascade-deletes their `scheduled`/`pending_approval` publications. The modal
+  says "N of these has a scheduled send that will be canceled" — and correctly stays silent when
+  the only queued post is the *survivor*, whose sends are untouched.
+- **"No caption" genuinely clears.** `caption: null` and `""` behave identically and wipe both
+  `posts.caption` and all `caption_variants`. There is no "leave it alone" value.
+
+**Verification note:** the end-to-end run used throwaway drafts created for the purpose, then
+deleted — the owner's real content was never merged. Database confirmed byte-identical to the
+pre-work backup afterward (149 posts / 166 assets / 4 publications / 166 post_assets). Per the
+Media-page incident above, all destructive UI was driven with Playwright, never the in-app browser.
+
+**Deliberately out of scope:** splitting a carousel back into singles, reordering an existing
+carousel outside a merge, merging from the Media page.
+
+- [ ] **Follow-up (pre-existing, unrelated to merge):** `createDraftPost` derives `post_type`
+      from asset count alone and ignores `media_kind`, so a single *video* saved as a draft
+      becomes `single` rather than `reel` — which the worker then refuses to publish. Confirmed
+      live 2026-07-30.
+
+---
+
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
 - [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
       Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing
