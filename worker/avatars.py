@@ -154,8 +154,14 @@ def _store_avatar(asset_dir: Path, channel_id: int, data: bytes, ext: str) -> st
     avatar_dir.mkdir(parents=True, exist_ok=True)
     final = avatar_dir / f"{channel_id}.{ext}"
     tmp = avatar_dir / f".{channel_id}.{ext}.tmp"
-    tmp.write_bytes(data)
-    os.replace(tmp, final)
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, final)
+    except Exception:
+        # A failed write or replace (disk full, permissions) must not leave a stray temp
+        # file behind — this runs every cycle, so an unlinked orphan would accumulate.
+        tmp.unlink(missing_ok=True)
+        raise
     return f"avatars/{final.name}"
 
 
@@ -171,7 +177,15 @@ def run_avatars(conn, config, client, now, *, logger=None, client_for=None) -> i
     """
     now_iso = now.isoformat()
     pick_client = client_for or (lambda _platform: client)
-    due = channels_needing_avatars(conn, now, Path(config.asset_storage_dir))
+    try:
+        due = channels_needing_avatars(conn, now, Path(config.asset_storage_dir))
+    except Exception as exc:  # noqa: BLE001 — selection itself must never kill the daemon
+        # E.g. "database is locked" — the dashboard is a concurrent writer against the
+        # same SQLite file. No channel to attach the error to, so just log and bail for
+        # this cycle; the per-channel handling below is unreachable if selection failed.
+        if logger:
+            logger.warning("[avatar] selection failed: %s", redact(str(exc)))
+        return 0
     refreshed = 0
 
     for channel in due:

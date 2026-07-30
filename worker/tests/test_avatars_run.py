@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
 
+import worker.avatars as avatars_mod
 from worker.avatars import run_avatars
 
 NOW = datetime(2026, 7, 30, 12, 0, tzinfo=timezone.utc)
@@ -177,3 +179,42 @@ def test_the_token_never_reaches_avatar_error(conn, config):
     run_avatars(conn, config, LeakyClient(), NOW)
 
     assert "EAAsupersecrettokenvalue" not in _row(conn, cid)["avatar_error"]
+
+
+def test_a_selection_failure_returns_zero_without_raising(conn, config, monkeypatch):
+    """channels_needing_avatars runs BEFORE the per-channel try/except, so a locked-DB
+    error there (the dashboard is a concurrent writer against the same SQLite file) must
+    be caught at the top level rather than escaping run_avatars — the docstring's "must
+    never raise" contract has to hold even when selection itself is what fails.
+    """
+    _channel(conn)
+
+    def _boom(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(avatars_mod, "channels_needing_avatars", _boom)
+
+    assert run_avatars(conn, config, FakeAvatarClient(), NOW) == 0
+
+
+def test_a_failed_store_does_not_leave_a_stray_temp_file(conn, config, monkeypatch):
+    """A write or replace failure inside _store_avatar (disk full, permissions) must not
+    leave `.{id}.{ext}.tmp` behind — that failure mode recurs every cycle, so an unlinked
+    orphan would accumulate in avatars/ forever.
+    """
+    cid = _channel(conn)
+    client = FakeAvatarClient()
+
+    def _boom_replace(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(avatars_mod.os, "replace", _boom_replace)
+
+    run_avatars(conn, config, client, NOW)
+
+    row = _row(conn, cid)
+    assert row["avatar_error"], "the per-channel handler should still record the failure"
+
+    avatar_dir = config.asset_storage_dir / "avatars"
+    leftover_tmp = list(avatar_dir.glob("*.tmp")) if avatar_dir.exists() else []
+    assert leftover_tmp == []
