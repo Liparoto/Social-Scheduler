@@ -1104,11 +1104,26 @@ Note on test placement: `dashboard/package.json`'s test script globs only `lib/*
 Create `dashboard/lib/avatar-files.test.ts`:
 
 ```ts
-import { describe, it } from "node:test";
+import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { avatarContentType } from "./avatar-files";
-import { resolveInsideStore } from "./asset-files";
+
+// asset-files.ts imports config.ts, which reads ASSET_STORAGE_DIR ONCE at module load —
+// so it must be set before that module is imported, which is why resolveInsideStore comes
+// in through a dynamic import below rather than a static one at the top. Same pattern as
+// lib/asset-files.test.ts. avatar-files.ts itself imports only node:path, so it is safe to
+// import statically.
+const STORE = mkdtempSync(path.join(tmpdir(), "ss-avatar-"));
+process.env.ASSET_STORAGE_DIR = STORE;
+
+let resolveInsideStore: typeof import("./asset-files").resolveInsideStore;
+
+before(async () => {
+  ({ resolveInsideStore } = await import("./asset-files"));
+});
 
 describe("avatarContentType", () => {
   it("maps each stored extension to its image type", () => {
@@ -1552,7 +1567,7 @@ Then replace the header block (currently lines 45-53) with:
                       size={40}
                     />
                     <div>
-                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} avatarPath={c.avatar_path} />
+                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} />
                       {c.business_label ? (
                         <p className="mt-1.5 text-xs text-muted">{c.business_label}</p>
                       ) : null}
@@ -1570,7 +1585,7 @@ Then replace the header block (currently lines 45-53) with:
 
 `usesAccountId` is already imported on this page and is what distinguishes the platforms that have an account to read a photo from (Instagram, Facebook, Threads) from the ones that do not (Discord's webhook, Telegram's chat id) — so Discord and Telegram get the initial circle with no refresh button, which is the correct end state rather than a missing feature.
 
-The `avatarPath` prop passed to `ChannelChip` here is added in Task 8; add it in that task and leave `ChannelChip` untouched for now if implementing strictly in order.
+`ChannelChip` is deliberately left alone in this task — it does not yet accept an `avatarPath` prop (that arrives in Task 8), and on this page the 40px avatar sits directly beside the chip, so a second avatar inside the chip would be redundant here regardless.
 
 - [ ] **Step 4: Verify in the browser**
 
