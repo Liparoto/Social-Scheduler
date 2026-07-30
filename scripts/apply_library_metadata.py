@@ -51,6 +51,14 @@ DEFAULT_DB = REPO_ROOT / "data" / "socialscheduler.db"
 TIME_BANDS = {"morning", "afternoon", "evening", "anytime"}
 
 
+class DryRunRollback(Exception):
+    """Raised to unwind the `with conn:` block so --dry-run never commits.
+
+    Deliberately its own type rather than KeyboardInterrupt: catching Ctrl-C to do
+    this would report a genuinely interrupted run as a clean dry run.
+    """
+
+
 def load_batch(path: Path) -> list[dict]:
     data = json.loads(path.read_text())
     posts = data.get("posts")
@@ -160,10 +168,14 @@ def main() -> None:
             for p in posts:
                 apply_post(conn, p)
             if args.dry_run:
-                raise KeyboardInterrupt  # unwind the transaction deliberately
-    except KeyboardInterrupt:
+                raise DryRunRollback  # unwind the transaction deliberately
+    except DryRunRollback:
         print(f"DRY RUN ok — {len(posts)} posts validated and applied, then rolled back.")
         return
+    except KeyboardInterrupt:
+        # `with conn:` has already rolled back on the way out. Say so plainly rather
+        # than letting this look like either a success or a completed dry run.
+        sys.exit("\nInterrupted — nothing was written.")
     finally:
         conn.close()
 
