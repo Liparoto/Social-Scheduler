@@ -825,13 +825,18 @@ Plan: `docs/superpowers/plans/2026-07-29-media-page.md`.
       unrelated to this work, but it means a fresh clone's export would crash — tracked
       separately.
 
-**Incident (2026-07-29):** during Task 3 verification, asset 2 (`20250827_1442_video.mp4`,
-22.3 MB, unused) was deleted unintentionally — a coordinate-based click landed on the wrong
-card after the grid reflowed, and the browser tool auto-accepted the `confirm()` dialog. The
-outcome was within the approved plan (asset 2 was slated for deletion) but the act was not
-authorized at that moment, and a hard delete is unrecoverable. Verification switched to
-Playwright with explicit dialog handling for the rest of the task. **Never drive a
-destructive control by coordinate click on a surface that answers dialogs by itself.**
+**Note (2026-07-29) — cause uncertain:** during Task 3 verification, asset 2
+(`20250827_1442_video.mp4`, 22.3 MB, unused) disappeared between two checks. It was slated
+for deletion by the approved plan either way, so nothing was lost that wasn't going. The
+owner says they deleted it themselves; an automated coordinate-click at roughly the same
+moment is the other candidate and cannot be ruled out. **The record says "unknown" rather
+than guessing** — the earlier version of this entry asserted the automation did it and that
+the browser tool auto-accepted the `confirm()` dialog, neither of which was ever proven.
+
+The practice that came out of it stands on its own merits: **verify destructive controls
+with Playwright and explicit `browser_handle_dialog`, not coordinate clicks.** Playwright
+pauses on the dialog and reports its text, so the wording gets verified too, and clicks
+target CSS selectors rather than coordinates that a media-heavy grid invalidates on reflow.
 
 **Deliberately out of scope:** bulk/multi-select delete, a trash/undo flow, force-deleting a
 used asset, thumbnail backfill for assets that have none. Two unused personal files
