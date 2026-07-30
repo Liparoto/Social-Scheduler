@@ -13,6 +13,7 @@ import { TagEditor } from "@/components/tag-editor";
 import { ConformControl } from "@/components/conform-control";
 import { CoverFramePicker } from "@/components/cover-frame-picker";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
+import { SlideReorder, type Slide } from "@/components/slide-reorder";
 
 interface ChannelLite {
   id: number;
@@ -69,7 +70,6 @@ export function Composer({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, startSubmit] = useTransition();
-  const dragIndex = useRef<number | null>(null);
 
   const caption =
     variants.find((v) => v.platform === "" && v.body.trim())?.body ??
@@ -218,16 +218,6 @@ export function Composer({
     }
     setUploading(false);
     if (fileInput.current) fileInput.current.value = "";
-  }
-
-  function move(from: number, to: number) {
-    if (to < 0 || to >= assets.length) return;
-    setAssets((prev) => {
-      const next = [...prev];
-      const [item] = next.splice(from, 1);
-      next.splice(to, 0, item);
-      return next;
-    });
   }
 
   function removeAsset(id: number) {
@@ -433,63 +423,35 @@ export function Composer({
                 <p className="mb-2 text-xs text-muted">
                   Drag to reorder — this is the carousel order.
                 </p>
-                <ul className="flex flex-wrap gap-3">
-                  {assets.map((a, i) => (
-                    <li
-                      key={a.asset.id}
-                      draggable
-                      onDragStart={() => (dragIndex.current = i)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => {
-                        if (dragIndex.current !== null) move(dragIndex.current, i);
-                        dragIndex.current = null;
-                      }}
-                      className="group relative"
-                    >
-                      <span className="data absolute left-1 top-1 z-10 rounded bg-ink/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                        {i + 1}
-                      </span>
-                      <button
-                        onClick={() => removeAsset(a.asset.id)}
-                        className="absolute right-1 top-1 z-10 hidden h-5 w-5 items-center justify-center rounded-full bg-ink/75 text-xs text-white group-hover:flex"
-                        aria-label="Remove image"
-                      >
-                        ×
-                      </button>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={`/api/media/${a.asset.id}?variant=thumb`}
-                        alt={a.asset.original_filename ?? "image"}
-                        className="h-24 w-24 cursor-grab rounded-lg border border-border object-cover active:cursor-grabbing"
+                <SlideReorder
+                  slides={assets.map((a): Slide => ({
+                    assetId: a.asset.id,
+                    label: a.asset.original_filename ?? undefined,
+                  }))}
+                  onReorder={(next) =>
+                    // SlideReorder only knows slide order (by assetId) — translate that
+                    // back into the composer's own UploadedAsset[] so the rest of the
+                    // component (upload metadata, warnings, conversion notices) rides
+                    // along unchanged.
+                    setAssets((prev) =>
+                      next.map((s) => prev.find((a) => a.asset.id === s.assetId)!)
+                    )
+                  }
+                  onRemove={removeAsset}
+                  // Per-image framing review only applies to images (video never reaches
+                  // this branch — hasVideo renders CoverFramePicker instead), so it stays
+                  // composer-side rather than being baked into the shared component.
+                  renderExtra={(slide) => {
+                    const a = assets.find((x) => x.asset.id === slide.assetId);
+                    return a?.asset.needs_review ? (
+                      <ConformControl
+                        assetId={a.asset.id}
+                        conformMode={a.asset.conform_mode}
+                        needsReview={a.asset.needs_review}
                       />
-                      {a.asset.needs_review ? (
-                        <ConformControl
-                          assetId={a.asset.id}
-                          conformMode={a.asset.conform_mode}
-                          needsReview={a.asset.needs_review}
-                        />
-                      ) : null}
-                      <div className="mt-1 flex justify-center gap-1">
-                        <button
-                          onClick={() => move(i, i - 1)}
-                          disabled={i === 0}
-                          className="rounded px-1 text-xs text-muted hover:text-ink disabled:opacity-30"
-                          aria-label="Move left"
-                        >
-                          ←
-                        </button>
-                        <button
-                          onClick={() => move(i, i + 1)}
-                          disabled={i === assets.length - 1}
-                          className="rounded px-1 text-xs text-muted hover:text-ink disabled:opacity-30"
-                          aria-label="Move right"
-                        >
-                          →
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                    ) : null;
+                  }}
+                />
               </div>
             )}
             {notice ? <p className="mt-3 text-xs text-brand-strong">{notice}</p> : null}
