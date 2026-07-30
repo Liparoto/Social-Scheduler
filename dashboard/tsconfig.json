@@ -9,6 +9,11 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // node --test runs .test.ts files through Node's own ESM resolver (not Next's bundler),
+    // which requires import specifiers to carry the literal .ts extension. Safe alongside
+    // "noEmit": true above — allowImportingTsExtensions only permits that extension in
+    // import specifiers, it doesn't change emit or how Next's bundler resolves modules.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
