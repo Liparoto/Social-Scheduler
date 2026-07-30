@@ -153,6 +153,7 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
                       type="button"
                       onClick={() => remove(a)}
                       disabled={busyId === a.id || pending}
+                      aria-label={`Delete ${name}`}
                       className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-status-failed hover:bg-surface-sunken disabled:opacity-50"
                     >
                       {busyId === a.id ? "Deleting…" : "Delete"}

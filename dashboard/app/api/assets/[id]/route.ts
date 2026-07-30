@@ -48,7 +48,7 @@ export async function DELETE(
     return NextResponse.json(
       {
         error:
-          "This file is attached to a post, so it can't be deleted. Remove it from the post first.",
+          "Something still references this file, so it can't be deleted. If it's attached to a post, remove it from the post first.",
       },
       { status: 409 }
     );

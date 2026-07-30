@@ -833,6 +833,13 @@ destructive control by coordinate click on a surface that answers dialogs by its
 used asset, thumbnail backfill for assets that have none. Two unused personal files
 (`IMG_3707_1080.mov`, the Malaya photo) were kept at the owner's direction.
 
+- [ ] **Follow-up:** when migration `0012_cover_asset.sql` (the `custom-cover-image` branch)
+      merges to main, `listAssetsWithUsage()` must learn about `assets.cover_asset_id`. Until
+      it does, a Reels cover image has no `post_assets` row, so `/media` will show it as
+      "Unused" with a Delete button and count its bytes in the reclaim total. The delete
+      itself is safe — the foreign key rejects it — but the page's "unused" figure would
+      overstate.
+
 ---
 
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
