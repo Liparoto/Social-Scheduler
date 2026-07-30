@@ -39,6 +39,16 @@ interface ChannelLite {
   color_hue: number | null;
 }
 
+// The post_type values the Library can filter by, with the label each one gets. Ordered
+// the way they're offered in the Format dropdown and counted in the summary line.
+type PostFormat = "carousel" | "single" | "reel" | "text";
+const POST_FORMATS: { value: PostFormat; label: string }[] = [
+  { value: "carousel", label: "Carousel" },
+  { value: "single", label: "Single image" },
+  { value: "reel", label: "Reel" },
+  { value: "text", label: "Text-only" },
+];
+
 function tomorrow(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
@@ -65,6 +75,7 @@ export function LibraryView({
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
   const [kindFilter, setKindFilter] = useState<"all" | "evergreen" | "one_time">("all");
+  const [formatFilter, setFormatFilter] = useState<"all" | PostFormat>("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(
@@ -148,6 +159,13 @@ export function LibraryView({
     new Set(posts.flatMap((p) => [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)]))
   ).sort();
 
+  // Counted over the whole library, not the filtered view, so the numbers stay put while
+  // you click between formats instead of collapsing to "N Carousel" the moment one is on.
+  const formatCounts = POST_FORMATS.map((f) => ({
+    ...f,
+    count: posts.filter((p) => p.post_type === f.value).length,
+  })).filter((f) => f.count > 0);
+
   const q = search.trim().toLowerCase();
   const shown = posts.filter((p) => {
     if (tagFilter) {
@@ -159,6 +177,7 @@ export function LibraryView({
     }
     if (statusFilter !== "all" && p.content_status !== statusFilter) return false;
     if (kindFilter !== "all" && p.content_kind !== kindFilter) return false;
+    if (formatFilter !== "all" && p.post_type !== formatFilter) return false;
     if (q && !(p.caption ?? "").toLowerCase().includes(q)) return false;
     return true;
   });
@@ -199,6 +218,26 @@ export function LibraryView({
         <span className="mx-1 h-4 w-px bg-border" aria-hidden />
         <span>{posts.filter((p) => p.content_kind === "evergreen").length} Evergreen</span>
         <span>{posts.filter((p) => p.content_kind === "one_time").length} One-time</span>
+        {/* Format counts double as one-click filters — the fastest way to pull up every
+            carousel. A format with nothing in it is omitted rather than shown as a dead 0. */}
+        {formatCounts.length > 0 ? (
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        ) : null}
+        {formatCounts.map(({ value, label, count }) => {
+          const on = formatFilter === value;
+          return (
+            <button
+              key={value}
+              onClick={() => setFormatFilter(on ? "all" : value)}
+              aria-pressed={on}
+              className={`rounded px-1 transition-colors hover:text-ink ${
+                on ? "text-brand-strong underline underline-offset-2" : ""
+              }`}
+            >
+              {count} {label}
+            </button>
+          );
+        })}
         <span className="ml-auto">{posts.length} total</span>
       </div>
 
@@ -214,6 +253,19 @@ export function LibraryView({
           <option value="all">All kinds</option>
           <option value="evergreen">Evergreen</option>
           <option value="one_time">One-time</option>
+        </select>
+        <select
+          className={field}
+          aria-label="Filter by format"
+          value={formatFilter}
+          onChange={(e) => setFormatFilter(e.target.value as typeof formatFilter)}
+        >
+          <option value="all">All formats</option>
+          {POST_FORMATS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
         </select>
         <input
           className={`${field} min-w-48 flex-1`}
