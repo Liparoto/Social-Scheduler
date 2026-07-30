@@ -505,8 +505,10 @@ export function LibraryView({
         })}
       </div>
 
-      {/* Bulk schedule bar */}
-      <div className="sticky bottom-4 rounded-card border border-border-strong bg-surface p-4 shadow-lg">
+      {/* Bulk schedule bar. z-20 is load-bearing: the thumbnails' MediaBadge sits at z-10,
+          and without a higher layer here those badges punched through the bar's opaque
+          background as the grid scrolled under it. Stays below the lightbox's z-50. */}
+      <div className="sticky bottom-4 z-20 rounded-card border border-border-strong bg-surface p-4 shadow-lg">
         <div className="flex flex-wrap items-end gap-4">
           <div className="text-sm">
             <span className="data text-lg font-semibold text-ink">{selected.length}</span>

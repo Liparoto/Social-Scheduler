@@ -19,7 +19,10 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-60 shrink-0 border-r border-border bg-surface flex flex-col">
+    // sticky + self-start + h-screen: as a flex child it would otherwise stretch to the
+    // full page height, and a stretched box has nothing to stick within. Pinned to one
+    // viewport with its own scrollbar, so long pages scroll the content, not the nav.
+    <aside className="sticky top-0 self-start h-screen w-60 shrink-0 overflow-y-auto border-r border-border bg-surface flex flex-col">
       <div className="px-5 py-6 border-b border-border">
         <div className="flex items-center gap-2.5">
           <span
