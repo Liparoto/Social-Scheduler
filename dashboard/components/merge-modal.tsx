@@ -179,7 +179,7 @@ export function MergeModal({
       >
         <h2 className="font-display text-base font-semibold text-ink">Merge into carousel</h2>
         <p className="mt-1 text-sm text-muted">
-          Keeps post #{survivor.id} and deletes the other {otherCount} emptied draft
+          Keeps post #{survivor.id} and deletes {otherCount} emptied draft
           {otherCount === 1 ? "" : "s"}. No photos are deleted.
         </p>
         {queuedOthersCount > 0 ? (
