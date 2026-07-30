@@ -40,3 +40,6 @@ worker/venv/
 .idea/
 .vscode/
 *.swp
+
+# Playwright MCP debug artifacts (snapshots, console logs, screenshots)
+.playwright-mcp/
