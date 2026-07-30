@@ -39,7 +39,7 @@ the old URL.
 
 ### Step 3 — Preflight (verify WITHOUT posting)
 ```
-source worker/.venv/bin/activate
+source .venv/bin/activate
 python -m worker.preflight
 ```
 A `✓ ... webhook OK — reachable ...` line means the URL is valid. This is a read-only
@@ -101,7 +101,7 @@ the channel. `preflight` (Step 4 below) catches exactly this.
 
 ### Step 5 — Preflight (verify WITHOUT posting)
 ```
-source worker/.venv/bin/activate
+source .venv/bin/activate
 python -m worker.preflight
 ```
 This runs two checks: `getMe` (proves the bot token is valid) and then `getChat` on your

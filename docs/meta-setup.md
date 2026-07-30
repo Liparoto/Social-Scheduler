@@ -72,7 +72,7 @@ The returned `access_token` is valid **60 days**. Refresh before expiry with
 ## Step 5 — Preflight (verify the token WITHOUT posting)
 From the repo root, with the venv active:
 ```
-source worker/.venv/bin/activate
+source .venv/bin/activate
 python -m worker.preflight
 ```
 A `✓ token OK — published N/M ...` line means auth + IG user id are valid and content
@@ -265,7 +265,7 @@ publishes no statement relating it to Instagram identifiers.)
    - **Access token**: the long-lived token from Step 3
 6. **Verify without posting.** From the repo root, with the venv active:
    ```
-   source worker/.venv/bin/activate
+   source .venv/bin/activate
    python -m worker.preflight
    ```
    For a Threads channel this reads your real publishing quota — a
