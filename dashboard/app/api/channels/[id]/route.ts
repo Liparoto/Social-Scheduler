@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChannel, updateChannel } from "@/lib/queries";
+import { getChannel, getChannelGroup, updateChannel, setChannelGroup } from "@/lib/queries";
 
 export const runtime = "nodejs";
 
@@ -51,6 +51,17 @@ export async function PATCH(
   if ("target_queue_depth" in body) fields.target_queue_depth = Number(body.target_queue_depth) || 0;
   if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
   if ("color_hue" in body) fields.color_hue = body.color_hue ?? null;
+
+  // group_id goes through setChannelGroup() rather than the generic field writer,
+  // because updateChannel()'s Partial<> type deliberately does not list it — assignment
+  // is a membership change, not a field edit.
+  if ("group_id" in body) {
+    const gid = body.group_id === null || body.group_id === "" ? null : Number(body.group_id);
+    if (gid !== null && !getChannelGroup(gid)) {
+      return NextResponse.json({ error: "Group not found." }, { status: 400 });
+    }
+    setChannelGroup(channelId, gid);
+  }
 
   updateChannel(channelId, fields);
   return NextResponse.json({ ok: true });
