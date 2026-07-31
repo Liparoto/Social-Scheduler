@@ -92,7 +92,7 @@ export function ChannelAvatar({
     <span
       aria-hidden
       className="flex shrink-0 items-center justify-center rounded-full font-semibold text-white"
-      style={{ ...dimensions, backgroundColor: c.dot, fontSize: Math.round(size * 0.55) }}
+      style={{ ...dimensions, backgroundColor: c.fg, fontSize: Math.round(size * 0.55) }}
     >
       {name.trim().charAt(0).toUpperCase()}
     </span>
