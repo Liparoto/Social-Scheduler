@@ -439,3 +439,41 @@ def test_ungrouped_channel_still_fills_on_its_own_settings(conn, config):
 
     assert run_autofill(conn, config, NOW) == 2
     assert len(pubs(conn, solo)) == 2
+
+
+# ---- transaction safety ---------------------------------------------------------
+import sqlite3  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def test_failed_group_insert_persists_nothing_and_leaves_no_open_transaction(conn, config):
+    """A mid-group insert failure must leave the queue exactly as it was.
+
+    worker/db.py connects with sqlite3's default isolation, so the inserts sit in an
+    implicit transaction, and run.py catches the error and REUSES the connection — the
+    next cycle's heartbeat commit would otherwise persist a half-queued group (Instagram
+    scheduled, Threads not), which is precisely the drift groups exist to prevent. It
+    would also hold the writer lock for a whole poll interval, blocking the dashboard.
+
+    The failure is simulated with a trigger that aborts the second member's insert. The
+    real-world trigger is a channel deleted in the dashboard between _autofill_units
+    reading its members and _fill_unit inserting (foreign keys are ON).
+    """
+    gid, ig, th = pair(conn, min_depth=1, target=1)
+    make_post(conn, targets=(ig, th))
+    # SQLite forbids bound parameters inside a trigger body, so the member id is
+    # interpolated — it is a locally created integer, not input.
+    conn.execute(
+        f"""CREATE TRIGGER fail_second_member BEFORE INSERT ON publications
+              WHEN NEW.channel_id = {int(th)}
+              BEGIN SELECT RAISE(ABORT, 'simulated mid-group insert failure'); END"""
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.Error):
+        run_autofill(conn, config, NOW)
+
+    assert conn.in_transaction is False, "leaked write txn holds SQLite's writer lock"
+    conn.commit()  # what run.py's next-cycle write_heartbeat would do
+    assert conn.execute("SELECT COUNT(*) FROM publications").fetchone()[0] == 0

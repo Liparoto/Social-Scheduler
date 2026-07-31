@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AutofillConfig } from "./autofill-config";
+import { ChannelTimezone } from "./channel-timezone";
+import { TimezonePicker } from "./timezone-picker";
+import { tzAbbrev } from "@/lib/format";
 
 export interface GroupRow {
   id: number;
@@ -16,12 +19,25 @@ export interface GroupRow {
   members: { id: number; account_name: string; platform: string }[];
 }
 
-export function ChannelGroups({ groups }: { groups: GroupRow[] }) {
+export function ChannelGroups({
+  groups,
+  defaultTimezone,
+}: {
+  groups: GroupRow[];
+  /** The install's DEFAULT_TIMEZONE (from lib/config). A new group starts here rather
+   *  than at a hardcoded "UTC" — a group left on the wrong zone posts to real accounts
+   *  at the wrong wall-clock hour. */
+  defaultTimezone: string;
+}) {
   const router = useRouter();
   const [name, setName] = useState("");
-  const [timezone, setTimezone] = useState("UTC");
+  const [timezone, setTimezone] = useState(defaultTimezone);
+  const [tzValid, setTzValid] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, startT] = useTransition();
+
+  // Stable identity so TimezonePicker's effect doesn't re-fire every render.
+  const handleTzValidity = useCallback((v: boolean) => setTzValid(v), []);
 
   async function create() {
     setError(null);
@@ -35,6 +51,7 @@ export function ChannelGroups({ groups }: { groups: GroupRow[] }) {
       return;
     }
     setName("");
+    setTimezone(defaultTimezone);
     startT(() => router.refresh());
   }
 
@@ -72,7 +89,10 @@ export function ChannelGroups({ groups }: { groups: GroupRow[] }) {
               <div>
                 <p className="text-sm font-medium text-ink">{g.name}</p>
                 <p className="mt-0.5 text-xs text-muted">
-                  {g.timezone} ·{" "}
+                  <span className="data">
+                    {g.timezone} · {tzAbbrev(g.timezone)}
+                  </span>{" "}
+                  ·{" "}
                   {g.members.length
                     ? g.members.map((m) => m.account_name).join(" + ")
                     : "no channels yet"}
@@ -86,6 +106,10 @@ export function ChannelGroups({ groups }: { groups: GroupRow[] }) {
                 Delete
               </button>
             </div>
+            {/* The group owns its members' timezone: one preview, one confirm, every
+                member's pending sends moved together. Same control the ungrouped
+                channels use. */}
+            <ChannelTimezone target={{ kind: "group", id: g.id }} timezone={g.timezone} />
             <AutofillConfig
               target={{ kind: "group", id: g.id }}
               enabled={g.autofill_enabled === 1}
@@ -98,33 +122,39 @@ export function ChannelGroups({ groups }: { groups: GroupRow[] }) {
         ))}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-end gap-2">
-        <label className="text-xs text-ink-soft">
-          <span className="mb-1 block">New group</span>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Personal"
-            className={field}
-          />
-        </label>
-        <label className="text-xs text-ink-soft">
-          <span className="mb-1 block">Timezone</span>
-          <input
-            value={timezone}
-            onChange={(e) => setTimezone(e.target.value)}
-            placeholder="America/New_York"
-            className={field}
-          />
-        </label>
-        <button
-          onClick={create}
-          disabled={pending || !name.trim()}
-          className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
-        >
-          Create group
-        </button>
-        {error ? <span className="text-xs text-status-failed">{error}</span> : null}
+      <div className="mt-3 rounded-card border border-border bg-surface p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <label className="text-xs text-ink-soft">
+            <span className="mb-1 block">New group</span>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Personal"
+              className={field}
+            />
+          </label>
+          <div className="min-w-56 text-xs text-ink-soft">
+            <span className="mb-1 block">Timezone</span>
+            {/* Same picker the channel form uses, so an invalid zone can't be typed —
+                and a group that silently stayed on "UTC" posted at the wrong hour. */}
+            <TimezonePicker
+              value={timezone}
+              onChange={setTimezone}
+              onValidityChange={handleTzValidity}
+              className={`w-full ${field}`}
+            />
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            onClick={create}
+            disabled={pending || !name.trim() || !tzValid}
+            className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
+          >
+            Create group
+          </button>
+          {error ? <span className="text-xs text-status-failed">{error}</span> : null}
+        </div>
       </div>
     </section>
   );

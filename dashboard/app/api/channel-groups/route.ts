@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createChannelGroup, listChannelGroups } from "@/lib/queries";
 import { isValidTimezone } from "@/lib/timezones";
+import { config } from "@/lib/config";
 
 export const runtime = "nodejs";
 
@@ -21,7 +22,9 @@ export async function POST(req: NextRequest) {
   }
   // Same reasoning as POST /api/channels: an unvalidated zone is a render crash, not a
   // bad value — formatInTz() hands it straight to Intl.DateTimeFormat.
-  const timezone = (body.timezone || "UTC").trim();
+  // Falls back to the install's DEFAULT_TIMEZONE, not "UTC": this install's channels are
+  // America/Los_Angeles, and a group silently created on UTC posts 7-8 hours off.
+  const timezone = (body.timezone || config.defaultTimezone).trim();
   if (!isValidTimezone(timezone)) {
     return NextResponse.json(
       { error: `"${timezone}" isn't a timezone name. Use an IANA name like America/New_York.` },

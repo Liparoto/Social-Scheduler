@@ -30,6 +30,20 @@ export async function POST(
   if (!channel) {
     return NextResponse.json({ error: "Channel not found." }, { status: 404 });
   }
+  // A grouped channel does NOT own its timezone — the group does. Rebasing one member
+  // alone would move its pending sends away from the other members' matching slots,
+  // and the next auto-fill would pair them again, leaving a permanently mixed queue.
+  if (channel.group_id !== null) {
+    return NextResponse.json(
+      {
+        error:
+          "This channel is in an auto-fill group, so its timezone is set on the group. " +
+          "Change the group's timezone instead — that moves every member's pending sends " +
+          "together, which is what keeps them in step.",
+      },
+      { status: 400 }
+    );
+  }
 
   let body: Record<string, unknown>;
   try {

@@ -351,11 +351,14 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None):
       1. at least one member is capable AND allowed, and
       2. every member that is CAPABLE is also ALLOWED.
 
-    "Capable" is the platform question (media type, caption length); "allowed" is the
-    rules question (targeting, content_status, cooldown, one-time, periods, already
-    queued). The asymmetry is the whole design: a member that physically cannot take
-    the content sits the slot out, but a member held back by a RULE stops everyone, so
-    the accounts never drift apart on content they could both have had.
+    "Capable" is the platform question (media type, caption length, and content_status —
+    it is enforced inside capable_post_ids, so a post that isn't 'ready' is a CAPABILITY
+    miss, not a rule miss; it filters out identically for every member, so the label
+    never changes the outcome); "allowed" is the rules question (targeting, cooldown,
+    one-time, periods, already queued). The asymmetry is the whole design: a member that
+    physically cannot take the content sits the slot out, but a member held back by a
+    RULE stops everyone, so the accounts never drift apart on content they could both
+    have had.
 
     Every member is evaluated under the GROUP's reuse_min_age_days and timezone, not
     its own — the group owns the cadence policy.
@@ -479,20 +482,32 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     ]
     slots = weekly_date_slots(weekdays, settings["timezone"], after, per_candidate_times)
 
+    # All-or-nothing. sqlite3's default isolation means these inserts sit in an implicit
+    # transaction, and run.py catches errors and REUSES this connection — so without the
+    # rollback a failure mid-group (e.g. a member channel deleted in the dashboard since
+    # _autofill_units read it; foreign keys are ON) would be silently committed by the
+    # next cycle's heartbeat, leaving one member scheduled and the other not: exactly the
+    # drift groups exist to prevent. The open transaction would also hold SQLite's writer
+    # lock for a full poll interval, blocking the dashboard.
     made = 0
-    for (row, recipients), slot in zip(candidates, slots):
-        for member in recipients:
-            # requires_approval stays a CHANNEL property — it describes the account, not
-            # the schedule, so one member of a group may need approval and another not.
-            status = "pending_approval" if member["requires_approval"] else "scheduled"
-            conn.execute(
-                """INSERT INTO publications
-                     (post_id, channel_id, scheduled_at, status, created_by)
-                   VALUES (?, ?, ?, ?, 'autofill')""",
-                (row["post_id"], member["id"], slot.isoformat(), status),
-            )
-            made += 1
-    conn.commit()
+    try:
+        for (row, recipients), slot in zip(candidates, slots):
+            for member in recipients:
+                # requires_approval stays a CHANNEL property — it describes the account,
+                # not the schedule, so one member of a group may need approval and
+                # another not.
+                status = "pending_approval" if member["requires_approval"] else "scheduled"
+                conn.execute(
+                    """INSERT INTO publications
+                         (post_id, channel_id, scheduled_at, status, created_by)
+                       VALUES (?, ?, ?, ?, 'autofill')""",
+                    (row["post_id"], member["id"], slot.isoformat(), status),
+                )
+                made += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     if logger and made:
         logger.info(
             "[autofill %s] queue %d/%d -> added %d publication(s) across %d channel(s) "

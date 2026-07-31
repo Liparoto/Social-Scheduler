@@ -33,6 +33,7 @@ export default function ChannelsPage() {
     })),
   }));
   const groupNames = new Map(groups.map((g) => [g.id, g.name]));
+  const groupTimezones = new Map(groups.map((g) => [g.id, g.timezone]));
 
   return (
     <div>
@@ -55,7 +56,7 @@ export default function ChannelsPage() {
           </EmptyState>
         ) : (
           <>
-          <ChannelGroups groups={groups} />
+          <ChannelGroups groups={groups} defaultTimezone={config.defaultTimezone} />
           <div className="grid gap-4 md:grid-cols-2">
             {channels.map((c) => (
               <div
@@ -136,7 +137,25 @@ export default function ChannelsPage() {
                   remoteAccountId={c.remote_account_id}
                 />
 
-                <ChannelTimezone channelId={c.id} timezone={c.timezone} />
+                {/* A grouped channel doesn't own its timezone — the group does, and
+                    rebasing one member alone would desynchronize the group. The API
+                    rejects it too; this just stops the control being offered. */}
+                {c.group_id === null ? (
+                  <ChannelTimezone target={{ kind: "channel", id: c.id }} timezone={c.timezone} />
+                ) : (
+                  <p className="mt-3 rounded-lg border border-border bg-surface-sunken/40 p-3 text-xs text-muted">
+                    Timezone is changed on{" "}
+                    <span className="font-medium text-ink-soft">
+                      {groupNames.get(c.group_id)}
+                    </span>
+                    , which auto-fills in{" "}
+                    <span className="data text-ink-soft">
+                      {groupTimezones.get(c.group_id)}
+                    </span>
+                    . Moving this channel on its own would pull its sends off the slots
+                    it shares with the rest of the group.
+                  </p>
+                )}
 
                 <ChannelColor
                   channelId={c.id}

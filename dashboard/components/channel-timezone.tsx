@@ -11,11 +11,18 @@ type PreviewSend = {
   is_held: boolean;
   before: string;
   after: string;
+  /** Group previews span several channels, so each row says which one. Absent for a
+   *  single channel, where the answer is never in doubt. */
+  account_name?: string;
 };
 
 /**
- * Edit a channel's timezone after creation — which, before this, was impossible
- * from the UI at all.
+ * Edit a channel's — or an auto-fill group's — timezone after creation, which before
+ * this was impossible from the UI at all.
+ *
+ * One component for both because the two API routes are deliberately the same shape
+ * (preview then confirm) and the stakes are identical. A group simply owns its members'
+ * cadence, so its preview lists every member's pending sends rather than one channel's.
  *
  * Unlike ChannelColor, this does NOT save on pick. Changing the zone rewrites the
  * scheduled_at of every pending send, so it goes through an explicit preview: the
@@ -23,12 +30,22 @@ type PreviewSend = {
  * real posts fire at the wrong hour, so it should cost one deliberate click.
  */
 export function ChannelTimezone({
-  channelId,
+  target,
   timezone,
 }: {
-  channelId: number;
+  /** Mirrors AutofillConfig's `target`: a timezone is owned by the GROUP when a channel
+   *  belongs to one, and by the channel itself otherwise. */
+  target: { kind: "channel" | "group"; id: number };
   timezone: string;
 }) {
+  const endpoint =
+    target.kind === "group"
+      ? `/api/channel-groups/${target.id}/timezone`
+      : `/api/channels/${target.id}/timezone`;
+  const emptyLabel =
+    target.kind === "group"
+      ? "No pending sends on this group’s channels — nothing to move."
+      : "No pending sends on this channel — nothing to move.";
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
@@ -50,7 +67,7 @@ export function ChannelTimezone({
   }
 
   async function post(body: object) {
-    const res = await fetch(`/api/channels/${channelId}/timezone`, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -107,9 +124,7 @@ export function ChannelTimezone({
           {preview ? (
             <div className="rounded-lg border border-border bg-surface p-3">
               {moving.length === 0 ? (
-                <p className="text-xs text-muted">
-                  No pending sends on this channel — nothing to move.
-                </p>
+                <p className="text-xs text-muted">{emptyLabel}</p>
               ) : (
                 <>
                   <p className="text-xs text-ink-soft">
@@ -121,6 +136,9 @@ export function ChannelTimezone({
                     {moving.map((s) => (
                       <li key={s.id} className="data flex flex-wrap gap-x-2 text-[11px]">
                         <span className="text-faint">#{s.post_id}</span>
+                        {s.account_name ? (
+                          <span className="text-muted">{s.account_name}</span>
+                        ) : null}
                         <span className="text-muted line-through">
                           {formatInTz(s.before, timezone)} {tzAbbrev(timezone)}
                         </span>
