@@ -104,11 +104,13 @@ export function ChannelChip({
   platform,
   name,
   colorHue,
+  avatarPath,
 }: {
   id: number;
   platform: string;
   name: string;
   colorHue?: number | null;
+  avatarPath?: string | null;
 }) {
   const c = channelColor(id, colorHue);
   return (
@@ -116,11 +118,7 @@ export function ChannelChip({
       className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium"
       style={{ color: c.fg, backgroundColor: c.bg }}
     >
-      <span
-        className="h-2 w-2 rounded-full"
-        style={{ backgroundColor: c.dot }}
-        aria-hidden
-      />
+      <ChannelAvatar id={id} name={name} colorHue={colorHue} avatarPath={avatarPath} size={14} />
       {name}
       <span className="text-[10px] uppercase tracking-wide opacity-60">
         {platformBadge(platform)}

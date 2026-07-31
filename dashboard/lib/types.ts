@@ -136,6 +136,7 @@ export interface PostPublicationRow {
   channel_platform: string;
   channel_timezone: string;
   channel_color_hue: number | null;
+  channel_avatar_path: string | null;
   scheduled_at: string;
   status: PublicationStatus;
   is_held: number;

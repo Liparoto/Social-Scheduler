@@ -7,6 +7,7 @@ import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms"
 import { channelColor, videoPreviewSrc } from "@/lib/format";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
+import { ChannelAvatar } from "@/components/ui";
 
 export type LibraryPickItem = {
   id: number;
@@ -23,6 +24,7 @@ export type ChannelLite = {
   timezone: string;
   requires_approval: boolean;
   color_hue: number | null;
+  avatar_path: string | null;
 };
 
 const card = "rounded-card border border-border bg-surface p-5";
@@ -286,6 +288,13 @@ export function ScheduleFromLibrary({
                     border: on && !disabled ? "none" : "1.5px solid var(--color-border-strong)",
                   }}
                   aria-hidden
+                />
+                <ChannelAvatar
+                  id={c.id}
+                  name={c.account_name}
+                  colorHue={c.color_hue}
+                  avatarPath={c.avatar_path}
+                  size={20}
                 />
                 {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
                     chip must take its paired dark `fg` — on `text-ink` alone the name is
