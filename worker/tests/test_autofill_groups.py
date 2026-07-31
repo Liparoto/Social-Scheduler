@@ -116,3 +116,134 @@ def test_eligible_candidates_limit_none_means_unlimited(conn):
     ids = {make_post(conn, targets=(ig,)) for _ in range(5)}
     got = eligible_candidates(conn, ch(conn, ig), NOW, None)
     assert {r["post_id"] for r in got} == ids
+
+
+# ---- Task 3: group selection ----------------------------------------------------
+from worker.autofill import group_eligible_candidates  # noqa: E402
+
+
+def grp(conn, group_id):
+    return conn.execute("SELECT * FROM channel_groups WHERE id=?", (group_id,)).fetchone()
+
+
+def members(conn, group_id):
+    return conn.execute(
+        "SELECT * FROM channels WHERE group_id=? AND is_active=1 ORDER BY id", (group_id,)
+    ).fetchall()
+
+
+def pair(conn, **kw):
+    """A group with an Instagram and a Threads member. Returns (gid, ig_id, th_id)."""
+    gid = make_group(conn, **kw)
+    ig = make_channel(conn, platform="instagram", name="IG", group_id=gid)
+    th = make_channel(conn, platform="threads", name="TH", group_id=gid)
+    return gid, ig, th
+
+
+def picked(conn, gid, limit=10):
+    got = group_eligible_candidates(conn, grp(conn, gid), members(conn, gid), NOW, limit)
+    return [(r["post_id"], sorted(m["id"] for m in ms)) for r, ms in got]
+
+
+def test_image_targeted_at_both_goes_to_both(conn):
+    gid, ig, th = pair(conn)
+    p = make_post(conn, targets=(ig, th))
+    assert picked(conn, gid) == [(p, sorted([ig, th]))]
+
+
+def test_reel_goes_to_instagram_only_capability_is_an_exception(conn):
+    """Threads declares supports_video=False. The Reel must still queue to Instagram —
+    this is the rule that keeps evergreen video recycling alive."""
+    gid, ig, th = pair(conn)
+    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
+    assert picked(conn, gid) == [(reel, [ig])]
+
+
+def test_long_caption_goes_to_instagram_only(conn):
+    gid, ig, th = pair(conn)
+    long_post = make_post(conn, caption="c" * 600, targets=(ig, th))
+    assert picked(conn, gid) == [(long_post, [ig])]
+
+
+def test_cooldown_on_one_member_blocks_the_whole_group(conn):
+    """A RULE miss, unlike a capability miss, holds every member back so the accounts
+    never drift apart."""
+    gid, ig, th = pair(conn, reuse=180)
+    p = make_post(conn, targets=(ig, th))
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+        "VALUES (?,?,?,'posted',?)",
+        (p, th, "2026-07-01T18:00:00+00:00", "2026-07-01T18:00:00+00:00"),
+    )
+    conn.commit()
+    assert picked(conn, gid) == []
+
+
+def test_post_targeted_at_only_one_member_is_never_selected(conn):
+    gid, ig, th = pair(conn)
+    only_ig = make_post(conn, targets=(ig,))
+    assert picked(conn, gid) == []
+
+
+def test_already_queued_on_one_member_blocks_the_group(conn):
+    gid, ig, th = pair(conn)
+    p = make_post(conn, targets=(ig, th))
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status) "
+        "VALUES (?,?,?,'scheduled')",
+        (p, ig, "2026-08-01T18:00:00+00:00"),
+    )
+    conn.commit()
+    assert picked(conn, gid) == []
+
+
+def test_blackout_on_the_group_timezone_blocks_the_group(conn):
+    gid, ig, th = pair(conn)
+    p = make_post(conn, targets=(ig, th))
+    # NOTE: the column is recurs_yearly (1/0), not `kind` — see migrations/0002.
+    period_id = conn.execute(
+        "INSERT INTO periods (name, recurs_yearly, start_month, start_day, end_month, end_day) "
+        "VALUES ('Summer',1,7,1,8,31)"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?,?,'blackout')",
+        (p, period_id),
+    )
+    conn.commit()
+    assert picked(conn, gid) == []
+
+
+def test_group_ranking_prefers_never_posted_then_best_member_not_the_sum(conn):
+    """perf is the MAX across members, never the sum: Threads reports no reach/saves,
+    so summing would halve every score and scramble Instagram's real ordering."""
+    gid, ig, th = pair(conn)
+    weak = make_post(conn, targets=(ig, th), created_at="2026-01-01T00:00:00+00:00")
+    strong = make_post(conn, targets=(ig, th), created_at="2026-01-02T00:00:00+00:00")
+    for pid, reach in ((weak, 10), (strong, 900)):
+        pub = conn.execute(
+            "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+            "VALUES (?,?,?,'posted',?)",
+            (pid, ig, "2026-01-10T18:00:00+00:00", "2026-01-10T18:00:00+00:00"),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO post_metrics (publication_id, fetched_at, reach, saves) VALUES (?,?,?,0)",
+            (pub, "2026-01-10T18:00:00+00:00", reach),
+        )
+    fresh = make_post(conn, targets=(ig, th), created_at="2026-01-03T00:00:00+00:00")
+    conn.commit()
+
+    order = [pid for pid, _ in picked(conn, gid)]
+    assert order[0] == fresh, "never-posted-on-any-member ranks first"
+    assert order[1:] == [strong, weak], "then best member's performance, descending"
+
+
+def test_group_selection_respects_limit(conn):
+    gid, ig, th = pair(conn)
+    for _ in range(5):
+        make_post(conn, targets=(ig, th))
+    assert len(picked(conn, gid, limit=2)) == 2
+
+
+def test_group_with_no_active_members_selects_nothing(conn):
+    gid = make_group(conn)
+    assert group_eligible_candidates(conn, grp(conn, gid), [], NOW, 5) == []

@@ -251,6 +251,95 @@ def eligible_candidates(conn, channel, now, limit: int | None, *,
     return out
 
 
+def group_rank(conn, member_ids: list[int], post_ids) -> list:
+    """Order `post_ids` by the group's tiering: never posted on ANY member first, then
+    the BEST member's performance descending, then stalest, then oldest content.
+
+    perf is MAX across members rather than SUM on purpose. Threads reports neither reach
+    nor saves, so its contribution is always 0; summing would halve every score the
+    moment a Threads member joined a group and scramble an ordering that is driven
+    entirely by Instagram's real numbers. MAX means "how well did this do on its best
+    member", which is the question the ranking is actually asking.
+    """
+    post_ids = list(post_ids)
+    if not post_ids or not member_ids:
+        return []
+    mq = ",".join("?" * len(member_ids))
+    pq = ",".join("?" * len(post_ids))
+    return conn.execute(
+        f"""
+        SELECT
+          p.id AS post_id,
+          p.post_type AS post_type,
+          (SELECT MAX(pub.published_at) FROM publications pub
+             WHERE pub.post_id = p.id AND pub.channel_id IN ({mq})
+               AND pub.status = 'posted' AND pub.is_dry_run = 0
+          ) AS last_posted,
+          (SELECT COALESCE(MAX(IFNULL(pm.reach,0) + IFNULL(pm.saves,0)), 0)
+             FROM post_metrics pm
+             JOIN publications p3 ON p3.id = pm.publication_id
+             WHERE p3.post_id = p.id AND p3.channel_id IN ({mq})
+          ) AS perf
+        FROM posts p
+        WHERE p.id IN ({pq})
+        ORDER BY
+          CASE WHEN last_posted IS NULL THEN 0 ELSE 1 END ASC,
+          perf DESC,
+          last_posted ASC,
+          p.created_at ASC
+        """,
+        (*member_ids, *member_ids, *post_ids),
+    ).fetchall()
+
+
+def group_eligible_candidates(conn, group, members, now, limit: int | None):
+    """Ranked (candidate_row, [member channels to receive it]) for a channel group.
+
+    A post P is group-eligible when BOTH hold:
+      1. at least one member is capable AND allowed, and
+      2. every member that is CAPABLE is also ALLOWED.
+
+    "Capable" is the platform question (media type, caption length); "allowed" is the
+    rules question (targeting, content_status, cooldown, one-time, periods, already
+    queued). The asymmetry is the whole design: a member that physically cannot take
+    the content sits the slot out, but a member held back by a RULE stops everyone, so
+    the accounts never drift apart on content they could both have had.
+
+    Every member is evaluated under the GROUP's reuse_min_age_days and timezone, not
+    its own — the group owns the cadence policy.
+    """
+    if not members:
+        return []
+
+    reuse_default = group["reuse_min_age_days"]
+    tz_name = group["timezone"]
+
+    capable: dict[int, set[int]] = {}
+    allowed: dict[int, set[int]] = {}
+    for m in members:
+        capable[m["id"]] = capable_post_ids(conn, m)
+        allowed[m["id"]] = {
+            r["post_id"]
+            for r in eligible_candidates(
+                conn, m, now, None, reuse_default=reuse_default, timezone_name=tz_name
+            )
+        }
+
+    # A post that is capable for a member but NOT allowed for it failed a rule — the
+    # capability sets are what make that inference sound.
+    recipients: dict[int, list] = {}
+    for pid in set().union(*capable.values()):
+        capable_members = [m for m in members if pid in capable[m["id"]]]
+        if not capable_members:
+            continue
+        if all(pid in allowed[m["id"]] for m in capable_members):
+            recipients[pid] = capable_members
+
+    ranked = group_rank(conn, [m["id"] for m in members], recipients.keys())
+    out = [(row, recipients[row["post_id"]]) for row in ranked]
+    return out if limit is None else out[:limit]
+
+
 def run_autofill(conn, config: Config, now, logger=None) -> int:
     """Top up every autofill-enabled channel. Returns total publications created."""
     now_iso = now.isoformat()
