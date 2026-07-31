@@ -16,19 +16,6 @@ echo "  SocialScheduler"
 echo "=========================================="
 echo
 
-WORKER_PID=""
-
-# When this window closes (or you press Ctrl-C), stop the worker cleanly if we started one.
-cleanup() {
-  if [ -n "$WORKER_PID" ] && kill -0 "$WORKER_PID" 2>/dev/null; then
-    echo
-    echo "Stopping the worker..."
-    kill "$WORKER_PID" 2>/dev/null
-    wait "$WORKER_PID" 2>/dev/null
-  fi
-}
-trap cleanup EXIT INT TERM HUP
-
 pause_and_exit() {
   echo
   echo "$1"
@@ -41,6 +28,42 @@ pause_and_exit() {
 env_value() {
   [ -f ".env" ] || return 0
   grep -E "^[[:space:]]*$1=" ".env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]'
+}
+
+# Close the Terminal window this script is running in. Fired in the background
+# after a short delay so the shell exits first — Terminal then closes the window
+# cleanly instead of asking "terminate running process?". Matching on tty means
+# we can only ever close our own window, never one the user opened themselves.
+# If this fails for any reason the window just stays open showing the messages
+# above, which is the old behavior — never a broken run.
+close_my_window() {
+  local my_tty
+  my_tty="$(tty 2>/dev/null)" || return 0
+  case "$my_tty" in /dev/ttys*) ;; *) return 0 ;; esac
+  (
+    sleep 1
+    osascript \
+      -e 'tell application "Terminal"' \
+      -e '  repeat with w in windows' \
+      -e '    repeat with t in tabs of w' \
+      -e '      try' \
+      -e "        if tty of t is \"$my_tty\" then close w" \
+      -e '      end try' \
+      -e '    end repeat' \
+      -e '  end repeat' \
+      -e 'end tell'
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null
+}
+
+# Echo the PID held in file $1 only if that process is actually alive.
+live_pid() {
+  local p
+  [ -f "$1" ] || return 1
+  p="$(cat "$1" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$p" ] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  echo "$p"
 }
 
 # ---- 1. Preflight: the two things that must be installed. ----
@@ -77,6 +100,23 @@ if [ ! -d ".venv" ]; then
   .venv/bin/pip install --quiet --upgrade pip
   .venv/bin/pip install -r requirements.txt || pause_and_exit "Installing worker dependencies failed (see above)."
   echo
+fi
+
+# ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
+PORT=3939
+RUN_DIR="data/run"
+LOG_DIR="data/logs"
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+if [ -n "$(lsof -ti "tcp:$PORT" 2>/dev/null)" ]; then
+  echo "SocialScheduler is already running."
+  echo "Opening http://localhost:$PORT"
+  echo
+  echo "To stop it, double-click Stop-SocialScheduler-Mac.command"
+  open "http://localhost:$PORT"
+  echo
+  close_my_window
+  exit 0
 fi
 
 # ---- 6. Ask what to do. ----
@@ -129,30 +169,75 @@ if [ "$MODE" = "live" ]; then
     echo "Note: KILL_SWITCH is ON — the worker will run but publish nothing until you set KILL_SWITCH=0 in .env."
     echo
   fi
-  echo "Starting the worker..."
-  .venv/bin/python -m worker.run &
+  echo "Starting the worker in the background..."
+  nohup .venv/bin/python -m worker.run >> "$LOG_DIR/worker-daemon.out" 2>&1 &
   WORKER_PID=$!
-  echo "Worker running (logs are in data/logs/). It stops automatically when you close this window."
+  disown
+  echo "$WORKER_PID" > "$RUN_DIR/worker.pid"
+
+  # How long before the worker stops itself. Anything unparseable falls back to 12.
+  # This exists because the worker publishes for real and now runs with no visible
+  # window — without a deadline, a forgotten worker posts unattended for days.
+  HOURS="$(env_value WORKER_AUTO_STOP_HOURS)"
+  case "$HOURS" in
+    ''|*[!0-9.]*) HOURS=12 ;;
+  esac
+  AUTO_SECS="$(python3 -c "print(int(float('$HOURS') * 3600))" 2>/dev/null)"
+  case "$AUTO_SECS" in
+    ''|0|*[!0-9]*) AUTO_SECS=43200; HOURS=12 ;;
+  esac
+
+  DEADLINE="$(python3 -c "import datetime; print((datetime.datetime.now() + datetime.timedelta(seconds=$AUTO_SECS)).strftime('%Y-%m-%d %H:%M'))")"
+  echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
+
+  # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
+  (
+    sleep "$AUTO_SECS"
+    kill "$WORKER_PID" 2>/dev/null
+    rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+  ) >/dev/null 2>&1 &
+  WATCHDOG_PID=$!
+  disown
+  echo "$WATCHDOG_PID" > "$RUN_DIR/watchdog.pid"
+
+  echo "Worker running in the background (logs are in data/logs/)."
+  echo "It will stop on its own at $DEADLINE, or whenever you double-click Stop."
   echo
 fi
 
-# ---- 8. Start the dashboard (this stays in the foreground; closing the window stops it). ----
-export PORT=3939
-echo "Starting the dashboard. A browser tab will open at http://localhost:$PORT"
-echo "If it doesn't, open that address yourself. Close this window to stop everything."
-echo
+# ---- 8. Start the dashboard in the background. ----
+echo "Starting the dashboard..."
+nohup env PORT="$PORT" npm --prefix dashboard run dev > "$LOG_DIR/dashboard.log" 2>&1 &
+DASH_PID=$!
+disown
+echo "$DASH_PID" > "$RUN_DIR/dashboard.pid"
+
 # Wait until the dashboard actually answers before opening the browser. A fixed sleep
 # guessed wrong on a cold start — Next.js compiles on first run, so the tab opened on a
 # dead port, showed a connection error, and you had to type the address in yourself.
-# Polls for up to 90s, then gives up quietly (the message above still tells you the URL).
-(
-  for _ in $(seq 1 90); do
-    if curl -sf -o /dev/null "http://localhost:$PORT"; then
-      open "http://localhost:$PORT"
-      exit 0
-    fi
-    sleep 1
-  done
-) &
-cd dashboard || pause_and_exit "Couldn't find the 'dashboard' folder."
-npm run dev
+# Polls for up to 90s.
+READY=0
+for _ in $(seq 1 90); do
+  if curl -sf -o /dev/null "http://localhost:$PORT"; then
+    READY=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$READY" = "1" ]; then
+  open "http://localhost:$PORT"
+  echo "✅ Running at http://localhost:$PORT"
+else
+  echo "⚠️  The dashboard didn't start within 90 seconds."
+  echo "    Check data/logs/dashboard.log for the reason."
+  echo "    If it starts later, open http://localhost:$PORT yourself."
+fi
+
+echo
+echo "You can close this window — everything keeps running."
+echo "To stop it, double-click Stop-SocialScheduler-Mac.command"
+echo
+
+close_my_window
+exit 0
