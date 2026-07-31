@@ -43,6 +43,7 @@ export interface Channel {
   target_queue_depth: number;
   reuse_min_age_days: number;
   is_active: number;
+  group_id: number | null;
   created_at: string;
   updated_at: string | null;
   color_hue: number | null;
@@ -50,6 +51,23 @@ export interface Channel {
   avatar_fetched_at: string | null;
   avatar_refresh_requested: number;
   avatar_error: string | null;
+}
+
+/** A named set of channels that auto-fills as ONE unit — one cadence, one selection
+ *  decision, one slot, one publication per member. Carries the same auto-fill field
+ *  names a Channel does; while a channel's group_id is set, its own copies go unread. */
+export interface ChannelGroup {
+  id: number;
+  name: string;
+  timezone: string;
+  autofill_enabled: number;
+  cadence_config: string | null;
+  min_queue_depth: number;
+  target_queue_depth: number;
+  reuse_min_age_days: number;
+  is_active: number;
+  created_at: string;
+  updated_at: string | null;
 }
 
 export interface Asset {

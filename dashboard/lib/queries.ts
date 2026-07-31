@@ -4,6 +4,7 @@ import type {
   Asset,
   CaptionVariant,
   Channel,
+  ChannelGroup,
   ContentKind,
   ContentStatus,
   Period,
@@ -189,6 +190,108 @@ export function changeChannelTimezone(
       if (next === p.scheduled_at) continue; // zone changed, this instant didn't
       move.run({ at: next, now: nowIso(), id: p.id });
       moved += 1;
+    }
+    return { moved };
+  });
+  return tx();
+}
+
+// ---- Channel groups ---------------------------------------------------------------
+
+export function listChannelGroups(): ChannelGroup[] {
+  return getDb()
+    .prepare("SELECT * FROM channel_groups ORDER BY name COLLATE NOCASE")
+    .all() as ChannelGroup[];
+}
+
+export function getChannelGroup(id: number): ChannelGroup | undefined {
+  return getDb().prepare("SELECT * FROM channel_groups WHERE id = ?").get(id) as
+    | ChannelGroup
+    | undefined;
+}
+
+export function getGroupMembers(groupId: number): Channel[] {
+  return getDb()
+    .prepare("SELECT * FROM channels WHERE group_id = ? ORDER BY id")
+    .all(groupId) as Channel[];
+}
+
+export function createChannelGroup(input: { name: string; timezone: string }): number {
+  const info = getDb()
+    .prepare("INSERT INTO channel_groups (name, timezone) VALUES (@name, @timezone)")
+    .run({ name: input.name, timezone: input.timezone });
+  return Number(info.lastInsertRowid);
+}
+
+export function updateChannelGroup(
+  id: number,
+  fields: Partial<{
+    name: string;
+    // NOTE: `timezone` is deliberately absent, exactly as on updateChannel(). It moves
+    // through changeChannelGroupTimezone() below, which also rebases every member's
+    // pending queue — routing it through here would silently skip that.
+    autofill_enabled: number;
+    cadence_config: string | null;
+    min_queue_depth: number;
+    target_queue_depth: number;
+    reuse_min_age_days: number;
+    is_active: number;
+  }>
+): void {
+  const keys = Object.keys(fields);
+  if (keys.length === 0) return;
+  const setClause = keys.map((k) => `${k} = @${k}`).join(", ");
+  getDb()
+    .prepare(`UPDATE channel_groups SET ${setClause}, updated_at = @updated_at WHERE id = @id`)
+    .run({ ...fields, id, updated_at: nowIso() });
+}
+
+/** Delete a group. Members are returned to solo auto-fill by the migration's
+ *  ON DELETE SET NULL — their publications are never touched. */
+export function deleteChannelGroup(id: number): boolean {
+  const info = getDb().prepare("DELETE FROM channel_groups WHERE id = ?").run(id);
+  return info.changes > 0;
+}
+
+export function setChannelGroup(channelId: number, groupId: number | null): void {
+  getDb()
+    .prepare("UPDATE channels SET group_id = @gid, updated_at = @now WHERE id = @id")
+    .run({ gid: groupId, now: nowIso(), id: channelId });
+}
+
+/**
+ * Change a group's timezone, keeping every member's pending sends at the same WALL
+ * CLOCK time. Same contract as changeChannelTimezone(), widened to every member: the
+ * group owns the cadence, so its members must move together or they stop mirroring.
+ * One transaction for the same reason — a crash between the two writes would leave the
+ * group on a new zone while its sends held instants computed for the old one.
+ */
+export function changeChannelGroupTimezone(
+  groupId: number,
+  fromTz: string,
+  toTz: string,
+  rebase: (iso: string, fromTz: string, toTz: string) => string
+): { moved: number } {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE channel_groups SET timezone = @tz, updated_at = @now WHERE id = @id").run({
+      tz: toTz,
+      now: nowIso(),
+      id: groupId,
+    });
+    if (fromTz === toTz) return { moved: 0 };
+
+    const move = db.prepare(
+      "UPDATE publications SET scheduled_at = @at, updated_at = @now WHERE id = @id"
+    );
+    let moved = 0;
+    for (const member of getGroupMembers(groupId)) {
+      for (const p of getPendingPublicationsForChannel(member.id)) {
+        const next = rebase(p.scheduled_at, fromTz, toTz);
+        if (next === p.scheduled_at) continue; // zone changed, this instant didn't
+        move.run({ at: next, now: nowIso(), id: p.id });
+        moved += 1;
+      }
     }
     return { moved };
   });
