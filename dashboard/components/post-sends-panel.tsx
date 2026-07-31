@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PostPublicationRow, PostType } from "@/lib/types";
 import type { Channel } from "@/lib/types";
-import { ChannelChip, StatusBadge } from "@/components/ui";
+import { ChannelAvatar, ChannelChip, StatusBadge } from "@/components/ui";
 import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
 import { incompatibleChannelsForPostType } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
@@ -84,6 +84,7 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
             platform={send.channel_platform}
             name={send.channel_name}
             colorHue={send.channel_color_hue}
+            avatarPath={send.channel_avatar_path}
           />
           <span className="data text-xs text-ink-soft">
             {formatInTz(send.scheduled_at, send.channel_timezone)} {tzAbbrev(send.channel_timezone)}
@@ -361,6 +362,13 @@ export function PostSendsPanel({
                         border: on ? "none" : "1.5px solid var(--color-border-strong)",
                       }}
                       aria-hidden
+                    />
+                    <ChannelAvatar
+                      id={c.id}
+                      name={c.account_name}
+                      colorHue={c.color_hue}
+                      avatarPath={c.avatar_path}
+                      size={20}
                     />
                     {/* channelColor's bg is a fixed LIGHT tint in every theme, so the
                         label has to take its paired dark `fg` when selected — leaving it

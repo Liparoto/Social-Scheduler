@@ -46,6 +46,10 @@ export interface Channel {
   created_at: string;
   updated_at: string | null;
   color_hue: number | null;
+  avatar_path: string | null;
+  avatar_fetched_at: string | null;
+  avatar_refresh_requested: number;
+  avatar_error: string | null;
 }
 
 export interface Asset {
@@ -132,6 +136,7 @@ export interface PostPublicationRow {
   channel_platform: string;
   channel_timezone: string;
   channel_color_hue: number | null;
+  channel_avatar_path: string | null;
   scheduled_at: string;
   status: PublicationStatus;
   is_held: number;

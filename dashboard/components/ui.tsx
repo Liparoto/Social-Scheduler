@@ -45,16 +45,72 @@ export function StatusBadge({
   );
 }
 
+/**
+ * A channel's account profile photo, or a coloured circle with its initial.
+ *
+ * Both branches render at exactly `size`, so a chip never changes shape depending on
+ * whether a photo has been fetched yet. The fallback uses the channel's accent colour and
+ * first initial rather than a generic placeholder: two channels on the same platform are
+ * told apart by the initial, which a plain dot could not do.
+ *
+ * Decorative — the account name is always rendered next to it — so it is hidden from
+ * assistive tech rather than repeating that name.
+ */
+export function ChannelAvatar({
+  id,
+  name,
+  colorHue,
+  avatarPath,
+  size = 14,
+}: {
+  id: number;
+  name: string;
+  colorHue?: number | null;
+  avatarPath?: string | null;
+  size?: number;
+}) {
+  const c = channelColor(id, colorHue);
+  const dimensions = { width: size, height: size };
+
+  if (avatarPath) {
+    return (
+      // next/image would add an optimizer round-trip for a local file we already serve at the right size.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={`/api/channels/${id}/avatar`}
+        alt=""
+        aria-hidden
+        width={size}
+        height={size}
+        className="shrink-0 rounded-full object-cover"
+        style={dimensions}
+      />
+    );
+  }
+
+  return (
+    <span
+      aria-hidden
+      className="flex shrink-0 items-center justify-center rounded-full font-semibold text-white"
+      style={{ ...dimensions, backgroundColor: c.fg, fontSize: Math.round(size * 0.55) }}
+    >
+      {name.trim().charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
 export function ChannelChip({
   id,
   platform,
   name,
   colorHue,
+  avatarPath,
 }: {
   id: number;
   platform: string;
   name: string;
   colorHue?: number | null;
+  avatarPath?: string | null;
 }) {
   const c = channelColor(id, colorHue);
   return (
@@ -62,11 +118,7 @@ export function ChannelChip({
       className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium"
       style={{ color: c.fg, backgroundColor: c.bg }}
     >
-      <span
-        className="h-2 w-2 rounded-full"
-        style={{ backgroundColor: c.dot }}
-        aria-hidden
-      />
+      <ChannelAvatar id={id} name={name} colorHue={colorHue} avatarPath={avatarPath} size={14} />
       {name}
       <span className="text-[10px] uppercase tracking-wide opacity-60">
         {platformBadge(platform)}

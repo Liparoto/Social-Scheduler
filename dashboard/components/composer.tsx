@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor, videoPreviewSrc } from "@/lib/format";
+import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
 import type { Asset, Period, PeriodMode, Tag } from "@/lib/types";
@@ -23,6 +24,7 @@ interface ChannelLite {
   timezone: string;
   requires_approval: boolean;
   color_hue: number | null;
+  avatar_path: string | null;
 }
 // Wraps the full Asset row the upload API returns (needed as-is for <CoverFramePicker>)
 // plus the bits that only make sense while composing: whether this upload matched
@@ -558,6 +560,13 @@ export function Composer({
                   >
                     {on && !disabled ? <span className="text-[10px] text-white">✓</span> : null}
                   </span>
+                  <ChannelAvatar
+                    id={c.id}
+                    name={c.account_name}
+                    colorHue={c.color_hue}
+                    avatarPath={c.avatar_path}
+                    size={20}
+                  />
                   {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
                       chip must take its paired dark `fg` — on `text-ink` alone the name is
                       near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
@@ -726,12 +735,14 @@ export function Composer({
               {channels
                 .filter((c) => selected.has(c.id))
                 .map((c) => {
-                  const color = channelColor(c.id, c.color_hue);
                   return (
                     <li key={c.id} className="flex items-center gap-2 text-sm">
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: color.dot }}
+                      <ChannelAvatar
+                        id={c.id}
+                        name={c.account_name}
+                        colorHue={c.color_hue}
+                        avatarPath={c.avatar_path}
+                        size={14}
                       />
                       <span className="text-ink">{c.account_name}</span>
                     </li>

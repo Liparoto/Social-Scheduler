@@ -37,6 +37,20 @@ export function getChannel(id: number): Channel | undefined {
     | undefined;
 }
 
+/**
+ * Ask the worker to re-fetch this channel's profile photo on its next cycle.
+ *
+ * This sets a flag and nothing else — the dashboard never calls a platform API. Same
+ * dashboard-to-worker handoff as metrics_refresh_requested_at on publications. The worker
+ * clears the flag whether the fetch succeeds or fails, so a persistently failing channel
+ * cannot wedge itself into retrying every cycle.
+ */
+export function requestAvatarRefresh(channelId: number): void {
+  getDb()
+    .prepare("UPDATE channels SET avatar_refresh_requested = 1 WHERE id = ?")
+    .run(channelId);
+}
+
 export interface CreateChannelInput {
   platform: Platform;
   account_name: string;
@@ -806,7 +820,8 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
       `SELECT pub.id, pub.channel_id, pub.scheduled_at, pub.status, pub.is_held,
               pub.is_dry_run, pub.remote_post_id,
               c.account_name AS channel_name, c.platform AS channel_platform,
-              c.timezone AS channel_timezone, c.color_hue AS channel_color_hue
+              c.timezone AS channel_timezone, c.color_hue AS channel_color_hue,
+              c.avatar_path AS channel_avatar_path
        FROM publications pub JOIN channels c ON c.id = pub.channel_id
        WHERE pub.post_id = ? ORDER BY pub.scheduled_at ASC`
     )
@@ -943,6 +958,7 @@ export interface PublicationRow extends Publication {
   channel_platform: string;
   channel_timezone: string;
   channel_color_hue: number | null;
+  channel_avatar_path: string | null;
   asset_count: number;
   first_asset_id: number | null;
   m_reach: number | null;
@@ -965,6 +981,7 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          c.platform     AS channel_platform,
          c.timezone     AS channel_timezone,
          c.color_hue    AS channel_color_hue,
+         c.avatar_path  AS channel_avatar_path,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT pa.asset_id FROM post_assets pa
             WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,

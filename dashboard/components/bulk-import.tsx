@@ -8,6 +8,7 @@ import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { ConformControl } from "./conform-control";
 import { channelColor, videoPreviewSrc } from "@/lib/format";
+import { ChannelAvatar } from "@/components/ui";
 
 // `uid` is a per-tile client id: two tiles can share an assetId (re-importing a
 // deduped image), so React keys must not be the assetId.
@@ -245,6 +246,13 @@ export function BulkImport({
                       border: on ? "none" : "1.5px solid var(--color-border-strong)",
                     }}
                     aria-hidden
+                  />
+                  <ChannelAvatar
+                    id={c.id}
+                    name={c.account_name}
+                    colorHue={c.color_hue}
+                    avatarPath={c.avatar_path}
+                    size={20}
                   />
                   <span className="text-sm text-ink">{c.account_name}</span>
                   <span className="ml-auto text-xs text-muted">{c.platform}</span>

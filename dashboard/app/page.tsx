@@ -64,7 +64,7 @@ export default function OverviewPage() {
                     style={{ borderLeft: `3px solid ${color.dot}` }}
                   >
                     <div className="flex items-center justify-between">
-                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} />
+                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} avatarPath={c.avatar_path} />
                       <span className="data text-lg font-semibold text-ink">{count}</span>
                     </div>
                     <p className="mt-2 text-xs text-muted">

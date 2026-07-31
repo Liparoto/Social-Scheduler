@@ -23,6 +23,7 @@ import { ConformControl } from "./conform-control";
 import { CoverFramePicker } from "./cover-frame-picker";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "./media-lightbox";
 import { PostSendsPanel } from "./post-sends-panel";
+import { ChannelAvatar } from "@/components/ui";
 
 const card = "rounded-card border border-border bg-surface p-5";
 const segBtn = (active: boolean) =>
@@ -295,6 +296,13 @@ export function PostEditor({
                 }`}
                 style={on && !disabled ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined}
               >
+                <ChannelAvatar
+                  id={c.id}
+                  name={c.account_name}
+                  colorHue={c.color_hue}
+                  avatarPath={c.avatar_path}
+                  size={20}
+                />
                 {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
                     chip must take its paired dark `fg` — on `text-ink` alone the name is
                     near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}

@@ -44,6 +44,7 @@ export default function LibraryPage() {
     timezone: c.timezone,
     requires_approval: c.requires_approval === 1,
     color_hue: c.color_hue,
+    avatar_path: c.avatar_path,
   }));
 
   return (

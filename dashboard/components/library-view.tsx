@@ -7,6 +7,7 @@ import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
+import { ChannelAvatar } from "@/components/ui";
 
 interface PostLite {
   id: number;
@@ -40,6 +41,7 @@ interface ChannelLite {
   timezone: string;
   requires_approval: boolean;
   color_hue: number | null;
+  avatar_path: string | null;
 }
 
 // The post_type values the Library can filter by, with the label each one gets. Ordered
@@ -588,9 +590,12 @@ export function LibraryView({
                       : { borderColor: "var(--color-border)", color: "var(--color-muted)" }
                   }
                 >
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: on && !disabled ? color.dot : "var(--color-faint)" }}
+                  <ChannelAvatar
+                    id={c.id}
+                    name={c.account_name}
+                    colorHue={c.color_hue}
+                    avatarPath={c.avatar_path}
+                    size={14}
                   />
                   {c.account_name}
                   {disabled ? " — can't post this type" : ""}

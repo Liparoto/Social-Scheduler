@@ -15,6 +15,7 @@ export default function ComposePage() {
     timezone: c.timezone,
     requires_approval: c.requires_approval === 1,
     color_hue: c.color_hue,
+    avatar_path: c.avatar_path,
   }));
   const timeOfDayTags = listTags("time_of_day");
   const topicTags = listTags("topic");
