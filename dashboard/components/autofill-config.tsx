@@ -6,7 +6,10 @@ import { useRouter } from "next/navigation";
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
 interface Props {
-  channelId: number;
+  /** Auto-fill config is owned by a GROUP when a channel belongs to one, and by the
+   *  channel itself otherwise. Same fields either way — the schema repeats the column
+   *  names precisely so this one form can drive both. */
+  target: { kind: "channel" | "group"; id: number };
   enabled: boolean;
   cadenceConfig: string | null;
   minQueueDepth: number;
@@ -25,6 +28,11 @@ function parseCadence(raw: string | null): { days: string[]; time: string } {
 
 export function AutofillConfig(props: Props) {
   const router = useRouter();
+  const endpoint =
+    props.target.kind === "group"
+      ? `/api/channel-groups/${props.target.id}`
+      : `/api/channels/${props.target.id}`;
+  const noun = props.target.kind === "group" ? "group" : "channel";
   const [open, setOpen] = useState(false);
   const initial = parseCadence(props.cadenceConfig);
   const [enabled, setEnabled] = useState(props.enabled);
@@ -42,7 +50,7 @@ export function AutofillConfig(props: Props) {
 
   async function save() {
     setSaved(false);
-    await fetch(`/api/channels/${props.channelId}`, {
+    await fetch(endpoint, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -84,7 +92,7 @@ export function AutofillConfig(props: Props) {
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
             />
-            Automatically keep this channel&rsquo;s queue topped up
+            Automatically keep this {noun}&rsquo;s queue topped up
           </label>
 
           <div>

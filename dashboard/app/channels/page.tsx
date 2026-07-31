@@ -1,4 +1,4 @@
-import { getChannels } from "@/lib/queries";
+import { getChannels, listChannelGroups, getGroupMembers } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { accountIdLabel, usesAccountId } from "@/lib/platforms";
 import { PageHeader, ChannelChip, ChannelAvatar, EmptyState } from "@/components/ui";
@@ -9,12 +9,30 @@ import { ChannelAvatarRefresh } from "@/components/channel-avatar-refresh";
 import { ChannelColor } from "@/components/channel-color";
 import { ChannelTimezone } from "@/components/channel-timezone";
 import { AutofillConfig } from "@/components/autofill-config";
+import { ChannelGroups } from "@/components/channel-groups";
+import { ChannelGroupSelect } from "@/components/channel-group-select";
 import { tzAbbrev } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
 export default function ChannelsPage() {
   const channels = getChannels();
+  const groups = listChannelGroups().map((g) => ({
+    id: g.id,
+    name: g.name,
+    timezone: g.timezone,
+    autofill_enabled: g.autofill_enabled,
+    cadence_config: g.cadence_config,
+    min_queue_depth: g.min_queue_depth,
+    target_queue_depth: g.target_queue_depth,
+    reuse_min_age_days: g.reuse_min_age_days,
+    members: getGroupMembers(g.id).map((m) => ({
+      id: m.id,
+      account_name: m.account_name,
+      platform: m.platform,
+    })),
+  }));
+  const groupNames = new Map(groups.map((g) => [g.id, g.name]));
 
   return (
     <div>
@@ -36,6 +54,8 @@ export default function ChannelsPage() {
             just needs a webhook URL.
           </EmptyState>
         ) : (
+          <>
+          <ChannelGroups groups={groups} />
           <div className="grid gap-4 md:grid-cols-2">
             {channels.map((c) => (
               <div
@@ -125,17 +145,34 @@ export default function ChannelsPage() {
                   colorHue={c.color_hue}
                 />
 
-                <AutofillConfig
+                <ChannelGroupSelect
                   channelId={c.id}
-                  enabled={c.autofill_enabled === 1}
-                  cadenceConfig={c.cadence_config}
-                  minQueueDepth={c.min_queue_depth}
-                  targetQueueDepth={c.target_queue_depth}
-                  reuseMinAgeDays={c.reuse_min_age_days}
+                  groupId={c.group_id}
+                  groups={groups.map((g) => ({ id: g.id, name: g.name }))}
                 />
+
+                {c.group_id === null ? (
+                  <AutofillConfig
+                    target={{ kind: "channel", id: c.id }}
+                    enabled={c.autofill_enabled === 1}
+                    cadenceConfig={c.cadence_config}
+                    minQueueDepth={c.min_queue_depth}
+                    targetQueueDepth={c.target_queue_depth}
+                    reuseMinAgeDays={c.reuse_min_age_days}
+                  />
+                ) : (
+                  <p className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3 text-xs text-muted">
+                    Auto-filled as part of{" "}
+                    <span className="font-medium text-ink-soft">
+                      {groupNames.get(c.group_id)}
+                    </span>
+                    . Its cadence is set on the group above.
+                  </p>
+                )}
               </div>
             ))}
           </div>
+          </>
         )}
       </div>
     </div>
