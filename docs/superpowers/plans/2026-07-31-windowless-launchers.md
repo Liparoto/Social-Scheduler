@@ -48,7 +48,7 @@ Stop is built first (Task 1) because it is the only task that can be verified ag
 - Consumes: nothing (first task).
 - Produces: the `data/run/` PID-file contract that Task 2 writes to — `dashboard.pid`, `worker.pid`, `watchdog.pid`, `worker.deadline`, each a plain text file containing one integer PID (or, for `worker.deadline`, a `YYYY-MM-DD HH:MM` local timestamp). Also produces `close_my_window()`, reused verbatim in Task 2.
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 Create `Stop-SocialScheduler-Mac.command`:
 
@@ -171,14 +171,14 @@ close_my_window
 exit 0
 ```
 
-- [ ] **Step 2: Make it executable**
+- [x] **Step 2: Make it executable**
 
 Run:
 ```bash
 chmod +x Stop-SocialScheduler-Mac.command
 ```
 
-- [ ] **Step 3: Confirm the dashboard is currently up, so the test means something**
+- [x] **Step 3: Confirm the dashboard is currently up, so the test means something**
 
 Run:
 ```bash
@@ -190,7 +190,7 @@ nohup env PORT=3939 npm --prefix dashboard run dev > data/logs/dashboard.log 2>&
 ```
 and re-check until it appears.
 
-- [ ] **Step 4: Run Stop from the terminal and verify the port frees**
+- [x] **Step 4: Run Stop from the terminal and verify the port frees**
 
 Run:
 ```bash
@@ -200,7 +200,7 @@ Expected: prints "Stopping the dashboard...", then "✅ Stopped. Nothing is runn
 
 Note: run from the terminal, not Finder, for this step — `close_my_window` returns early when there is no Terminal tty, so it will not try to close anything.
 
-- [ ] **Step 5: Verify the no-op path**
+- [x] **Step 5: Verify the no-op path**
 
 Run:
 ```bash
@@ -208,7 +208,7 @@ Run:
 ```
 Expected: "Nothing was running." Exit code 0. Running Stop twice must never error.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Stop-SocialScheduler-Mac.command
@@ -227,7 +227,7 @@ git commit -m "feat(launcher): add double-click Stop for macOS"
 - Consumes: `close_my_window()` and the `data/run/` PID-file contract from Task 1; the existing `env_value()` and `pause_and_exit()` helpers already defined at lines 32–44 of the script.
 - Produces: `data/run/dashboard.pid`, `data/run/worker.pid`, `data/run/watchdog.pid` (one integer each), `data/run/worker.deadline` (`YYYY-MM-DD HH:MM`). Task 4's Windows Stop mirrors this contract.
 
-- [ ] **Step 1: Add the config key to `.env.example`**
+- [x] **Step 1: Add the config key to `.env.example`**
 
 Append to `.env.example`:
 
@@ -240,7 +240,7 @@ Append to `.env.example`:
 WORKER_AUTO_STOP_HOURS=12
 ```
 
-- [ ] **Step 2: Add `close_my_window()` to the Start script**
+- [x] **Step 2: Add `close_my_window()` to the Start script**
 
 Insert into `Start-SocialScheduler-Mac.command` immediately after the `env_value()` function (after line 44), the exact same function body written in Task 1 Step 1:
 
@@ -282,7 +282,7 @@ live_pid() {
 }
 ```
 
-- [ ] **Step 3: Delete the old worker-and-cleanup machinery**
+- [x] **Step 3: Delete the old worker-and-cleanup machinery**
 
 The worker is no longer a child of this window, so the `trap`-based cleanup is wrong — it would kill the detached worker the moment the window closes, which is the whole thing we are removing.
 
@@ -300,7 +300,7 @@ Then delete lines 132–137, the old foreground worker launch:
 
 Leave the surrounding `if [ "$MODE" = "live" ]` block and all the DRY_RUN / KILL_SWITCH messages above it intact.
 
-- [ ] **Step 4: Add the already-running check before the mode question**
+- [x] **Step 4: Add the already-running check before the mode question**
 
 Insert immediately before section 6 ("Ask what to do", the `echo "What would you like to do?"` line):
 
@@ -323,7 +323,7 @@ if [ -n "$(lsof -ti "tcp:$PORT" 2>/dev/null)" ]; then
 fi
 ```
 
-- [ ] **Step 5: Replace section 8 with the detached launch**
+- [x] **Step 5: Replace section 8 with the detached launch**
 
 Replace everything from line 139 (`# ---- 8. Start the dashboard ...`) to the end of the file with:
 
@@ -400,7 +400,7 @@ close_my_window
 exit 0
 ```
 
-- [ ] **Step 6: Verify a clean start detaches**
+- [x] **Step 6: Verify a clean start detaches**
 
 Run:
 ```bash
@@ -414,7 +414,7 @@ cat data/run/dashboard.pid; lsof -nP -iTCP:3939 -sTCP:LISTEN
 ```
 Expected: a PID, and one `node` LISTEN line.
 
-- [ ] **Step 7: Verify it survives its parent dying**
+- [x] **Step 7: Verify it survives its parent dying**
 
 This is the actual bug being fixed, so verify it directly. Run:
 ```bash
@@ -424,7 +424,7 @@ Expected: `still answering: HTTP 200` — the server outlived the shell that sta
 
 (The `already running` path will trigger on the second start; that is expected and is itself covered by Step 8.)
 
-- [ ] **Step 8: Verify the already-running path does not double-start**
+- [x] **Step 8: Verify the already-running path does not double-start**
 
 With the dashboard up, run:
 ```bash
@@ -432,7 +432,7 @@ printf '1\n' | ./Start-SocialScheduler-Mac.command; echo "--- listeners ---"; ls
 ```
 Expected: "SocialScheduler is already running." and exactly one listener line (`1`). No second server.
 
-- [ ] **Step 9: Verify the worker path and the deadline**
+- [x] **Step 9: Verify the worker path and the deadline**
 
 Run:
 ```bash
@@ -444,7 +444,7 @@ Expected: `worker.deadline` is a timestamp ~12 hours ahead of now; the worker PI
 
 **Caution:** this starts the real worker and `.env` has `DRY_RUN=0`. Before running this step, set `KILL_SWITCH=1` in `.env` so nothing publishes during the test, and set it back to `0` afterward. Confirm with `grep KILL_SWITCH .env` before and after.
 
-- [ ] **Step 10: Verify Stop clears everything the worker path created**
+- [x] **Step 10: Verify Stop clears everything the worker path created**
 
 Run:
 ```bash
@@ -453,7 +453,7 @@ echo "--- leftovers ---"; ls data/run/ 2>/dev/null; lsof -ti tcp:3939 || echo "p
 ```
 Expected: reports the deadline and stops both, `data/run/` is empty, "port free".
 
-- [ ] **Step 11: Verify the window actually closes from Finder**
+- [x] **Step 11: Verify the window actually closes from Finder**
 
 This is the one behavior no terminal command can prove. Manual check:
 
@@ -465,7 +465,7 @@ This is the one behavior no terminal command can prove. Manual check:
 
 Report the result. If the window does not close, the launch itself still worked — note it as a cosmetic failure rather than blocking the task.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add Start-SocialScheduler-Mac.command .env.example
@@ -486,7 +486,7 @@ git commit -m "feat(launcher): macOS Start runs detached and closes its own wind
 
 **No verification is available for this task.** There is no Windows machine in this setup and no reliable batch-syntax linter. Write it carefully against the Task 2 logic and label it unverified in the commit message.
 
-- [ ] **Step 1: Create the hidden-launch helper**
+- [x] **Step 1: Create the hidden-launch helper**
 
 Create `scripts/run-hidden.vbs`:
 
@@ -526,7 +526,7 @@ WScript.Echo pid
 WScript.Quit 0
 ```
 
-- [ ] **Step 2: Add the already-running check before section 6**
+- [x] **Step 2: Add the already-running check before section 6**
 
 Insert into `Start-SocialScheduler-Windows.bat` immediately before `REM ---- 6. Ask what to do. ----`:
 
@@ -550,7 +550,7 @@ if defined ALREADY (
 )
 ```
 
-- [ ] **Step 3: Replace the old worker launch**
+- [x] **Step 3: Replace the old worker launch**
 
 Delete lines 140–143 of the original:
 
@@ -590,7 +590,7 @@ Replace with the hidden launch plus the auto-stop timer:
   echo.
 ```
 
-- [ ] **Step 4: Replace section 8 with the detached dashboard launch**
+- [x] **Step 4: Replace section 8 with the detached dashboard launch**
 
 Replace everything from `REM ---- 8. Start the dashboard (foreground). ...` (line 146) to the end of the `pause` / `exit /b 0` block (line 167), keeping the `:env_value` helper that follows it:
 
@@ -630,11 +630,11 @@ exit /b 0
 
 Note the removed `pause` — that is what lets the console window close on its own when the script ends.
 
-- [ ] **Step 5: Set `PORT` for the dashboard process**
+- [x] **Step 5: Set `PORT` for the dashboard process**
 
 The Mac version passes `PORT=3939` in the launched process's environment. The batch `set PORT=3939` in Step 2 is inherited by the `cscript` child and onward to `npm`, so no extra work is needed — but confirm `set PORT=3939` appears *before* the dashboard launch in the final file, not only inside the already-running block.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/run-hidden.vbs Start-SocialScheduler-Windows.bat
@@ -657,7 +657,7 @@ verified macOS logic in Start-SocialScheduler-Mac.command."
 
 **No verification is available for this task**, for the same reason as Task 3.
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 Create `Stop-SocialScheduler-Windows.bat`:
 
@@ -738,7 +738,7 @@ echo.
 exit /b 0
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add Stop-SocialScheduler-Windows.bat
@@ -761,7 +761,7 @@ verified macOS logic in Stop-SocialScheduler-Mac.command."
 - Consumes: everything from Tasks 1–4.
 - Produces: nothing.
 
-- [ ] **Step 1: Find every stale instruction**
+- [x] **Step 1: Find every stale instruction**
 
 Run:
 ```bash
@@ -770,7 +770,7 @@ grep -rn -i "close.*window\|close this window\|Start-SocialScheduler" readme.md 
 
 Read each hit. Any text telling the reader to close a window to stop the app is now wrong.
 
-- [ ] **Step 2: Update `readme.md`**
+- [x] **Step 2: Update `readme.md`**
 
 Rewrite the run instructions so they name the four files. The replacement text:
 
@@ -794,11 +794,11 @@ your `.env`.
 Logs live in `data/logs/` — `dashboard.log` and `worker-daemon.out`.
 ```
 
-- [ ] **Step 3: Update `docs/tasks.md`**
+- [x] **Step 3: Update `docs/tasks.md`**
 
 Add a completed phase entry recording this work, matching the file's existing phase format. Include the unverified-on-Windows caveat.
 
-- [ ] **Step 4: Flip the design doc status**
+- [x] **Step 4: Flip the design doc status**
 
 In `docs/design-launcher-windowless.md`, change:
 
@@ -812,7 +812,7 @@ to:
 **Status:** built and verified on macOS; Windows scripts unverified
 ```
 
-- [ ] **Step 5: Verify no stale instructions remain**
+- [x] **Step 5: Verify no stale instructions remain**
 
 Run:
 ```bash
@@ -820,7 +820,7 @@ grep -rn -i "close this window to stop\|closing the window stops\|stops everythi
 ```
 Expected: no hits, or only hits inside `docs/design-launcher-windowless.md` describing the *old* behavior in the Problem section, which is correct and should stay.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add readme.md docs/tasks.md docs/design-launcher-windowless.md

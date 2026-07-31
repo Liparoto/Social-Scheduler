@@ -399,6 +399,43 @@ without ever risking her `.env` (secrets) or `/data` (DB + assets) — both giti
 
 ---
 
+## Windowless Start/Stop launchers  `[x]`
+Spec: `docs/design-launcher-windowless.md` · Plan:
+`docs/superpowers/plans/2026-07-31-windowless-launchers.md`. Goal: the Terminal window was the
+stop mechanism, so anything that closed it — including a Claude Code session ending — killed the
+dashboard. Start now detaches and closes its own window; a paired Stop takes over the job.
+- [x] **`Stop-SocialScheduler-Mac.command` / `-Windows.bat`** (new): kills the watchdog first (so a
+      stale timer can't fire at a recycled PID), then the worker, then the dashboard. **Always**
+      sweeps port 3939 rather than trusting the recorded PID — `npm run dev` spawns the Next.js
+      server as a *child*, so `$!` records the npm wrapper and killing it alone can orphan the
+      server. Safe to run twice; reports "Nothing was running."
+- [x] **Start rewritten (section 8 only)**: `nohup … & disown` (Mac) / `run-hidden.vbs` (Windows),
+      PIDs recorded under `data/run/`. Steps 1–7 — preflight, `migrate.py`, first-run installs, the
+      Compose/Go-live menu, the `DRY_RUN=0` YES guard — are untouched.
+- [x] **Removed the `trap cleanup EXIT INT TERM HUP`**: with a detached worker it would have killed
+      it the instant the window self-closed, the exact opposite of the goal.
+- [x] **Window self-close (Mac)**: background AppleScript matching the script's own `tty`, fired
+      after the shell exits so Terminal closes cleanly instead of prompting. Can only ever close its
+      own window. Failure is cosmetic — the window just stays, which is the old behavior.
+- [x] **Already-running check**: reopens the browser instead of double-starting, so Start doubles as
+      an "is it on?" check. No separate Status file to explain.
+- [x] **Worker auto-stop**: `WORKER_AUTO_STOP_HOURS` (default 12, in `.env.example`) + a detached
+      watchdog + `data/run/worker.deadline`. The worker publishes for real and now has no visible
+      window; this is what stops a forgotten worker posting unattended. Applies in dry-run too. The
+      dashboard gets no timer — it publishes nothing.
+- [x] Verified on this Mac: detached dashboard reparents to `launchd` and still serves HTTP 200
+      after its launching shell exits (the original bug); already-running path leaves exactly one
+      listener; Go-live records worker+watchdog+deadline at +12h with `KILL_SWITCH active —
+      publishing nothing` in the log; Stop clears `data/run/`, frees the port, kills both processes;
+      Stop twice is a clean no-op; real Terminal window opened and closed itself (1→2→1 windows)
+      without touching a pre-existing window. `.env` restored byte-identical after testing.
+- ⚠️ **Windows scripts are UNVERIFIED** — no Windows machine in this setup and no reliable batch
+      linter. Logic mirrors the verified Mac scripts. `run-hidden.vbs` takes a `.cmd` *file path*
+      rather than a command line specifically to avoid `for /f` quoting against a repo path
+      containing a space. First person to run it on Windows should expect to report bugs.
+
+---
+
 ## Export & backup  `[x] done`
 Read-only snapshot of an install's content, for anyone who wants a dated local/Drive backup
 without touching the database directly.

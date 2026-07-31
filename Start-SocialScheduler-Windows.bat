@@ -87,6 +87,24 @@ if not exist ".venv" (
   echo.
 )
 
+REM ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
+set PORT=3939
+set "RUN_DIR=%~dp0data\run"
+set "LOG_DIR=%~dp0data\logs"
+if not exist "%RUN_DIR%" mkdir "%RUN_DIR%"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+
+set "ALREADY="
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%PORT%" ^| findstr LISTENING') do set "ALREADY=%%a"
+if defined ALREADY (
+  echo SocialScheduler is already running.
+  echo Opening http://localhost:%PORT%
+  echo.
+  echo To stop it, double-click Stop-SocialScheduler-Windows.bat
+  start "" "http://localhost:%PORT%"
+  exit /b 0
+)
+
 REM ---- 6. Ask what to do. ----
 echo What would you like to do?
 echo   1^) Compose only  - open the dashboard; nothing will be posted ^(safe^)
@@ -137,33 +155,83 @@ if "%MODE%"=="live" (
     echo Note: KILL_SWITCH is ON - the worker will run but publish nothing until you set KILL_SWITCH=0 in .env.
     echo.
   )
-  echo Starting the worker in its own window...
-  start "SocialScheduler Worker" cmd /c ""%~dp0.venv\Scripts\python" -m worker.run"
-  echo Worker running in the "SocialScheduler Worker" window (logs are in data\logs\).
+  echo Starting the worker in the background...
+
+  REM Write the worker's command to its own .cmd file rather than threading
+  REM redirects and quoted paths through for /f. See scripts\run-hidden.vbs.
+  > "!RUN_DIR!\run-worker.cmd" echo @echo off
+  >>"!RUN_DIR!\run-worker.cmd" echo cd /d "%~dp0"
+  >>"!RUN_DIR!\run-worker.cmd" echo ".venv\Scripts\python" -m worker.run ^>^> "!LOG_DIR!\worker-daemon.out" 2^>^&1
+
+  set "WORKER_PID="
+  for /f %%p in ('cscript //nologo "%~dp0scripts\run-hidden.vbs" "!RUN_DIR!\run-worker.cmd"') do set "WORKER_PID=%%p"
+  if defined WORKER_PID >"!RUN_DIR!\worker.pid" echo !WORKER_PID!
+
+  REM How long before the worker stops itself. Anything unparseable falls back to 12.
+  REM This exists because the worker publishes for real and now runs with no visible
+  REM window — without a deadline, a forgotten worker posts unattended for days.
+  call :env_value WORKER_AUTO_STOP_HOURS AUTO_HOURS
+  if not defined AUTO_HOURS set "AUTO_HOURS=12"
+  set "AUTO_SECS="
+  for /f %%s in ('python -c "print(int(float('!AUTO_HOURS!') * 3600))" 2^>NUL') do set "AUTO_SECS=%%s"
+  if not defined AUTO_SECS set "AUTO_SECS=43200"
+
+  set "DEADLINE="
+  for /f "delims=" %%d in ('python -c "import datetime; print((datetime.datetime.now() + datetime.timedelta(seconds=!AUTO_SECS!)).strftime('%%Y-%%m-%%d %%H:%%M'))" 2^>NUL') do set "DEADLINE=%%d"
+  if defined DEADLINE >"!RUN_DIR!\worker.deadline" echo !DEADLINE!
+
+  REM The watchdog: waits, then stops the worker and clears its bookkeeping.
+  > "!RUN_DIR!\run-watchdog.cmd" echo @echo off
+  >>"!RUN_DIR!\run-watchdog.cmd" echo timeout /t !AUTO_SECS! /nobreak ^>NUL
+  >>"!RUN_DIR!\run-watchdog.cmd" echo taskkill /PID !WORKER_PID! /T /F ^>NUL 2^>^&1
+  >>"!RUN_DIR!\run-watchdog.cmd" echo del /q "!RUN_DIR!\worker.pid" "!RUN_DIR!\watchdog.pid" "!RUN_DIR!\worker.deadline" ^>NUL 2^>^&1
+
+  set "WATCHDOG_PID="
+  for /f %%p in ('cscript //nologo "%~dp0scripts\run-hidden.vbs" "!RUN_DIR!\run-watchdog.cmd"') do set "WATCHDOG_PID=%%p"
+  if defined WATCHDOG_PID >"!RUN_DIR!\watchdog.pid" echo !WATCHDOG_PID!
+
+  echo Worker running in the background ^(logs are in data\logs\^).
+  echo It will stop on its own at !DEADLINE!, or whenever you double-click Stop.
   echo.
 )
 
-REM ---- 8. Start the dashboard (foreground). Closing it stops the dashboard. ----
-set PORT=3939
-echo Starting the dashboard. A browser tab will open at http://localhost:%PORT%
-echo If it doesn't, open that address yourself. Close this window to stop the dashboard.
-echo.
+REM ---- 8. Start the dashboard in the background. ----
+echo Starting the dashboard...
+
+> "%RUN_DIR%\run-dashboard.cmd" echo @echo off
+>>"%RUN_DIR%\run-dashboard.cmd" echo cd /d "%~dp0dashboard"
+>>"%RUN_DIR%\run-dashboard.cmd" echo set PORT=%PORT%
+>>"%RUN_DIR%\run-dashboard.cmd" echo npm run dev ^> "%LOG_DIR%\dashboard.log" 2^>^&1
+
+set "DASH_PID="
+for /f %%p in ('cscript //nologo "%~dp0scripts\run-hidden.vbs" "%RUN_DIR%\run-dashboard.cmd"') do set "DASH_PID=%%p"
+if defined DASH_PID >"%RUN_DIR%\dashboard.pid" echo !DASH_PID!
+
 REM Wait until the dashboard actually answers before opening the browser. This used to
 REM fire immediately, one line before the server was even started, so the tab always
-REM opened on a dead port and showed a connection error. Spawns a helper window that
-REM polls with curl (present on Windows 10+) for up to 90s, then gives up quietly.
-start "SocialScheduler Browser" /min cmd /c "for /l %%i in (1,1,90) do (curl -sf -o NUL http://localhost:%PORT% && (start "" "http://localhost:%PORT%" & exit) || timeout /t 1 /nobreak >NUL)"
-pushd dashboard
-call npm run dev
-popd
-
-REM When the dashboard stops, stop the worker window too (best-effort parity with the Mac trap).
-if "%MODE%"=="live" (
-  taskkill /FI "WINDOWTITLE eq SocialScheduler Worker*" /T /F >nul 2>nul
+REM opened on a dead port and showed a connection error. Next.js compiles on a cold
+REM start, so poll for up to 90 seconds.
+set "READY="
+for /l %%i in (1,1,90) do (
+  if not defined READY (
+    curl -sf -o NUL http://localhost:%PORT% && set "READY=1"
+    if not defined READY timeout /t 1 /nobreak >NUL
+  )
 )
+
+if defined READY (
+  start "" "http://localhost:%PORT%"
+  echo [OK] Running at http://localhost:%PORT%
+) else (
+  echo [!] The dashboard didn't start within 90 seconds.
+  echo     Check data\logs\dashboard.log for the reason.
+  echo     If it starts later, open http://localhost:%PORT% yourself.
+)
+
 echo.
-echo Stopped. You can close this window.
-pause
+echo This window will close - everything keeps running.
+echo To stop it, double-click Stop-SocialScheduler-Windows.bat
+echo.
 exit /b 0
 
 REM ---- helper: read KEY (%1) from .env into variable named %2 (last match wins) ----

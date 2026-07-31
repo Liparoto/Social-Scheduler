@@ -1,6 +1,6 @@
 # Design — Windowless Start / Stop launchers
 
-**Status:** approved, not yet built
+**Status:** built and verified on macOS; Windows scripts unverified
 **Date:** 2026-07-31
 
 ## Problem
@@ -98,8 +98,17 @@ rewrite just removes the trailing `pause` and stops running `npm run dev` in the
 foreground. No trick needed.
 
 `run-hidden.vbs` exists because `start /b` and `start /min` both still leave a console
-window associated with the process. The `.vbs` shim, invoked through `wscript`, launches
-a command with window style 0 (hidden) so nothing appears on the taskbar.
+window associated with the process. The `.vbs` shim launches a process with window style
+0 (hidden) via `Win32_Process.Create`, which — unlike `WScript.Shell.Run` — also hands
+back a PID so Stop can find it later.
+
+**Changed during implementation:** the shim takes a **`.cmd` file path**, not a command
+line. The commands it launches contain redirects, quotes, and paths with spaces (this
+repo lives under `Claude Projects`), and threading those through batch's `for /f` quoting
+rules is the single most likely thing to break in a script that cannot be tested here.
+Start therefore writes `data/run/run-dashboard.cmd`, `run-worker.cmd`, and
+`run-watchdog.cmd`, and passes one quoted path. Stop deletes them along with the PID
+files.
 
 ## Worker auto-stop
 

@@ -66,7 +66,22 @@ database so new updates apply automatically. Then it asks what you want to do:
   `DRY_RUN=1` (the shipped default) the worker only *logs* what it would post. If you've set
   `DRY_RUN=0`, it asks you to type **YES** first — otherwise it quietly stays in Compose only.
 
-**Close the window to stop everything** — the worker shuts down cleanly. Requires **Node.js**
+Once it's running, the launcher **closes its own window** — the dashboard and worker keep
+running in the background, so nothing is left cluttering your screen and nothing dies if you
+close a window by accident.
+
+**Stop it:**
+- **macOS:** double-click **`Stop-SocialScheduler-Mac.command`**
+- **Windows:** double-click **`Stop-SocialScheduler-Windows.bat`**
+
+Double-clicking Start again while it's already running just reopens the browser tab — it won't
+start a second copy, so it doubles as an "is it on?" check.
+
+If you chose **Go live**, the worker also **stops itself after 12 hours** so it can't keep
+publishing unattended if you forget about it. Change that with `WORKER_AUTO_STOP_HOURS` in your
+`.env`. The dashboard has no timer — it publishes nothing, so it runs until you stop it.
+
+Logs are in `data/logs/` — `dashboard.log` and `worker-daemon.out`. Requires **Node.js**
 (nodejs.org) and **Python 3** (python.org); the launcher tells you if either is missing.
 
 **Update to the latest code (keeps all your data):**
