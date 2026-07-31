@@ -1,21 +1,31 @@
-"""Per-channel auto-fill: keep each channel's queue topped up.
+"""Auto-fill: keep each unit's queue topped up.
 
-When a channel's scheduled-ahead depth drops below its min_queue_depth, refill it to
-target_queue_depth by selecting content with these ordered rules (per channel):
+A UNIT is either a single ungrouped channel or a channel_group with its active members.
+A group fills as one thing — one cadence, one selection decision, one slot, one
+publication per member — so channels representing the same account never drift apart.
 
-  1. Never posted to this channel yet.
-  2. Not posted to this channel within reuse_min_age_days (recyclable by age).
-     — content posted MORE recently than that is excluded entirely.
-  3. Among the recyclable pool, prefer top performers on THIS channel (reach + saves).
+Selection rules (evaluated against the unit's settings):
+
+  1. Never posted to this unit yet.
+  2. Not posted within reuse_min_age_days (recyclable by age).
+     - content posted MORE recently than that is excluded entirely.
+  3. Among the recyclable pool, prefer top performers (reach + saves).
 
 Realized as one ranking: tier gate (0 = never, 1 = recyclable) then performance desc,
 then staleness, then age of the content. This captures all three rules coherently and
 is testable tier-by-tier.
+
+For a GROUP, performance is the MAX across members and "never posted" means never on any
+member. Two kinds of rejection are distinguished: a platform CAPABILITY miss (media type,
+caption length) lets that member sit the slot out, while a RULE miss (targeting, cooldown,
+one-time, periods, already queued) holds the whole group back. See
+group_eligible_candidates.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import timedelta
 
 from . import db
@@ -77,6 +87,48 @@ def latest_future_scheduled(conn, channel_id: int, now_iso: str) -> str | None:
           AND scheduled_at > ?
         """,
         (channel_id, *ACTIVE_QUEUE_STATUSES, now_iso),
+    ).fetchone()
+    return row[0]
+
+
+def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> int:
+    """How many future SLOTS a group has queued — distinct scheduled_at values across
+    its members, not a row count.
+
+    A group writes one row per member at a single timestamp, so counting rows would
+    report a two-member group as twice as full as it is and stop refilling at half the
+    target. Solo channels keep using scheduled_ahead_count (a plain row count) so their
+    behaviour is byte-identical to before groups existed.
+    """
+    if not member_ids:
+        return 0
+    mq = ",".join("?" * len(member_ids))
+    sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
+    row = conn.execute(
+        f"""
+        SELECT COUNT(DISTINCT scheduled_at) FROM publications
+        WHERE channel_id IN ({mq})
+          AND status IN ({sq})
+          AND scheduled_at > ?
+        """,
+        (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
+    ).fetchone()
+    return row[0]
+
+
+def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str) -> str | None:
+    if not member_ids:
+        return None
+    mq = ",".join("?" * len(member_ids))
+    sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
+    row = conn.execute(
+        f"""
+        SELECT MAX(scheduled_at) FROM publications
+        WHERE channel_id IN ({mq})
+          AND status IN ({sq})
+          AND scheduled_at > ?
+        """,
+        (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0]
 
@@ -340,66 +392,121 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None):
     return out if limit is None else out[:limit]
 
 
-def run_autofill(conn, config: Config, now, logger=None) -> int:
-    """Top up every autofill-enabled channel. Returns total publications created."""
-    now_iso = now.isoformat()
-    channels = conn.execute(
-        "SELECT * FROM channels WHERE is_active = 1 AND autofill_enabled = 1"
-    ).fetchall()
+@dataclass
+class AutofillUnit:
+    """One thing auto-fill tops up. A channel_group with its active members, or a single
+    ungrouped channel standing alone. `settings` carries cadence_config, timezone,
+    min/target_queue_depth and reuse_min_age_days — the group and the channel share those
+    column names precisely so this stays one code path."""
 
-    created_total = 0
-    for ch in channels:
-        cadence = parse_weekly_cadence(ch["cadence_config"])
-        if cadence is None:
-            if logger:
-                logger.info("[autofill %s] no valid cadence — skipping", ch["account_name"])
-            continue
+    label: str
+    settings: object
+    members: list
+    is_group: bool
 
-        ahead = scheduled_ahead_count(conn, ch["id"], now_iso)
-        if ahead >= ch["min_queue_depth"]:
-            continue  # queue is healthy
-        need = ch["target_queue_depth"] - ahead
-        if need <= 0:
-            continue
 
-        candidates = eligible_candidates(conn, ch, now, need)
-        if not candidates:
-            if logger:
-                logger.info(
-                    "[autofill %s] queue low (%d/%d) but no eligible content",
-                    ch["account_name"], ahead, ch["min_queue_depth"],
-                )
-            continue
+def _autofill_units(conn) -> list[AutofillUnit]:
+    """Groups first, then ungrouped channels. A channel with group_id set is NEVER also
+    returned as a solo unit, so it can't be topped up twice in one cycle."""
+    units: list[AutofillUnit] = []
+    for g in conn.execute(
+        "SELECT * FROM channel_groups WHERE is_active = 1 AND autofill_enabled = 1"
+    ).fetchall():
+        members = conn.execute(
+            "SELECT * FROM channels WHERE group_id = ? AND is_active = 1 ORDER BY id",
+            (g["id"],),
+        ).fetchall()
+        units.append(AutofillUnit(g["name"], g, list(members), True))
+    for ch in conn.execute(
+        """SELECT * FROM channels
+            WHERE is_active = 1 AND autofill_enabled = 1 AND group_id IS NULL"""
+    ).fetchall():
+        units.append(AutofillUnit(ch["account_name"], ch, [ch], False))
+    return units
 
-        weekdays, hour, minute = cadence
-        cadence_hm = (hour, minute)
-        bt_map = band_times(config)
-        last_future = latest_future_scheduled(conn, ch["id"], now_iso)
-        after = parse_iso(last_future) if last_future else now
-        # Each candidate's slot TIME comes from its time_of_day tag; the cadence
-        # still supplies which DAYS (one auto-post per active day).
-        per_candidate_times = [
-            resolve_slot_time(post_bands(conn, cand["post_id"]), bt_map, cadence_hm)
-            for cand in candidates
-        ]
-        slots = weekly_date_slots(weekdays, ch["timezone"], after, per_candidate_times)
 
-        status = "pending_approval" if ch["requires_approval"] else "scheduled"
-        made = 0
-        for cand, slot in zip(candidates, slots):
+def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logger) -> int:
+    """Top up one unit. Returns the number of publications created."""
+    if unit.is_group and not unit.members:
+        if logger:
+            logger.info("[autofill %s] group has no active members — skipping", unit.label)
+        return 0
+
+    settings = unit.settings
+    cadence = parse_weekly_cadence(settings["cadence_config"])
+    if cadence is None:
+        if logger:
+            logger.info("[autofill %s] no valid cadence — skipping", unit.label)
+        return 0
+
+    member_ids = [m["id"] for m in unit.members]
+    if unit.is_group:
+        ahead = group_scheduled_ahead_count(conn, member_ids, now_iso)
+        last_future = group_latest_future_scheduled(conn, member_ids, now_iso)
+    else:
+        ahead = scheduled_ahead_count(conn, member_ids[0], now_iso)
+        last_future = latest_future_scheduled(conn, member_ids[0], now_iso)
+
+    if ahead >= settings["min_queue_depth"]:
+        return 0  # queue is healthy
+    need = settings["target_queue_depth"] - ahead
+    if need <= 0:
+        return 0
+
+    if unit.is_group:
+        candidates = group_eligible_candidates(conn, settings, unit.members, now, need)
+    else:
+        ch = unit.members[0]
+        candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, need)]
+
+    if not candidates:
+        if logger:
+            logger.info(
+                "[autofill %s] queue low (%d/%d) but no eligible content",
+                unit.label, ahead, settings["min_queue_depth"],
+            )
+        return 0
+
+    weekdays, hour, minute = cadence
+    cadence_hm = (hour, minute)
+    bt_map = band_times(config)
+    after = parse_iso(last_future) if last_future else now
+    # Each candidate's slot TIME comes from its time_of_day tag; the cadence still
+    # supplies which DAYS (one auto-post per active day).
+    per_candidate_times = [
+        resolve_slot_time(post_bands(conn, row["post_id"]), bt_map, cadence_hm)
+        for row, _ in candidates
+    ]
+    slots = weekly_date_slots(weekdays, settings["timezone"], after, per_candidate_times)
+
+    made = 0
+    for (row, recipients), slot in zip(candidates, slots):
+        for member in recipients:
+            # requires_approval stays a CHANNEL property — it describes the account, not
+            # the schedule, so one member of a group may need approval and another not.
+            status = "pending_approval" if member["requires_approval"] else "scheduled"
             conn.execute(
                 """INSERT INTO publications
                      (post_id, channel_id, scheduled_at, status, created_by)
                    VALUES (?, ?, ?, ?, 'autofill')""",
-                (cand["post_id"], ch["id"], slot.isoformat(), status),
+                (row["post_id"], member["id"], slot.isoformat(), status),
             )
             made += 1
-        conn.commit()
-        created_total += made
-        if logger and made:
-            logger.info(
-                "[autofill %s] queue %d/%d -> added %d (target %d)",
-                ch["account_name"], ahead, ch["min_queue_depth"], made,
-                ch["target_queue_depth"],
-            )
-    return created_total
+    conn.commit()
+    if logger and made:
+        logger.info(
+            "[autofill %s] queue %d/%d -> added %d publication(s) across %d channel(s) "
+            "(target %d)",
+            unit.label, ahead, settings["min_queue_depth"], made, len(unit.members),
+            settings["target_queue_depth"],
+        )
+    return made
+
+
+def run_autofill(conn, config: Config, now, logger=None) -> int:
+    """Top up every auto-fill-enabled unit. Returns total publications created."""
+    now_iso = now.isoformat()
+    return sum(
+        _fill_unit(conn, unit, config, now, now_iso, logger)
+        for unit in _autofill_units(conn)
+    )

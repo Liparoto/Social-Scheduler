@@ -316,3 +316,106 @@ def test_group_selection_respects_limit(conn):
 def test_group_with_no_active_members_selects_nothing(conn):
     gid = make_group(conn)
     assert group_eligible_candidates(conn, grp(conn, gid), [], NOW, 5) == []
+
+
+# ---- Task 4: group top-up -------------------------------------------------------
+from worker.autofill import run_autofill  # noqa: E402
+
+
+def pubs(conn, channel_id):
+    return conn.execute(
+        "SELECT * FROM publications WHERE channel_id=? ORDER BY scheduled_at", (channel_id,)
+    ).fetchall()
+
+
+def test_group_queues_both_members_at_the_identical_timestamp(conn, config):
+    gid, ig, th = pair(conn, min_depth=2, target=2)
+    for _ in range(3):
+        make_post(conn, targets=(ig, th))
+
+    made = run_autofill(conn, config, NOW)
+
+    ig_rows, th_rows = pubs(conn, ig), pubs(conn, th)
+    assert len(ig_rows) == 2 and len(th_rows) == 2
+    assert made == 4, "two slots x two members"
+    assert [r["scheduled_at"] for r in ig_rows] == [r["scheduled_at"] for r in th_rows]
+    assert [r["post_id"] for r in ig_rows] == [r["post_id"] for r in th_rows]
+    assert all(r["created_by"] == "autofill" for r in ig_rows + th_rows)
+
+
+def test_group_queue_depth_counts_slots_not_rows(conn, config):
+    """A 2-member group writes 2 rows per slot. Counting rows would report the queue as
+    twice as full as it is and stop refilling at half the target."""
+    gid, ig, th = pair(conn, min_depth=3, target=3)
+    for _ in range(5):
+        make_post(conn, targets=(ig, th))
+
+    run_autofill(conn, config, NOW)
+
+    ig_rows = pubs(conn, ig)
+    assert len(ig_rows) == 3, "3 slots, not 1 or 2"
+    assert len({r["scheduled_at"] for r in ig_rows}) == 3
+
+
+def test_group_reel_queues_instagram_only_and_does_not_stall_the_slot(conn, config):
+    gid, ig, th = pair(conn, min_depth=1, target=1)
+    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
+
+    run_autofill(conn, config, NOW)
+
+    assert [r["post_id"] for r in pubs(conn, ig)] == [reel]
+    assert pubs(conn, th) == []
+
+
+def test_group_honours_each_members_own_requires_approval(conn, config):
+    gid = make_group(conn, min_depth=1, target=1)
+    ig = make_channel(conn, platform="instagram", name="IG", group_id=gid, approval=0)
+    th = make_channel(conn, platform="threads", name="TH", group_id=gid, approval=1)
+    make_post(conn, targets=(ig, th))
+
+    run_autofill(conn, config, NOW)
+
+    assert pubs(conn, ig)[0]["status"] == "scheduled"
+    assert pubs(conn, th)[0]["status"] == "pending_approval"
+
+
+def test_inactive_member_is_excluded_from_the_group(conn, config):
+    gid = make_group(conn, min_depth=1, target=1)
+    ig = make_channel(conn, platform="instagram", name="IG", group_id=gid)
+    th = make_channel(conn, platform="threads", name="TH", group_id=gid, active=0)
+    p = make_post(conn, targets=(ig,))  # targeted at the ACTIVE member only
+
+    run_autofill(conn, config, NOW)
+
+    assert [r["post_id"] for r in pubs(conn, ig)] == [p]
+    assert pubs(conn, th) == []
+
+
+def test_grouped_channel_is_not_also_filled_as_a_solo_unit(conn, config):
+    """A grouped channel's own autofill_enabled must go unread — otherwise it would be
+    topped up twice per cycle, once by the group and once by itself."""
+    gid = make_group(conn, min_depth=1, target=1)
+    ig = make_channel(conn, platform="instagram", name="IG", group_id=gid, autofill=1)
+    th = make_channel(conn, platform="threads", name="TH", group_id=gid, autofill=1)
+    make_post(conn, targets=(ig, th))
+
+    run_autofill(conn, config, NOW)
+
+    assert len(pubs(conn, ig)) == 1
+
+
+def test_disabled_group_fills_nothing(conn, config):
+    gid, ig, th = pair(conn, autofill=0)
+    make_post(conn, targets=(ig, th))
+    assert run_autofill(conn, config, NOW) == 0
+
+
+def test_ungrouped_channel_still_fills_on_its_own_settings(conn, config):
+    """Regression guard: solo behaviour must be untouched by the unit refactor."""
+    solo = make_channel(conn, platform="instagram", name="Solo", autofill=1,
+                        min_depth=2, target=2)
+    for _ in range(3):
+        make_post(conn, targets=(solo,))
+
+    assert run_autofill(conn, config, NOW) == 2
+    assert len(pubs(conn, solo)) == 2
