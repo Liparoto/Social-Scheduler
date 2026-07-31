@@ -1,10 +1,11 @@
 import { getChannels } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { accountIdLabel, usesAccountId } from "@/lib/platforms";
-import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
+import { PageHeader, ChannelChip, ChannelAvatar, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
 import { ChannelCredentials } from "@/components/channel-credentials";
+import { ChannelAvatarRefresh } from "@/components/channel-avatar-refresh";
 import { ChannelColor } from "@/components/channel-color";
 import { ChannelTimezone } from "@/components/channel-timezone";
 import { AutofillConfig } from "@/components/autofill-config";
@@ -44,11 +45,26 @@ export default function ChannelsPage() {
                 }`}
               >
                 <div className="flex items-start justify-between">
-                  <div>
-                    <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} />
-                    {c.business_label ? (
-                      <p className="mt-1.5 text-xs text-muted">{c.business_label}</p>
-                    ) : null}
+                  <div className="flex items-start gap-3">
+                    <ChannelAvatar
+                      id={c.id}
+                      name={c.account_name}
+                      colorHue={c.color_hue}
+                      avatarPath={c.avatar_path}
+                      size={40}
+                    />
+                    <div>
+                      <ChannelChip id={c.id} platform={c.platform} name={c.account_name} colorHue={c.color_hue} />
+                      {c.business_label ? (
+                        <p className="mt-1.5 text-xs text-muted">{c.business_label}</p>
+                      ) : null}
+                      {usesAccountId(c.platform) ? (
+                        <ChannelAvatarRefresh
+                          channelId={c.id}
+                          avatarError={c.avatar_error}
+                        />
+                      ) : null}
+                    </div>
                   </div>
                   <span className="data text-[11px] text-faint">#{c.id}</span>
                 </div>
