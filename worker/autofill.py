@@ -28,6 +28,31 @@ from .time_of_day import band_times, post_bands, resolve_slot_time
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
 
+# The media-type capability test, shared by select_candidates (which also applies the
+# rules) and capable_post_ids (which applies capability ONLY). Kept in one place so the
+# two can never drift: if they did, a group would mistake a capability miss for a rule
+# miss and block every member instead of letting one sit the slot out.
+# Binds :supports_text and :supports_video; references the `posts p` alias.
+_TYPE_CAPABILITY_SQL = """
+          (
+            (p.post_type IN ('single','carousel')
+               AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
+            OR (p.post_type = 'reel' AND :supports_video = 1
+               AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
+            OR (p.post_type = 'text' AND :supports_text = 1)
+          )
+"""
+
+
+def _platform_capability_params(platform: str | None) -> dict:
+    """The :supports_text/:supports_video bindings for a platform. A platform
+    PLATFORM_CAPS does not recognize supports neither — the safe direction."""
+    caps = PLATFORM_CAPS.get(platform)
+    return {
+        "supports_text": 1 if caps is not None and caps.supports_text else 0,
+        "supports_video": 1 if caps is not None and caps.supports_video else 0,
+    }
+
 
 def scheduled_ahead_count(conn, channel_id: int, now_iso: str) -> int:
     """How many publications are queued ahead (future, not yet posted) for a channel."""
@@ -80,9 +105,7 @@ def select_candidates(conn, channel_id: int, now):
         "SELECT platform FROM channels WHERE id = ?", (channel_id,)
     ).fetchone()
     platform = platform_row["platform"] if platform_row else None
-    caps = PLATFORM_CAPS.get(platform)
-    supports_text = 1 if caps is not None and caps.supports_text else 0
-    supports_video = 1 if caps is not None and caps.supports_video else 0
+    cap_params = _platform_capability_params(platform)
 
     rows = conn.execute(
         f"""
@@ -102,13 +125,7 @@ def select_candidates(conn, channel_id: int, now):
           ) AS perf
         FROM posts p
         WHERE p.content_status = 'ready'
-          AND (
-            (p.post_type IN ('single','carousel')
-               AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
-            OR (p.post_type = 'reel' AND :supports_video = 1
-               AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
-            OR (p.post_type = 'text' AND :supports_text = 1)
-          )
+          AND {_TYPE_CAPABILITY_SQL}
           AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid)
           AND NOT EXISTS (
              SELECT 1 FROM publications q
@@ -121,7 +138,7 @@ def select_candidates(conn, channel_id: int, now):
           last_posted ASC,
           p.created_at ASC
         """,
-        {"cid": channel_id, "supports_text": supports_text, "supports_video": supports_video},
+        {"cid": channel_id, **cap_params},
     ).fetchall()
     return rows
 
@@ -169,11 +186,48 @@ def _caption_too_long_for_channel(conn, channel, post_id: int, post_type: str) -
     return caption is not None and len(caption) > limit
 
 
-def eligible_candidates(conn, channel, now, limit: int):
+def capable_post_ids(conn, channel) -> set[int]:
+    """Post ids this channel's platform can PHYSICALLY accept — media type and caption
+    length only. Deliberately ignores every rule (targeting, cooldown, one-time,
+    periods, already-queued).
+
+    This exists so channel-group selection can tell the two kinds of rejection apart.
+    A capability miss means that member sits the slot out (a Reel still goes to
+    Instagram when a Threads member cannot take video); a RULE miss means the group is
+    held back so its members never drift apart. Collapsing the two would silently end
+    evergreen video recycling for any group containing Threads.
+    """
+    cap_params = _platform_capability_params(channel["platform"])
+    rows = conn.execute(
+        f"""
+        SELECT p.id AS post_id, p.post_type AS post_type
+        FROM posts p
+        WHERE p.content_status = 'ready'
+          AND {_TYPE_CAPABILITY_SQL}
+        """,
+        cap_params,
+    ).fetchall()
+    return {
+        r["post_id"]
+        for r in rows
+        if not _caption_too_long_for_channel(conn, channel, r["post_id"], r["post_type"])
+    }
+
+
+def eligible_candidates(conn, channel, now, limit: int | None, *,
+                        reuse_default=None, timezone_name=None):
     """Apply cooldown, one-time, period, and caption-length gates to the SQL candidates;
-    return <= limit."""
-    reuse_default = channel["reuse_min_age_days"]
-    today_local = local_date(now, channel["timezone"])
+    return <= limit (or all of them when limit is None).
+
+    reuse_default/timezone_name override the channel's own values. A grouped channel
+    takes both from its group, so the group's cadence and cooldown policy govern every
+    member; omit them and the channel's own columns are used exactly as before.
+    """
+    if reuse_default is None:
+        reuse_default = channel["reuse_min_age_days"]
+    if timezone_name is None:
+        timezone_name = channel["timezone"]
+    today_local = local_date(now, timezone_name)
     out = []
     for r in select_candidates(conn, channel["id"], now):
         last = r["last_posted"]
@@ -192,7 +246,7 @@ def eligible_candidates(conn, channel, now, limit: int):
             # Other channels (e.g. Instagram, no caption limit) still get to select it.
             continue
         out.append(r)
-        if len(out) >= limit:
+        if limit is not None and len(out) >= limit:
             break
     return out
 
