@@ -910,7 +910,7 @@ carousel outside a merge, merging from the Media page.
 
 ---
 
-## Phase 7 — Channel groups (coordinated auto-fill)  `[x] built + verified, not yet switched on`
+## Phase 7 — Channel groups (coordinated auto-fill)  `[x] done — LIVE since 2026-07-31`
 
 Spec: `docs/superpowers/specs/2026-07-30-channel-groups-design.md`.
 Plan: `docs/superpowers/plans/2026-07-30-channel-groups.md`.
@@ -957,10 +957,17 @@ AND allowed, and every member that is *capable* is also *allowed*:
       the slot out; post 1, targeted at Instagram only, was skipped entirely rather than posted to
       one member; a second run added nothing. Slot resolved to 18:00 America/Los_Angeles.
 
-### Not switched on
-No group exists on the live install and `autofill_enabled` is still 0 on both channels — starting
-to mirror is a product decision, not a verification step. To turn it on: create a group on the
-Channels page, assign both channels, set the cadence.
+### Live configuration (as of 2026-07-31)
+Group **"Liparoto Meta"** — Instagram + Threads (both `Liparoto`), `America/Los_Angeles`,
+auto-fill on, every day at 18:00, refill below 2, fill to 7, reuse after 90 days.
+First real mirrored slot: 2026-07-31 18:00 PDT. 14 publications across 7 slots, every slot
+carrying both members at an identical `scheduled_at`. `KILL_SWITCH=1` is the stop.
+
+**Gotcha that cost an hour:** enabling the group changed nothing at first. The worker daemon
+had been running since before this code existed, and Python holds the modules it loaded at
+startup — so it was polling happily against the OLD per-channel autofill, which finds nothing
+because a grouped channel's own `autofill_enabled` is 0. **Restart the worker after any change
+to worker code.** A live heartbeat proves the daemon is alive, not that it is running current code.
 
 - [ ] **Before first real use:** only 3 of 139 posts are `content_status='ready'`, and posts 1 and
       2 target Instagram only. Since targeting is a *rule*, any post not targeted at **every**
