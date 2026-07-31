@@ -345,16 +345,31 @@ def test_group_queues_both_members_at_the_identical_timestamp(conn, config):
 
 def test_group_queue_depth_counts_slots_not_rows(conn, config):
     """A 2-member group writes 2 rows per slot. Counting rows would report the queue as
-    twice as full as it is and stop refilling at half the target."""
+    twice as full as it is and stop refilling at half the target.
+
+    The asymmetry only bites once the queue is non-empty, so this seeds two existing
+    slots directly (4 rows across both members) before calling run_autofill: read as
+    DISTINCT scheduled_at, ahead=2 (< min_depth=3, needs 1 more); read as a plain row
+    count, ahead=4 (>= min_depth=3, would skip and add nothing)."""
     gid, ig, th = pair(conn, min_depth=3, target=3)
-    for _ in range(5):
-        make_post(conn, targets=(ig, th))
+    for i in range(2):
+        pid = make_post(conn, targets=(ig, th))
+        slot = f"2026-07-2{3 + i}T18:00:00+00:00"
+        for member in (ig, th):
+            conn.execute(
+                "INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by) "
+                "VALUES (?,?,?,'scheduled','autofill')",
+                (pid, member, slot),
+            )
+    conn.commit()
+    fresh = make_post(conn, targets=(ig, th))
 
     run_autofill(conn, config, NOW)
 
     ig_rows = pubs(conn, ig)
-    assert len(ig_rows) == 3, "3 slots, not 1 or 2"
+    assert len(ig_rows) == 3, "2 existing slots + 1 top-up slot, not stalled at 2"
     assert len({r["scheduled_at"] for r in ig_rows}) == 3
+    assert ig_rows[-1]["post_id"] == fresh
 
 
 def test_group_reel_queues_instagram_only_and_does_not_stall_the_slot(conn, config):
@@ -393,11 +408,16 @@ def test_inactive_member_is_excluded_from_the_group(conn, config):
 
 def test_grouped_channel_is_not_also_filled_as_a_solo_unit(conn, config):
     """A grouped channel's own autofill_enabled must go unread — otherwise it would be
-    topped up twice per cycle, once by the group and once by itself."""
+    topped up twice per cycle, once by the group and once by itself.
+
+    Seeds 6 spare posts (group only needs 1) so a second, solo pass over `ig` — were the
+    group_id IS NULL guard ever dropped — would have plenty of untargeted-by-the-group
+    content left to grab under ig's own (higher) target_queue_depth=5 default."""
     gid = make_group(conn, min_depth=1, target=1)
     ig = make_channel(conn, platform="instagram", name="IG", group_id=gid, autofill=1)
     th = make_channel(conn, platform="threads", name="TH", group_id=gid, autofill=1)
-    make_post(conn, targets=(ig, th))
+    for _ in range(6):
+        make_post(conn, targets=(ig, th))
 
     run_autofill(conn, config, NOW)
 
