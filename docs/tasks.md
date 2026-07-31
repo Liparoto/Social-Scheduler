@@ -910,6 +910,73 @@ carousel outside a merge, merging from the Media page.
 
 ---
 
+## Phase 7 — Channel groups (coordinated auto-fill)  `[x] built + verified, not yet switched on`
+
+Spec: `docs/superpowers/specs/2026-07-30-channel-groups-design.md`.
+Plan: `docs/superpowers/plans/2026-07-30-channel-groups.md`.
+
+**The problem:** auto-fill ran per channel in isolation, so an Instagram channel and a Threads
+channel representing the same account picked different content on different days. There was no
+way to say "these two are one voice."
+
+**The rule the design hinges on.** A post is group-eligible when at least one member is capable
+AND allowed, and every member that is *capable* is also *allowed*:
+- A **capability** miss (Threads cannot take video; Threads caps captions at 500 chars) makes
+  only that member sit the slot out. Without this carve-out, grouping would have silently ended
+  evergreen Reel recycling — see `PLATFORM_CAPS` in `worker/clients.py`.
+- A **rule** miss (targeting, cooldown, one-time, blackout period, already queued) blocks the
+  whole group, so members never drift apart on content they could both have taken.
+
+### Implementation
+- [x] `migrations/0013_channel_groups.sql`: `channel_groups` table + nullable `channels.group_id`
+      with `ON DELETE SET NULL` (deleting a group returns members to solo, never cascades into
+      publications). Purely additive — every existing channel defaults to ungrouped.
+- [x] `worker/autofill.py`: capability split out from rules (`capable_post_ids`), group selection
+      (`group_eligible_candidates`, `group_rank`), and `run_autofill` restructured to iterate
+      **units** — a group with its active members, or a single ungrouped channel. Solo channels
+      take the unchanged code path. Group ranking uses the **max** performance across members,
+      never the sum (Threads reports no reach/saves, so summing would scramble IG's ordering).
+      Group queue depth counts distinct slots; solo keeps counting rows.
+- [x] Group fill is atomic: the insert loop rolls back and re-raises, so a mid-group failure can
+      never persist a half-queued group. This was a review finding, reproduced empirically —
+      `run.py` reuses the connection after catching, and the next cycle's heartbeat commit would
+      otherwise have swept up the partial work.
+- [x] Dashboard: `ChannelGroup` type + queries, `/api/channel-groups` CRUD + timezone route,
+      Groups section on the Channels page, group membership picker per channel.
+- [x] A grouped channel's own timezone picker is hidden and its channel-level timezone route
+      returns 400 — changing one member's zone would desync the pair.
+
+### Verification (all passed)
+- [x] 405 worker tests, 63 dashboard tests, `npx tsc --noEmit` clean.
+- [x] Two review findings were **vacuous tests** — they passed whether or not the code was right
+      (MAX-vs-SUM ranking, and the guard against double-filling a grouped channel). Both were
+      rewritten to discriminate and re-verified by mutation. Worth remembering as a review habit.
+- [x] **Live-data run against a byte-exact copy of the real DB** (2026-07-30), real channels and
+      real content, live install never touched: post 67 queued to Instagram **and** Threads at an
+      identical `scheduled_at`; the Reel (post 2) queued to **Instagram alone** while Threads sat
+      the slot out; post 1, targeted at Instagram only, was skipped entirely rather than posted to
+      one member; a second run added nothing. Slot resolved to 18:00 America/Los_Angeles.
+
+### Not switched on
+No group exists on the live install and `autofill_enabled` is still 0 on both channels — starting
+to mirror is a product decision, not a verification step. To turn it on: create a group on the
+Channels page, assign both channels, set the cadence.
+
+- [ ] **Before first real use:** only 3 of 139 posts are `content_status='ready'`, and posts 1 and
+      2 target Instagram only. Since targeting is a *rule*, any post not targeted at **every**
+      member is invisible to the group. Retarget before expecting a full queue — and note
+      `POST /api/posts/targets/bulk` returns 400 on the first over-caption-limit post and abandons
+      the whole batch, so a mixed set cannot be bulk-retargeted in one go.
+- [ ] **Follow-up — grouped channels keep their own `channels.timezone`,** which the *manual*
+      scheduling paths still read. A channel card can therefore truthfully show a zone different
+      from the group's auto-fill zone. Not a defect; a decision left open.
+- [ ] **Follow-up — `worker/export/collect.py` was not extended:** `channel_groups` is not
+      collected and `group_id` is not in the channel allow-list, so a portable backup silently
+      loses all group configuration. The allow-list exists to keep credentials out, so omitting it
+      is defensible — but nobody decided it.
+
+---
+
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
 - [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
       Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing
