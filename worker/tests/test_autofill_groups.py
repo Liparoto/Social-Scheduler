@@ -213,6 +213,42 @@ def test_blackout_on_the_group_timezone_blocks_the_group(conn):
     assert picked(conn, gid) == []
 
 
+def test_group_reuse_override_governs_over_member_reuse(conn):
+    """The group's reuse_min_age_days must win over the members' own column. Members
+    default to reuse=180; the group here is 7. A publish 21 days ago is recyclable
+    under the group's policy but would still be in cooldown under either member's own."""
+    gid, ig, th = pair(conn, reuse=7)
+    p = make_post(conn, targets=(ig, th))
+    conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+        "VALUES (?,?,?,'posted',?)",
+        (p, ig, "2026-07-01T18:00:00+00:00", "2026-07-01T18:00:00+00:00"),
+    )
+    conn.commit()
+    assert picked(conn, gid) == [(p, sorted([ig, th]))]
+
+
+def test_group_timezone_override_governs_over_member_timezone(conn):
+    """The group's timezone must win over the members' own column. NOW
+    (2026-07-22T18:00 UTC) is 2026-07-22 in America/Los_Angeles but 2026-07-23 in
+    Asia/Tokyo. A one-day blackout on July 23 only blocks the post if the GROUP's
+    tz (Tokyo) is what's consulted -- both members' own tz (LA) would not."""
+    gid = make_group(conn, tz="Asia/Tokyo")
+    ig = make_channel(conn, platform="instagram", name="IG", group_id=gid, tz="America/Los_Angeles")
+    th = make_channel(conn, platform="threads", name="TH", group_id=gid, tz="America/Los_Angeles")
+    p = make_post(conn, targets=(ig, th))
+    period_id = conn.execute(
+        "INSERT INTO periods (name, recurs_yearly, start_month, start_day, end_month, end_day) "
+        "VALUES ('OneDay',1,7,23,7,23)"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?,?,'blackout')",
+        (p, period_id),
+    )
+    conn.commit()
+    assert picked(conn, gid) == []
+
+
 def test_group_ranking_prefers_never_posted_then_best_member_not_the_sum(conn):
     """perf is the MAX across members, never the sum: Threads reports no reach/saves,
     so summing would halve every score and scramble Instagram's real ordering."""
@@ -235,6 +271,39 @@ def test_group_ranking_prefers_never_posted_then_best_member_not_the_sum(conn):
     order = [pid for pid, _ in picked(conn, gid)]
     assert order[0] == fresh, "never-posted-on-any-member ranks first"
     assert order[1:] == [strong, weak], "then best member's performance, descending"
+
+
+def test_group_ranking_uses_max_not_sum_when_metrics_split_across_members(conn):
+    """Discriminates MAX from SUM directly: post A has reach 100 on EACH member (MAX=100,
+    SUM=200); post B has reach 150 on only one member (MAX=150, SUM=150). MAX ranks
+    [B, A] because B's best member beat A's best member. SUM would rank [A, B] because
+    A's total (200) beats B's total (150)."""
+    gid, ig, th = pair(conn)
+    a = make_post(conn, targets=(ig, th), created_at="2026-01-01T00:00:00+00:00")
+    b = make_post(conn, targets=(ig, th), created_at="2026-01-02T00:00:00+00:00")
+    for cid, reach in ((ig, 100), (th, 100)):
+        pub = conn.execute(
+            "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+            "VALUES (?,?,?,'posted',?)",
+            (a, cid, "2026-01-10T18:00:00+00:00", "2026-01-10T18:00:00+00:00"),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO post_metrics (publication_id, fetched_at, reach, saves) VALUES (?,?,?,0)",
+            (pub, "2026-01-10T18:00:00+00:00", reach),
+        )
+    pub = conn.execute(
+        "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
+        "VALUES (?,?,?,'posted',?)",
+        (b, ig, "2026-01-10T18:00:00+00:00", "2026-01-10T18:00:00+00:00"),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO post_metrics (publication_id, fetched_at, reach, saves) VALUES (?,?,?,0)",
+        (pub, "2026-01-10T18:00:00+00:00", 150),
+    )
+    conn.commit()
+
+    order = [pid for pid, _ in picked(conn, gid)]
+    assert order == [b, a], "MAX(150,150 vs 100,100) ranks B first; SUM(150 vs 200) would rank A first"
 
 
 def test_group_selection_respects_limit(conn):
