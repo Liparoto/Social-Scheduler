@@ -102,3 +102,58 @@ test("empty applied groups impose no restriction", () => {
     true,
   );
 });
+
+test("clearing every draft group and applying restores checkbox-filtered posts while caption search remains active", () => {
+  let state = createLibraryCheckboxFilterState();
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "tags",
+    values: new Set(["tips"]),
+  });
+  state = libraryCheckboxFilterReducer(state, { type: "apply" });
+
+  assert.equal(
+    matchesLibraryCheckboxFilters(
+      { periods: [], tags: ["other"], platforms: [] },
+      state.applied,
+    ),
+    false,
+  );
+
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "periods",
+    values: new Set(),
+  });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "tags",
+    values: new Set(),
+  });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "platforms",
+    values: new Set(),
+  });
+  state = libraryCheckboxFilterReducer(state, { type: "apply" });
+
+  const posts = [
+    {
+      caption: "Football tip",
+      filters: { periods: [10], tags: ["other"], platforms: ["instagram"] },
+    },
+    {
+      caption: "Holiday post",
+      filters: { periods: [20], tags: ["promo"], platforms: ["facebook"] },
+    },
+  ];
+  const query = "football";
+  const shown = posts.filter(
+    (post) =>
+      matchesLibraryCheckboxFilters(post.filters, state.applied) &&
+      post.caption.toLowerCase().includes(query),
+  );
+
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0]?.caption, "Football tip");
+});

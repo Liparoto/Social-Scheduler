@@ -1,10 +1,15 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useReducer, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
-import { matchesPeriodFilter } from "@/lib/library-period-filter";
+import {
+  createLibraryCheckboxFilterState,
+  libraryCheckboxFilterReducer,
+  matchesLibraryCheckboxFilters,
+  type CheckboxFilterOption,
+} from "@/lib/library-checkbox-filters";
 import {
   librarySeasonBadgeDetails,
   librarySeasonStatus,
@@ -15,6 +20,7 @@ import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
 import { BulkEditModal } from "@/components/bulk-edit-modal";
+import { CheckboxFilterDropdown } from "@/components/checkbox-filter-dropdown";
 import { ChannelAvatar } from "@/components/ui";
 import type { Period, Tag } from "@/lib/types";
 
@@ -94,9 +100,12 @@ export function LibraryView({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startT] = useTransition();
-  const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const [periodFilter, setPeriodFilter] = useState<Set<number>>(new Set());
-  const [platformFilter, setPlatformFilter] = useState<string | null>(null);
+  const [checkboxFilters, dispatchCheckboxFilters] = useReducer(
+    libraryCheckboxFilterReducer,
+    undefined,
+    createLibraryCheckboxFilterState,
+  );
+  const [filterApplySignal, setFilterApplySignal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
   // Deliberately separate from statusFilter: content_status is the lifecycle (is this piece
   // usable), sendFilter is publication history (has it actually gone out). Folding them into
@@ -123,15 +132,6 @@ export function LibraryView({
       return n;
     });
   }
-  function togglePeriod(id: number) {
-    setPeriodFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
   async function schedule() {
     setError(null);
     setNotice(null);
@@ -203,6 +203,18 @@ export function LibraryView({
   )
     .map(([id, name]) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  const periodOptions: CheckboxFilterOption<number>[] = allPeriods.map(({ id, name }) => ({
+    value: id,
+    label: name,
+  }));
+  const tagOptions: CheckboxFilterOption<string>[] = allTagNames.map((name) => ({
+    value: name,
+    label: name,
+  }));
+  const platformOptions: CheckboxFilterOption<string>[] = PLATFORMS.map((platform) => ({
+    value: platform.value,
+    label: platformLabel(platform.value),
+  }));
 
   // Counted over the whole library, not the filtered view, so the numbers stay put while
   // you click between formats instead of collapsing to "N Carousel" the moment one is on.
@@ -213,14 +225,17 @@ export function LibraryView({
 
   const q = search.trim().toLowerCase();
   const shown = posts.filter((p) => {
-    if (!matchesPeriodFilter(p.periods, periodFilter)) return false;
-    if (tagFilter) {
-      const names = [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)];
-      if (!names.includes(tagFilter)) return false;
-    }
-    if (platformFilter) {
-      if (!splitTags(p.target_platforms).includes(platformFilter)) return false;
-    }
+    if (
+      !matchesLibraryCheckboxFilters(
+        {
+          periods: p.periods.map((period) => period.id),
+          tags: [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)],
+          platforms: splitTags(p.target_platforms),
+        },
+        checkboxFilters.applied,
+      )
+    )
+      return false;
     if (statusFilter !== "all" && p.content_status !== statusFilter) return false;
     // posted_count counts publications that actually reached "posted", so a post sitting in
     // the queue still reads as never posted here — matching the card's own badge.
@@ -392,90 +407,47 @@ export function LibraryView({
         ) : null}
       </div>
 
-      {/* Periods are multi-select: selected chips form a union, then compose with every
-          other Library filter below as an AND condition. */}
-      {allPeriods.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-ink-soft">Periods:</span>
-          {allPeriods.map((period) => {
-            const on = periodFilter.has(period.id);
-            return (
-              <button
-                key={period.id}
-                onClick={() => togglePeriod(period.id)}
-                aria-pressed={on}
-                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  on
-                    ? "border-brand bg-brand/10 text-brand-strong"
-                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
-                }`}
-              >
-                {period.name}
-              </button>
-            );
-          })}
-          {periodFilter.size > 0 ? (
-            <button
-              onClick={() => setPeriodFilter(new Set())}
-              aria-label="Clear period filters"
-              className="text-[11px] text-faint underline underline-offset-2"
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Filter bar */}
-      {allTagNames.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-ink-soft">Filter:</span>
-          {allTagNames.map((name) => {
-            const on = tagFilter === name;
-            return (
-              <button
-                key={name}
-                onClick={() => setTagFilter(on ? null : name)}
-                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  on
-                    ? "border-brand bg-brand/10 text-brand-strong"
-                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
-                }`}
-              >
-                {name}
-              </button>
-            );
-          })}
-          <span className="mx-1 h-4 w-px bg-border" />
-          {PLATFORMS.map((p) => {
-            const on = platformFilter === p.value;
-            return (
-              <button
-                key={p.value}
-                onClick={() => setPlatformFilter(on ? null : p.value)}
-                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                  on
-                    ? "border-brand bg-brand/10 text-brand-strong"
-                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
-                }`}
-              >
-                {p.value}
-              </button>
-            );
-          })}
-          {tagFilter || platformFilter ? (
-            <button
-              onClick={() => {
-                setTagFilter(null);
-                setPlatformFilter(null);
-              }}
-              className="text-[11px] text-faint underline underline-offset-2"
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      {/* Staged checkbox filters update cards together only when Apply is clicked. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-ink-soft">Filter:</span>
+        <CheckboxFilterDropdown
+          label="Periods"
+          options={periodOptions}
+          selected={checkboxFilters.draft.periods}
+          onChange={(values) =>
+            dispatchCheckboxFilters({ type: "set-draft", group: "periods", values })
+          }
+          closeSignal={filterApplySignal}
+        />
+        <CheckboxFilterDropdown
+          label="Tags"
+          options={tagOptions}
+          selected={checkboxFilters.draft.tags}
+          onChange={(values) =>
+            dispatchCheckboxFilters({ type: "set-draft", group: "tags", values })
+          }
+          closeSignal={filterApplySignal}
+        />
+        <CheckboxFilterDropdown
+          label="Platforms"
+          options={platformOptions}
+          selected={checkboxFilters.draft.platforms}
+          onChange={(values) =>
+            dispatchCheckboxFilters({ type: "set-draft", group: "platforms", values })
+          }
+          closeSignal={filterApplySignal}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            dispatchCheckboxFilters({ type: "apply" });
+            setFilterApplySignal((signal) => signal + 1);
+          }}
+          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink"
+        >
+          Apply
+        </button>
+      </div>
 
       {/* Post grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
