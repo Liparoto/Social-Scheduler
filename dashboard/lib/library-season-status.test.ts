@@ -113,12 +113,13 @@ test("ready badge details provide a stable description relationship and worker c
       description:
         "Advisory season status for 2026-08-03 in America/Los_Angeles. " +
         "The worker evaluates eligibility using each target channel's timezone.",
-      badgeProps: {
-        tabIndex: 0,
-        title:
-          "Advisory season status for 2026-08-03 in America/Los_Angeles. " +
-          "The worker evaluates eligibility using each target channel's timezone.",
+      triggerProps: {
+        type: "button",
         "aria-describedby": "post-42-season-status-description",
+      },
+      tooltipProps: {
+        id: "post-42-season-status-description",
+        role: "tooltip",
       },
     }
   );
@@ -137,6 +138,12 @@ test("invalid badge details tell assistive technology that period configuration 
   assert.match(details.description, /must be fixed/);
   assert.match(details.description, /2026-08-03/);
   assert.match(details.description, /America\/Los_Angeles/);
-  assert.equal(details.badgeProps["aria-describedby"], details.descriptionId);
-  assert.equal(details.badgeProps.tabIndex, 0);
+  assert.equal(details.triggerProps.type, "button");
+  assert.equal(details.triggerProps["aria-describedby"], details.descriptionId);
+  assert.deepEqual(details.tooltipProps, {
+    id: details.descriptionId,
+    role: "tooltip",
+  });
+  assert.equal("title" in details.triggerProps, false);
+  assert.equal("tabIndex" in details.triggerProps, false);
 });

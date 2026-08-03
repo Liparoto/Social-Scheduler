@@ -566,17 +566,21 @@ export function LibraryView({
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.content_kind === "evergreen" ? "Evergreen" : "One-time"}</span>
                   {p.content_status === "ready" && badgeDetails ? (
-                    <>
-                      <span
-                        {...badgeDetails.badgeProps}
-                        className={`rounded-full border px-1.5 py-px ${readySeasonStatusClass[seasonStatus]}`}
+                    <span className="group relative inline-flex">
+                      <button
+                        {...badgeDetails.triggerProps}
+                        onClick={(event) => event.stopPropagation()}
+                        className={`cursor-help rounded-full border px-1.5 py-px ${readySeasonStatusClass[seasonStatus]}`}
                       >
                         {seasonStatus}
-                      </span>
-                      <span id={badgeDetails.descriptionId} className="sr-only">
+                      </button>
+                      <span
+                        {...badgeDetails.tooltipProps}
+                        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-md border border-border-strong bg-ink px-2.5 py-2 text-left font-sans text-[11px] leading-4 text-surface opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                      >
                         {badgeDetails.description}
                       </span>
-                    </>
+                    </span>
                   ) : (
                     <span className={p.content_status === "draft" ? "text-muted" : "text-faint"}>
                       {seasonStatus}

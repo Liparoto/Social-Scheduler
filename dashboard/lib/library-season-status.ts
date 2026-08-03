@@ -23,10 +23,13 @@ export interface LibrarySeasonPeriod extends PeriodWindow {
 export interface LibrarySeasonBadgeDetails {
   descriptionId: string;
   description: string;
-  badgeProps: {
-    tabIndex: 0;
-    title: string;
+  triggerProps: {
+    type: "button";
     "aria-describedby": string;
+  };
+  tooltipProps: {
+    id: string;
+    role: "tooltip";
   };
 }
 
@@ -48,10 +51,13 @@ export function librarySeasonBadgeDetails(
   return {
     descriptionId,
     description,
-    badgeProps: {
-      tabIndex: 0,
-      title: description,
+    triggerProps: {
+      type: "button",
       "aria-describedby": descriptionId,
+    },
+    tooltipProps: {
+      id: descriptionId,
+      role: "tooltip",
     },
   };
 }
