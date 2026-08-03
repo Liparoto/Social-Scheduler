@@ -10,9 +10,9 @@ import {
 } from "@/lib/bulk-edit-context";
 
 const coverageBadgeClass: Record<CoverageState, string> = {
-  all: "border border-status-posted/30 bg-status-posted/15 text-status-posted",
-  some: "border border-amber-300 bg-amber-100 text-amber-800",
-  none: "border border-border bg-surface-sunken text-faint",
+  all: "border-status-posted/60 bg-status-posted/15 text-status-posted",
+  some: "border-amber-500/60 bg-amber-500/10 text-amber-700",
+  none: "border-border bg-surface text-faint",
 };
 
 export function PeriodAttach({
@@ -58,7 +58,7 @@ export function PeriodAttach({
     const count = countFor(periodId, mode);
     const state = coverageState(count, selectedPostCount);
     return (
-      <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] ${coverageBadgeClass[state]}`}>
+      <span className={`ml-1 rounded-full border px-1.5 py-0.5 text-[10px] ${coverageBadgeClass[state]}`}>
         {coverageLabel(count, selectedPostCount)}
       </span>
     );
@@ -102,13 +102,23 @@ export function PeriodAttach({
             return (
               <li
                 key={p.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
+                className={
+                  coverage
+                    ? "flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
+                    : "flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
+                }
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm text-ink">{p.name}</p>
                   <p className="data text-xs text-ink-soft">{describePeriod(p)}</p>
                 </div>
-                <div className="flex flex-wrap justify-end rounded-lg border border-border p-0.5">
+                <div
+                  className={
+                    coverage
+                      ? "flex flex-wrap justify-end rounded-lg border border-border p-0.5"
+                      : "inline-flex shrink-0 rounded-lg border border-border p-0.5"
+                  }
+                >
                   <button
                     type="button"
                     className={segBtn(!mode, "bg-brand-weak text-brand-strong")}

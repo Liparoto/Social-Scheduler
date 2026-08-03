@@ -24,9 +24,9 @@ const chip = (active: boolean) =>
   }`;
 
 const coverageBadgeClass: Record<CoverageState, string> = {
-  all: "border border-status-posted/30 bg-status-posted/15 text-status-posted",
-  some: "border border-amber-300 bg-amber-100 text-amber-800",
-  none: "border border-border bg-surface-sunken text-faint",
+  all: "border-status-posted/60 bg-status-posted/15 text-status-posted",
+  some: "border-amber-500/60 bg-amber-500/10 text-amber-700",
+  none: "border-border bg-surface text-faint",
 };
 
 export function TagEditor({
@@ -84,7 +84,7 @@ export function TagEditor({
     const count = coverage[id] ?? 0;
     const state = coverageState(count, selectedPostCount);
     return (
-      <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${coverageBadgeClass[state]}`}>
+      <span className={`ml-1.5 rounded-full border px-1.5 py-0.5 text-[10px] ${coverageBadgeClass[state]}`}>
         {coverageLabel(count, selectedPostCount)}
       </span>
     );

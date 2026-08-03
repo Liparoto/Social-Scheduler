@@ -26,15 +26,15 @@ interface BulkEditModalProps {
 }
 
 const coverageBadgeClass: Record<CoverageState, string> = {
-  all: "border border-status-posted/30 bg-status-posted/15 text-status-posted",
-  some: "border border-amber-300 bg-amber-100 text-amber-800",
-  none: "border border-border bg-surface-sunken text-faint",
+  all: "border-status-posted/60 bg-status-posted/15 text-status-posted",
+  some: "border-amber-500/60 bg-amber-500/10 text-amber-700",
+  none: "border-border bg-surface text-faint",
 };
 
 function CoverageBadge({ count, total }: { count: number; total: number }) {
   const state = coverageState(count, total);
   return (
-    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${coverageBadgeClass[state]}`}>
+    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${coverageBadgeClass[state]}`}>
       {coverageLabel(count, total)}
     </span>
   );
@@ -307,10 +307,10 @@ export function BulkEditModal({
                     on every selected post
                   </span>
                   <span className="inline-flex items-center gap-1.5">
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${coverageBadgeClass.some}`}>
-                      Some
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${coverageBadgeClass.some}`}>
+                      Some (X of {selectedPostCount})
                     </span>
-                    X of {selectedPostCount} means only that many selected posts
+                    means only that many selected posts
                   </span>
                   <span className="inline-flex items-center gap-1.5">
                     <CoverageBadge count={0} total={selectedPostCount} />
