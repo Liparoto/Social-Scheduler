@@ -1,13 +1,15 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
+import { BulkEditModal } from "@/components/bulk-edit-modal";
 import { ChannelAvatar } from "@/components/ui";
+import type { Period, Tag } from "@/lib/types";
 
 interface PostLite {
   id: number;
@@ -63,9 +65,15 @@ function tomorrow(): string {
 export function LibraryView({
   posts,
   channels,
+  periods,
+  timeOfDayTags,
+  topicTags,
 }: {
   posts: PostLite[];
   channels: ChannelLite[];
+  periods: Period[];
+  timeOfDayTags: Tag[];
+  topicTags: Tag[];
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<number[]>([]); // ordered = post order
@@ -91,6 +99,7 @@ export function LibraryView({
     null
   );
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
 
   function toggle(id: number) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -207,10 +216,7 @@ export function LibraryView({
   // make an already-picked channel incompatible. Deriving this instead of syncing it
   // back with a nested setChans-inside-setSelected keeps there nothing to keep in sync —
   // matching the pattern already used in schedule-from-library.tsx's effectiveTargets.
-  const effectiveChans = useMemo(
-    () => new Set([...chans].filter((id) => !incompatibleChannelIds.has(id))),
-    [chans, incompatibleChannelIds]
-  );
+  const effectiveChans = new Set([...chans].filter((id) => !incompatibleChannelIds.has(id)));
 
   // In SELECTION order (not `posts` order) — `selected` is the ordered array, and the merge
   // API treats its first entry as the surviving post. A stale id (deleted between load and
@@ -226,6 +232,16 @@ export function LibraryView({
     setMergeOpen(false);
     setSelected([]);
     setNotice("Merged into one carousel.");
+    startT(() => router.refresh());
+  }
+
+  function onBulkEdited(labels: string[]) {
+    const postCount = selected.length;
+    setBulkEditOpen(false);
+    setSelected([]);
+    setNotice(
+      `Updated ${postCount} post${postCount === 1 ? "" : "s"}: ${labels.join("; ")}.`
+    );
     startT(() => router.refresh());
   }
 
@@ -320,6 +336,23 @@ export function LibraryView({
           <option value="stale">Least recently posted</option>
         </select>
         <span className="data text-[11px] text-muted">showing {shown.length} of {posts.length}</span>
+        <button
+          type="button"
+          onClick={() => setSelected(shown.map((post) => post.id))}
+          disabled={shown.length === 0}
+          className="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+        >
+          Select all {shown.length} shown
+        </button>
+        {selected.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setSelected([])}
+            className="rounded-lg px-2 py-2 text-xs text-muted underline underline-offset-2 hover:text-ink"
+          >
+            Clear selection
+          </button>
+        ) : null}
       </div>
 
       {/* Filter bar */}
@@ -651,6 +684,20 @@ export function LibraryView({
 
         <div className="mt-3 border-t border-border pt-3">
           <p className="mb-1.5 text-[11px] text-faint">
+            Add or remove metadata, or set shared values, across every selected post.
+          </p>
+          <button
+            onClick={() => setBulkEditOpen(true)}
+            disabled={pending || selected.length === 0}
+            title={selected.length === 0 ? "Select at least one post to edit." : undefined}
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+          >
+            Edit metadata
+          </button>
+        </div>
+
+        <div className="mt-3 border-t border-border pt-3">
+          <p className="mb-1.5 text-[11px] text-faint">
             Fold several single-image drafts into one carousel, in review before anything is
             deleted.
           </p>
@@ -678,6 +725,17 @@ export function LibraryView({
           posts={selectedForMerge}
           onClose={() => setMergeOpen(false)}
           onMerged={onMerged}
+        />
+      ) : null}
+
+      {bulkEditOpen ? (
+        <BulkEditModal
+          postIds={selected}
+          periods={periods}
+          timeOfDayTags={timeOfDayTags}
+          topicTags={topicTags}
+          onClose={() => setBulkEditOpen(false)}
+          onSaved={onBulkEdited}
         />
       ) : null}
     </div>

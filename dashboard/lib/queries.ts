@@ -18,6 +18,7 @@ import type {
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
+import type { BulkEditContext } from "./bulk-edit-context";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -1446,6 +1447,186 @@ export function setCaptionVariants(
     for (const v of rows) insert.run(postId, v.platform, v.body, v.sort_order);
   });
   tx(variants);
+}
+
+// ---- Bulk content-model context --------------------------------------------------
+/** Return the selected post ids that exist using one parameterized database query. */
+export function getExistingPostIds(postIds: number[]): number[] {
+  const uniquePostIds = [...new Set(postIds)];
+  if (uniquePostIds.length === 0) return [];
+
+  const placeholders = uniquePostIds.map(() => "?").join(", ");
+  const rows = getDb()
+    .prepare(`SELECT id FROM posts WHERE id IN (${placeholders}) ORDER BY id`)
+    .all(...uniquePostIds) as { id: number }[];
+  return rows.map((row) => row.id);
+}
+
+/** Summarize the metadata currently attached to a selected set of posts. */
+export function getBulkEditContext(postIds: number[]): BulkEditContext {
+  const uniquePostIds = [...new Set(postIds)];
+  if (uniquePostIds.length === 0) {
+    return {
+      post_count: 0,
+      tags: [],
+      periods: [],
+      content_statuses: [],
+      content_kinds: [],
+      cooldowns: [],
+    };
+  }
+
+  const db = getDb();
+  const placeholders = uniquePostIds.map(() => "?").join(", ");
+  const read = db.transaction((): BulkEditContext => {
+    const tags = db
+      .prepare(
+        `SELECT tag_id, COUNT(*) AS count
+           FROM post_tags
+          WHERE post_id IN (${placeholders})
+          GROUP BY tag_id
+          ORDER BY tag_id`
+      )
+      .all(...uniquePostIds) as BulkEditContext["tags"];
+    const periods = db
+      .prepare(
+        `SELECT period_id, mode, COUNT(*) AS count
+           FROM post_periods
+          WHERE post_id IN (${placeholders})
+          GROUP BY period_id, mode
+          ORDER BY period_id, mode`
+      )
+      .all(...uniquePostIds) as BulkEditContext["periods"];
+    const content_statuses = db
+      .prepare(
+        `SELECT content_status AS value, COUNT(*) AS count
+           FROM posts
+          WHERE id IN (${placeholders})
+          GROUP BY content_status
+          ORDER BY content_status`
+      )
+      .all(...uniquePostIds) as BulkEditContext["content_statuses"];
+    const content_kinds = db
+      .prepare(
+        `SELECT content_kind AS value, COUNT(*) AS count
+           FROM posts
+          WHERE id IN (${placeholders})
+          GROUP BY content_kind
+          ORDER BY content_kind`
+      )
+      .all(...uniquePostIds) as BulkEditContext["content_kinds"];
+    const cooldowns = db
+      .prepare(
+        `SELECT cooldown_days AS value, COUNT(*) AS count
+           FROM posts
+          WHERE id IN (${placeholders})
+          GROUP BY cooldown_days
+          ORDER BY cooldown_days IS NOT NULL, cooldown_days`
+      )
+      .all(...uniquePostIds) as BulkEditContext["cooldowns"];
+
+    return {
+      post_count: content_statuses.reduce((total, row) => total + row.count, 0),
+      tags,
+      periods,
+      content_statuses,
+      content_kinds,
+      cooldowns,
+    };
+  });
+
+  return read();
+}
+
+// ---- Bulk content-model edit -----------------------------------------------------
+export interface BulkEditPostsInput {
+  post_ids: number[];
+  tags?: { add: number[]; remove: number[] };
+  periods?: {
+    add: { periodId: number; mode: PeriodMode }[];
+    remove: { periodId: number; mode: PeriodMode }[];
+  };
+  content_status?: ContentStatus;
+  content_kind?: ContentKind;
+  cooldown_days?: number | null;
+}
+
+export interface BulkEditPostsResult {
+  tags_added: number;
+  tags_removed: number;
+  periods_added: number;
+  periods_removed: number;
+  posts_updated: number;
+}
+
+/**
+ * Apply local content-model metadata to several posts in one transaction.
+ *
+ * Tags and periods use exact add/remove pairs so unrelated links are never replaced.
+ * Callers validate foreign keys and scalar values before invoking this write layer.
+ */
+export function bulkEditPosts(input: BulkEditPostsInput): BulkEditPostsResult {
+  const db = getDb();
+  const tx = db.transaction((edit: BulkEditPostsInput): BulkEditPostsResult => {
+    const result: BulkEditPostsResult = {
+      tags_added: 0,
+      tags_removed: 0,
+      periods_added: 0,
+      periods_removed: 0,
+      posts_updated: 0,
+    };
+
+    const deleteTag = db.prepare(
+      "DELETE FROM post_tags WHERE post_id = ? AND tag_id = ?"
+    );
+    const addTag = db.prepare(
+      "INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)"
+    );
+    for (const postId of edit.post_ids) {
+      for (const tagId of edit.tags?.remove ?? []) {
+        result.tags_removed += deleteTag.run(postId, tagId).changes;
+      }
+      for (const tagId of edit.tags?.add ?? []) {
+        result.tags_added += addTag.run(postId, tagId).changes;
+      }
+    }
+
+    const deletePeriod = db.prepare(
+      "DELETE FROM post_periods WHERE post_id = ? AND period_id = ? AND mode = ?"
+    );
+    const addPeriod = db.prepare(
+      "INSERT OR IGNORE INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
+    );
+    for (const postId of edit.post_ids) {
+      for (const link of edit.periods?.remove ?? []) {
+        result.periods_removed += deletePeriod.run(postId, link.periodId, link.mode).changes;
+      }
+      for (const link of edit.periods?.add ?? []) {
+        result.periods_added += addPeriod.run(postId, link.periodId, link.mode).changes;
+      }
+    }
+
+    const scalarFields: Record<string, string | number | null> = {};
+    if (edit.content_status !== undefined) scalarFields.content_status = edit.content_status;
+    if (edit.content_kind !== undefined) scalarFields.content_kind = edit.content_kind;
+    if (edit.cooldown_days !== undefined) scalarFields.cooldown_days = edit.cooldown_days;
+    const scalarKeys = Object.keys(scalarFields);
+    if (scalarKeys.length > 0 && edit.post_ids.length > 0) {
+      const setClause = scalarKeys.map((key) => `${key} = @${key}`).join(", ");
+      const postParams = Object.fromEntries(edit.post_ids.map((id, i) => [`post_${i}`, id]));
+      const postPlaceholders = edit.post_ids.map((_, i) => `@post_${i}`).join(", ");
+      result.posts_updated = db
+        .prepare(
+          `UPDATE posts SET ${setClause}, updated_at = @updated_at
+            WHERE id IN (${postPlaceholders})`
+        )
+        .run({ ...scalarFields, ...postParams, updated_at: nowIso() }).changes;
+    }
+
+    return result;
+  });
+
+  return tx(input);
 }
 
 // ---- Bulk re-target (add/remove one or more channels across many posts) ----------
