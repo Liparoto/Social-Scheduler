@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
+import {
+  coverageLabel,
+  coverageState,
+  type BulkEditContext,
+  type CoverageState,
+} from "@/lib/bulk-edit-context";
 import {
   buildBulkEditPayload,
   bulkEditChangeLabels,
@@ -17,6 +23,43 @@ interface BulkEditModalProps {
   topicTags: Tag[];
   onClose: () => void;
   onSaved: (labels: string[]) => void;
+}
+
+const coverageBadgeClass: Record<CoverageState, string> = {
+  all: "border border-status-posted/30 bg-status-posted/15 text-status-posted",
+  some: "border border-amber-300 bg-amber-100 text-amber-800",
+  none: "border border-border bg-surface-sunken text-faint",
+};
+
+function CoverageBadge({ count, total }: { count: number; total: number }) {
+  const state = coverageState(count, total);
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${coverageBadgeClass[state]}`}>
+      {coverageLabel(count, total)}
+    </span>
+  );
+}
+
+function CurrentValueRow({
+  label,
+  values,
+  total,
+}: {
+  label: string;
+  values: { label: string; count: number }[];
+  total: number;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="w-20 shrink-0 font-medium text-ink-soft">{label}</span>
+      {values.map((value) => (
+        <span key={value.label} className="inline-flex items-center gap-1.5 text-ink">
+          {value.label}
+          <CoverageBadge count={value.count} total={total} />
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function withoutMatchingPeriodLinks(
@@ -50,7 +93,52 @@ export function BulkEditModal({
   const [cooldownDays, setCooldownDays] = useState(30);
   const [reviewing, setReviewing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [context, setContext] = useState<BulkEditContext | null>(null);
+  const [contextLoading, setContextLoading] = useState(true);
+  const [contextError, setContextError] = useState<string | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const contextRequestBody = JSON.stringify({ post_ids: postIds });
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadContext() {
+      try {
+        const response = await fetch("/api/posts/bulk-edit/context", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: contextRequestBody,
+          signal: controller.signal,
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.error ?? "Could not load existing metadata.");
+        }
+        if (
+          typeof body.post_count !== "number" ||
+          !Array.isArray(body.tags) ||
+          !Array.isArray(body.periods) ||
+          !Array.isArray(body.content_statuses) ||
+          !Array.isArray(body.content_kinds) ||
+          !Array.isArray(body.cooldowns)
+        ) {
+          throw new Error("The existing metadata response was incomplete.");
+        }
+        setContext(body as BulkEditContext);
+      } catch (loadError) {
+        if (controller.signal.aborted) return;
+        setContextError(
+          loadError instanceof Error ? loadError.message : "Could not load existing metadata.",
+        );
+      } finally {
+        if (!controller.signal.aborted) setContextLoading(false);
+      }
+    }
+
+    loadContext();
+    return () => controller.abort();
+  }, [contextRequestBody, retryAttempt]);
 
   const draft: BulkEditDraft = {
     tagAdds,
@@ -64,6 +152,13 @@ export function BulkEditModal({
   };
   const allTags = [...timeOfDayTags, ...topicTags];
   const labels = bulkEditChangeLabels(draft, allTags, periods);
+  const tagCoverage = Object.fromEntries(
+    (context?.tags ?? []).map((row) => [row.tag_id, row.count]),
+  ) as Record<number, number>;
+  const periodCoverage = Object.fromEntries(
+    (context?.periods ?? []).map((row) => [`${row.period_id}:${row.mode}`, row.count]),
+  );
+  const selectedPostCount = context?.post_count ?? 0;
   const cooldownInvalid =
     cooldownMode === "custom" && (!Number.isInteger(cooldownDays) || cooldownDays < 0);
   const field =
@@ -89,10 +184,17 @@ export function BulkEditModal({
     setPeriodAdds((current) => withoutMatchingPeriodLinks(current, next));
   }
 
+  function retryContext() {
+    setContext(null);
+    setContextLoading(true);
+    setContextError(null);
+    setRetryAttempt((attempt) => attempt + 1);
+  }
+
   async function apply() {
     if (labels.length === 0 || cooldownInvalid || busy) return;
     setBusy(true);
-    setError(null);
+    setApplyError(null);
     try {
       const response = await fetch("/api/posts/bulk-edit", {
         method: "POST",
@@ -101,12 +203,12 @@ export function BulkEditModal({
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setError(body.error ?? "Could not apply the bulk edit.");
+        setApplyError(body.error ?? "Could not apply the bulk edit.");
         return;
       }
       onSaved(labels);
     } catch {
-      setError("Could not confirm whether the edit completed. Refresh the Library before retrying.");
+      setApplyError("Could not confirm whether the edit completed. Refresh the Library before retrying.");
     } finally {
       setBusy(false);
     }
@@ -119,7 +221,7 @@ export function BulkEditModal({
       aria-modal="true"
       aria-labelledby="bulk-edit-title"
     >
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-card border border-border bg-surface p-6 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-card border border-border bg-surface p-6 shadow-xl">
         {reviewing ? (
           <>
             <h2 id="bulk-edit-title" className="font-display text-xl font-semibold text-ink">
@@ -134,7 +236,7 @@ export function BulkEditModal({
                 <li key={label}>• {label}</li>
               ))}
             </ul>
-            {error ? <p className="mt-3 text-sm text-status-failed">{error}</p> : null}
+            {applyError ? <p className="mt-3 text-sm text-status-failed">{applyError}</p> : null}
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"
@@ -175,6 +277,47 @@ export function BulkEditModal({
               </button>
             </div>
 
+            {contextLoading ? (
+              <div className="mt-6 rounded-lg border border-border bg-surface-sunken p-4 text-sm text-muted" role="status">
+                Loading existing metadata…
+              </div>
+            ) : null}
+            {contextError ? (
+              <div className="mt-6 rounded-lg border border-status-failed/40 p-4" role="alert">
+                <p className="text-sm text-status-failed">{contextError}</p>
+                <p className="mt-1 text-xs text-muted">
+                  This read-only check did not change any posts.
+                </p>
+                <button
+                  type="button"
+                  onClick={retryContext}
+                  className="mt-3 rounded-lg border border-border px-3 py-1.5 text-sm text-ink hover:bg-surface-sunken"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
+            {context ? (
+              <>
+                <div className="mt-5 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface-sunken px-4 py-3 text-xs text-muted">
+                  <span className="font-medium text-ink-soft">Coverage</span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <CoverageBadge count={selectedPostCount} total={selectedPostCount} />
+                    on every selected post
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${coverageBadgeClass.some}`}>
+                      Some
+                    </span>
+                    X of {selectedPostCount} means only that many selected posts
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <CoverageBadge count={0} total={selectedPostCount} />
+                    on no selected posts
+                  </span>
+                </div>
+
             <section className="mt-6 border-t border-border pt-5">
               <div className="mb-4">
                 <h3 className="text-sm font-semibold text-ink">Tags</h3>
@@ -191,6 +334,9 @@ export function BulkEditModal({
                     value={tagAdds}
                     onChange={chooseTagAdds}
                     allowCreateTopic={false}
+                    coverage={tagCoverage}
+                    selectedPostCount={selectedPostCount}
+                    disableFullCoverage
                   />
                 </div>
                 <div className="rounded-card border border-border p-4">
@@ -201,6 +347,10 @@ export function BulkEditModal({
                     value={tagRemoves}
                     onChange={chooseTagRemoves}
                     allowCreateTopic={false}
+                    coverage={tagCoverage}
+                    selectedPostCount={selectedPostCount}
+                    hideZeroCoverage
+                    emptyCoverageMessage="None of the selected posts have removable tags."
                   />
                 </div>
               </div>
@@ -214,11 +364,25 @@ export function BulkEditModal({
               <div className="grid gap-4 lg:grid-cols-2">
                 <div>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-posted">Attach periods</p>
-                  <PeriodAttach periods={periods} value={periodAdds} onChange={choosePeriodAdds} />
+                  <PeriodAttach
+                    periods={periods}
+                    value={periodAdds}
+                    onChange={choosePeriodAdds}
+                    coverage={periodCoverage}
+                    selectedPostCount={selectedPostCount}
+                    disableFullCoverage
+                  />
                 </div>
                 <div>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-soft">Detach periods</p>
-                  <PeriodAttach periods={periods} value={periodRemoves} onChange={choosePeriodRemoves} />
+                  <PeriodAttach
+                    periods={periods}
+                    value={periodRemoves}
+                    onChange={choosePeriodRemoves}
+                    coverage={periodCoverage}
+                    selectedPostCount={selectedPostCount}
+                    hideZeroCoverage
+                  />
                 </div>
               </div>
             </section>
@@ -226,6 +390,33 @@ export function BulkEditModal({
             <section className="mt-6 border-t border-border pt-5">
               <h3 className="text-sm font-semibold text-ink">Set shared values</h3>
               <p className="mb-3 text-xs text-muted">Leave a field unchanged to preserve each post&apos;s current value.</p>
+              <div className="mb-4 space-y-2 rounded-lg border border-border bg-surface-sunken p-4" aria-label="Current values on selected posts">
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-soft">Current selection</p>
+                <CurrentValueRow
+                  label="Status"
+                  total={selectedPostCount}
+                  values={context.content_statuses.map((row) => ({
+                    label: { ready: "Ready", draft: "Draft", retired: "Retired" }[row.value],
+                    count: row.count,
+                  }))}
+                />
+                <CurrentValueRow
+                  label="Kind"
+                  total={selectedPostCount}
+                  values={context.content_kinds.map((row) => ({
+                    label: row.value === "one_time" ? "One-time" : "Evergreen",
+                    count: row.count,
+                  }))}
+                />
+                <CurrentValueRow
+                  label="Cooldown"
+                  total={selectedPostCount}
+                  values={context.cooldowns.map((row) => ({
+                    label: row.value === null ? "Channel default" : `${row.value} day${row.value === 1 ? "" : "s"}`,
+                    count: row.count,
+                  }))}
+                />
+              </div>
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="text-xs text-ink-soft">
                   <span className="mb-1 block">Status</span>
@@ -262,7 +453,10 @@ export function BulkEditModal({
               {cooldownInvalid ? <p className="mt-2 text-xs text-status-failed">Cooldown must be zero or a positive whole number.</p> : null}
             </section>
 
-            {error ? <p className="mt-3 text-sm text-status-failed">{error}</p> : null}
+              </>
+            ) : null}
+
+            {applyError ? <p className="mt-3 text-sm text-status-failed">{applyError}</p> : null}
             <div className="mt-6 flex items-center justify-between gap-4">
               <p className="text-xs text-muted">
                 {labels.length === 0 ? "Choose at least one change." : `${labels.length} change${labels.length === 1 ? "" : "s"} ready to review.`}
@@ -272,7 +466,7 @@ export function BulkEditModal({
                 <button
                   type="button"
                   onClick={() => setReviewing(true)}
-                  disabled={labels.length === 0 || cooldownInvalid}
+                  disabled={labels.length === 0 || cooldownInvalid || contextLoading || Boolean(contextError) || !context}
                   className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
                 >
                   Review changes

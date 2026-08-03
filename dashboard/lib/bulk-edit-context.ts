@@ -1,5 +1,14 @@
 export type CoverageState = "all" | "some" | "none";
 
+export interface BulkEditContext {
+  post_count: number;
+  tags: { tag_id: number; count: number }[];
+  periods: { period_id: number; mode: "green" | "blackout"; count: number }[];
+  content_statuses: { value: "draft" | "ready" | "retired"; count: number }[];
+  content_kinds: { value: "evergreen" | "one_time"; count: number }[];
+  cooldowns: { value: number | null; count: number }[];
+}
+
 function normalizedCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
