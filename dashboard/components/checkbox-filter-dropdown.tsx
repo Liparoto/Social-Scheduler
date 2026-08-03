@@ -1,0 +1,164 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import {
+  allOptionValues,
+  filterCheckboxOptions,
+  type CheckboxFilterOption,
+  type CheckboxFilterValue,
+} from "@/lib/library-checkbox-filters";
+
+interface CheckboxFilterInputs<T extends CheckboxFilterValue> {
+  label: string;
+  options: CheckboxFilterOption<T>[];
+  selected: Set<T>;
+  onChange: (next: Set<T>) => void;
+}
+
+interface CheckboxFilterPanelProps<T extends CheckboxFilterValue>
+  extends CheckboxFilterInputs<T> {
+  query: string;
+  onQueryChange: (query: string) => void;
+}
+
+export function CheckboxFilterPanel<T extends CheckboxFilterValue>({
+  label,
+  options,
+  selected,
+  onChange,
+  query,
+  onQueryChange,
+}: CheckboxFilterPanelProps<T>) {
+  const visibleOptions = filterCheckboxOptions(options, query);
+
+  function toggle(value: T) {
+    const next = new Set(selected);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    onChange(next);
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`${label} filters`}
+      className="w-72 rounded-lg border border-border bg-surface p-3 shadow-lg"
+    >
+      <input
+        type="search"
+        aria-label={`Search ${label}`}
+        placeholder={`Search ${label.toLocaleLowerCase()}…`}
+        value={query}
+        onChange={(event) => onQueryChange(event.target.value)}
+        className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand"
+      />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => onChange(allOptionValues(options))}
+          className="text-xs font-medium text-brand-strong hover:text-brand"
+        >
+          Select all
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange(new Set<T>())}
+          className="text-xs font-medium text-muted hover:text-ink"
+        >
+          Clear all
+        </button>
+      </div>
+      <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+        {visibleOptions.length === 0 ? (
+          <p className="px-2 py-3 text-center text-xs text-faint">No matches</p>
+        ) : (
+          visibleOptions.map((option) => (
+            <label
+              key={`${typeof option.value}:${option.value}`}
+              className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-ink hover:bg-surface-sunken"
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(option.value)}
+                onChange={() => toggle(option.value)}
+                className="h-4 w-4 rounded border-border accent-brand"
+              />
+              <span>{option.label}</span>
+            </label>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface CheckboxFilterDropdownProps<T extends CheckboxFilterValue>
+  extends CheckboxFilterInputs<T> {
+  closeSignal: number;
+}
+
+export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
+  label,
+  options,
+  selected,
+  onChange,
+  closeSignal,
+}: CheckboxFilterDropdownProps<T>) {
+  const [openSignal, setOpenSignal] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const open = openSignal === closeSignal;
+  const disabled = options.length === 0;
+
+  useEffect(() => {
+    if (!open) return;
+
+    function closeOnOutsideMouseDown(event: MouseEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) setOpenSignal(null);
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpenSignal(null);
+    }
+
+    document.addEventListener("mousedown", closeOnOutsideMouseDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideMouseDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const triggerText = disabled
+    ? `${label} — none available`
+    : selected.size > 0
+      ? `${label} · ${selected.size}`
+      : label;
+
+  return (
+    <div ref={containerRef} className="relative inline-block">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        disabled={disabled}
+        onClick={() => setOpenSignal(open ? null : closeSignal)}
+        className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink hover:bg-surface-sunken disabled:cursor-not-allowed disabled:text-faint disabled:opacity-60"
+      >
+        {triggerText}
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-30 mt-2">
+          <CheckboxFilterPanel
+            label={label}
+            options={options}
+            selected={selected}
+            onChange={onChange}
+            query={query}
+            onQueryChange={setQuery}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
