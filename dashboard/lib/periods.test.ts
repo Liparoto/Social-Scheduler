@@ -134,6 +134,14 @@ test("one-off write validation checks the complete merged PATCH shape", () => {
     hasValidOneOffPeriodDates({ ...current, end_date: "2026-03-40" }),
     false
   );
+  assert.equal(
+    hasValidOneOffPeriodDates({ start_date: "2026-12-31", end_date: "2026-01-01" }),
+    false
+  );
+  assert.equal(
+    hasValidOneOffPeriodDates({ start_date: "2026-12-31", end_date: "2026-12-31" }),
+    true
+  );
 });
 
 test("blackout wins when green and blackout periods overlap", () => {

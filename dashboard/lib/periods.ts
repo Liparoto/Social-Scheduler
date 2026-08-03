@@ -49,7 +49,11 @@ export function hasValidOneOffPeriodDates(period: {
   start_date?: unknown;
   end_date?: unknown;
 }): boolean {
-  return isIsoCalendarDate(period.start_date) && isIsoCalendarDate(period.end_date);
+  return (
+    isIsoCalendarDate(period.start_date) &&
+    isIsoCalendarDate(period.end_date) &&
+    period.start_date <= period.end_date
+  );
 }
 
 function assertIsoCalendarDate(value: string | null, label: string): asserts value is string {

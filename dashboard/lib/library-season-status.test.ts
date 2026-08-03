@@ -47,6 +47,14 @@ const malformedOneOff: LibrarySeasonPeriod = {
   start_date: "2026-02-30",
   end_date: "2026-03-02",
 };
+const malformedBlackout = { ...malformedOneOff, id: 6, mode: "blackout" as const };
+const reversedOneOff: LibrarySeasonPeriod = {
+  ...malformedOneOff,
+  id: 7,
+  name: "Reversed launch",
+  start_date: "2026-12-31",
+  end_date: "2026-01-01",
+};
 
 test("ready with no periods is Live", () => {
   assert.equal(librarySeasonStatus("ready", [], evaluationDate), "Live");
@@ -85,6 +93,35 @@ test("a malformed linked period marks a ready card invalid without affecting ano
   assert.deepEqual(verdicts, ["Invalid period", "Live"]);
 });
 
+test("a matching green cannot hide a malformed green in either order", () => {
+  assert.equal(
+    librarySeasonStatus("ready", [matchingGreen, malformedOneOff], evaluationDate),
+    "Invalid period"
+  );
+  assert.equal(
+    librarySeasonStatus("ready", [malformedOneOff, matchingGreen], evaluationDate),
+    "Invalid period"
+  );
+});
+
+test("a matching blackout cannot hide a malformed green or blackout", () => {
+  assert.equal(
+    librarySeasonStatus("ready", [matchingBlackout, malformedOneOff], evaluationDate),
+    "Invalid period"
+  );
+  assert.equal(
+    librarySeasonStatus("ready", [matchingBlackout, malformedBlackout], evaluationDate),
+    "Invalid period"
+  );
+});
+
+test("a reversed linked one-off period is invalid for the Library advisory", () => {
+  assert.equal(
+    librarySeasonStatus("ready", [reversedOneOff], evaluationDate),
+    "Invalid period"
+  );
+});
+
 test("draft and retired do not evaluate malformed linked periods", () => {
   assert.equal(librarySeasonStatus("draft", [malformedOneOff], evaluationDate), "Draft");
   assert.equal(librarySeasonStatus("retired", [malformedOneOff], evaluationDate), "Retired");
@@ -101,6 +138,10 @@ test("unexpected programming errors still escape the verdict helper", () => {
 
   assert.throws(
     () => librarySeasonStatus("ready", [period], evaluationDate),
+    (error) => error === programmingError
+  );
+  assert.throws(
+    () => librarySeasonStatus("ready", [malformedOneOff, period], evaluationDate),
     (error) => error === programmingError
   );
 });

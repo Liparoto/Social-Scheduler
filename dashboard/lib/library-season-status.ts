@@ -1,4 +1,5 @@
 import {
+  hasValidOneOffPeriodDates,
   periodContains,
   PeriodWindowRangeError,
   PeriodWindowTypeError,
@@ -71,19 +72,37 @@ export function librarySeasonStatus(
   if (lifecycle === "draft") return "Draft";
   if (lifecycle === "retired") return "Retired";
 
-  try {
-    const blackouts = periods.filter((period) => period.mode === "blackout");
-    if (blackouts.some((period) => periodContains(period, evaluationDate))) return "Blocked";
+  let invalidPeriod = false;
+  // Evaluate every link before classifying. A matching link must never short-circuit and
+  // hide a malformed link that happens to sort later in the batched query.
+  const evaluated = periods.map((period) => {
+    try {
+      if (!period.recurs_yearly && !hasValidOneOffPeriodDates(period)) {
+        throw new PeriodWindowRangeError(
+          "one-off period requires valid start_date <= end_date"
+        );
+      }
+      return {
+        mode: period.mode,
+        contains: periodContains(period, evaluationDate),
+      };
+    } catch (error) {
+      if (error instanceof PeriodWindowTypeError || error instanceof PeriodWindowRangeError) {
+        invalidPeriod = true;
+        return { mode: period.mode, contains: false };
+      }
+      throw error;
+    }
+  });
 
-    const green = periods.filter((period) => period.mode === "green");
-    if (green.length > 0 && !green.some((period) => periodContains(period, evaluationDate))) {
-      return "Dormant";
-    }
-    return "Live";
-  } catch (error) {
-    if (error instanceof PeriodWindowTypeError || error instanceof PeriodWindowRangeError) {
-      return "Invalid period";
-    }
-    throw error;
+  if (invalidPeriod) return "Invalid period";
+  if (evaluated.some((period) => period.mode === "blackout" && period.contains)) {
+    return "Blocked";
   }
+
+  const green = evaluated.filter((period) => period.mode === "green");
+  if (green.length > 0 && !green.some((period) => period.contains)) {
+    return "Dormant";
+  }
+  return "Live";
 }
