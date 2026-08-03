@@ -66,6 +66,34 @@ test("a one-off date window is inclusive", () => {
   assert.equal(periodContains(launch, "2026-07-08"), false);
 });
 
+test("impossible evaluation dates are rejected", () => {
+  const summer = recurring(6, 1, 8, 31);
+
+  assert.throws(() => periodContains(summer, "2026-02-30"), RangeError);
+  assert.throws(() => inSeason([], [], "2026-02-29"), RangeError);
+});
+
+test("impossible one-off start and end dates are rejected", () => {
+  assert.throws(
+    () => periodContains(oneOff("2026-02-30", "2026-03-02"), "2026-03-01"),
+    RangeError
+  );
+  assert.throws(
+    () => periodContains(oneOff("2026-02-28", "2026-02-30"), "2026-03-01"),
+    RangeError
+  );
+});
+
+test("leap day is accepted only in a leap year", () => {
+  const leapDay = oneOff("2028-02-29", "2028-02-29");
+
+  assert.equal(periodContains(leapDay, "2028-02-29"), true);
+  assert.throws(
+    () => periodContains(oneOff("2027-02-29", "2027-02-29"), "2027-02-28"),
+    RangeError
+  );
+});
+
 test("blackout wins when green and blackout periods overlap", () => {
   const winter = recurring(12, 1, 2, 28);
   const decemberBlackout = recurring(12, 1, 12, 31);
