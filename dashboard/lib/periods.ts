@@ -13,6 +13,13 @@ function monthDay(month: number, day: number): number {
   return month * 100 + day;
 }
 
+function recurringInteger(value: unknown, label: string): number {
+  if (!Number.isInteger(value)) {
+    throw new TypeError(`${label} must be an integer`);
+  }
+  return value as number;
+}
+
 function assertIsoCalendarDate(value: string | null, label: string): asserts value is string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
   if (!match) {
@@ -35,8 +42,14 @@ export function periodContains(period: PeriodWindow, evaluationDate: string): bo
   assertIsoCalendarDate(evaluationDate, "evaluationDate");
 
   if (period.recurs_yearly) {
-    const start = monthDay(period.start_month!, period.start_day!);
-    const end = monthDay(period.end_month!, period.end_day!);
+    const start = monthDay(
+      recurringInteger(period.start_month, "period.start_month"),
+      recurringInteger(period.start_day, "period.start_day")
+    );
+    const end = monthDay(
+      recurringInteger(period.end_month, "period.end_month"),
+      recurringInteger(period.end_day, "period.end_day")
+    );
     const current = monthDay(
       Number(evaluationDate.slice(5, 7)),
       Number(evaluationDate.slice(8, 10))

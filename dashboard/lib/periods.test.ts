@@ -56,6 +56,27 @@ test("a non-wrapping recurring window is inclusive and excludes outside dates", 
   assert.equal(periodContains(summer, "2026-09-01"), false);
 });
 
+test("recurring fields must be present integers at runtime", () => {
+  const base = recurring(6, 1, 8, 31);
+  const { end_day: _endDay, ...missingEndDay } = base;
+  const malformed = [
+    { ...base, start_month: null },
+    missingEndDay as unknown as PeriodWindow,
+    { ...base, start_day: 1.5 },
+  ];
+
+  for (const period of malformed) {
+    assert.throws(() => periodContains(period, "2026-07-01"), TypeError);
+  }
+});
+
+test("integer month-day combinations retain Python's numeric comparison behavior", () => {
+  const aprilThirtyFirst = recurring(4, 31, 5, 2);
+
+  assert.equal(periodContains(aprilThirtyFirst, "2026-04-30"), false);
+  assert.equal(periodContains(aprilThirtyFirst, "2026-05-01"), true);
+});
+
 test("a one-off date window is inclusive", () => {
   const launch = oneOff("2026-07-01", "2026-07-07");
 
@@ -121,4 +142,31 @@ test("local date is derived from an explicit instant and IANA timezone", () => {
 
   assert.equal(localDate(instant, "America/New_York"), "2026-01-01");
   assert.equal(localDate(instant, "Asia/Tokyo"), "2026-01-02");
+});
+
+test("local date follows Pacific calendar boundaries across spring DST", () => {
+  assert.equal(
+    localDate(new Date("2026-03-08T07:30:00.000Z"), "America/Los_Angeles"),
+    "2026-03-07"
+  );
+  assert.equal(
+    localDate(new Date("2026-03-08T08:30:00.000Z"), "America/Los_Angeles"),
+    "2026-03-08"
+  );
+});
+
+test("local date follows Pacific calendar boundaries across fall DST", () => {
+  assert.equal(
+    localDate(new Date("2026-11-01T06:30:00.000Z"), "America/Los_Angeles"),
+    "2026-10-31"
+  );
+  assert.equal(
+    localDate(new Date("2026-11-01T07:30:00.000Z"), "America/Los_Angeles"),
+    "2026-11-01"
+  );
+});
+
+test("local date rejects invalid timezones and invalid instants", () => {
+  assert.throws(() => localDate(new Date(), "Not/A_Timezone"), RangeError);
+  assert.throws(() => localDate(new Date(Number.NaN), "America/Los_Angeles"), RangeError);
 });
