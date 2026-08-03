@@ -60,10 +60,9 @@ test("a non-wrapping recurring window is inclusive and excludes outside dates", 
 
 test("recurring fields must be present integers at runtime", () => {
   const base = recurring(6, 1, 8, 31);
-  const { end_day: _endDay, ...missingEndDay } = base;
   const malformed = [
     { ...base, start_month: null },
-    missingEndDay as unknown as PeriodWindow,
+    { ...base, end_day: undefined } as unknown as PeriodWindow,
     { ...base, start_day: 1.5 },
   ];
 

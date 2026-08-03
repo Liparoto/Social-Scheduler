@@ -1041,9 +1041,9 @@ shippable; suggested order is the order listed. Only #2 carries a blocking decis
 | 3 | Quick edit | `specs/2026-08-02-library-quick-edit-design.md` | `plans/2026-08-02-library-quick-edit.md` |
 | 4 | Media → post links | `specs/2026-08-02-media-post-links-design.md` | `plans/2026-08-02-media-post-links.md` |
 
-⚠️ **#2 has an open decision that blocks its in-season indicator** — which timezone the season
-badge uses. See that design's "Open question"; recommendation is `DEFAULT_TIMEZONE`, pending
-owner sign-off. Its first two tasks (names + filter) are unblocked.
+✅ **#2 timezone decision (owner-approved 2026-08-03):** the Library badge uses
+`DEFAULT_TIMEZONE`, names the evaluation date and timezone in its advisory tooltip, and explains
+that the worker remains authoritative in each target channel's timezone.
 
 - [x] **Bulk edit in the Library — tags, periods, status, kind** (owner-requested 2026-08-02).
       The Library already has everything needed structurally: an **ordered multi-select**
@@ -1076,7 +1076,7 @@ owner sign-off. Its first two tasks (names + filter) are unblocked.
         the interaction pattern for applying shared metadata to many posts at once.
       - Worth a confirm step showing "apply X to N posts" — at 36+ posts a misclick is expensive
         to undo by hand.
-- [ ] **Period visibility in the Library — names, a filter, and an in-season indicator**
+- [x] **Period visibility in the Library — names, a filter, and an in-season indicator**
       (owner-requested 2026-08-02). Three related asks; periods are currently near-invisible
       outside the single-post editor. Natural companion to the bulk-edit item above — do the
       filter first and bulk-editing a season becomes "filter to it, select all, apply."

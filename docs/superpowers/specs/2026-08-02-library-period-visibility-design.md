@@ -1,7 +1,7 @@
 # Library period visibility — design
 
 **Date:** 2026-08-02
-**Status:** draft — awaiting owner review. **One open decision blocks part C** (§Open question).
+**Status:** implemented — owner approved the four-task plan on 2026-08-03.
 **Related:** pairs naturally with bulk edit (`2026-08-02-library-bulk-edit-design.md`) — the
 filter here turns bulk editing into "filter to a season → select all → apply".
 
@@ -100,21 +100,23 @@ Four rules that must survive the port:
 This is the owner's stated example: a `ready` football post in August should read **Dormant**,
 and the same post in October should read **Live**.
 
-## Open question — which timezone does the badge use?  ⚠️ blocks Part C
+## Timezone decision — install default timezone
 
 `in_season` is evaluated against a **local date in the channel's timezone**. A post can target
 several channels in different zones, and this install genuinely mixes `America/Los_Angeles` and
 `America/New_York` (deliberately — see `docs/tasks.md`). On a boundary day a post can be in
 season for one target and not another. **A single Library badge cannot be per-channel.**
 
-**Recommendation:** evaluate against `config.defaultTimezone` (`DEFAULT_TIMEZONE`) and name that
+**Decision (owner-approved 2026-08-03):** evaluate against `config.defaultTimezone`
+(`DEFAULT_TIMEZONE`) and name that
 timezone in the tooltip. Rationale: the badge is a glance aid, the worker remains authoritative,
 and the disagreement window is one day at a season boundary.
 
 **Alternative considered:** a per-target breakdown. Better information, but it does not fit on a
 card — it belongs on the post editor, where there is room.
 
-**Needs owner sign-off before Part C is built.** Flagged rather than picked by accident.
+The Library tooltip also names the evaluation date and explains that the worker remains
+authoritative in each target channel's timezone.
 
 ## Out of scope
 
