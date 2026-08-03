@@ -1448,6 +1448,92 @@ export function setCaptionVariants(
   tx(variants);
 }
 
+// ---- Bulk content-model context --------------------------------------------------
+export interface BulkEditContext {
+  post_count: number;
+  tags: { tag_id: number; count: number }[];
+  periods: { period_id: number; mode: PeriodMode; count: number }[];
+  content_statuses: { value: ContentStatus; count: number }[];
+  content_kinds: { value: ContentKind; count: number }[];
+  cooldowns: { value: number | null; count: number }[];
+}
+
+/** Summarize the metadata currently attached to a selected set of posts. */
+export function getBulkEditContext(postIds: number[]): BulkEditContext {
+  const uniquePostIds = [...new Set(postIds)];
+  if (uniquePostIds.length === 0) {
+    return {
+      post_count: 0,
+      tags: [],
+      periods: [],
+      content_statuses: [],
+      content_kinds: [],
+      cooldowns: [],
+    };
+  }
+
+  const db = getDb();
+  const placeholders = uniquePostIds.map(() => "?").join(", ");
+  const read = db.transaction((): BulkEditContext => {
+    const tags = db
+      .prepare(
+        `SELECT tag_id, COUNT(*) AS count
+           FROM post_tags
+          WHERE post_id IN (${placeholders})
+          GROUP BY tag_id
+          ORDER BY tag_id`
+      )
+      .all(...uniquePostIds) as BulkEditContext["tags"];
+    const periods = db
+      .prepare(
+        `SELECT period_id, mode, COUNT(*) AS count
+           FROM post_periods
+          WHERE post_id IN (${placeholders})
+          GROUP BY period_id, mode
+          ORDER BY period_id, mode`
+      )
+      .all(...uniquePostIds) as BulkEditContext["periods"];
+    const content_statuses = db
+      .prepare(
+        `SELECT content_status AS value, COUNT(*) AS count
+           FROM posts
+          WHERE id IN (${placeholders})
+          GROUP BY content_status
+          ORDER BY content_status`
+      )
+      .all(...uniquePostIds) as BulkEditContext["content_statuses"];
+    const content_kinds = db
+      .prepare(
+        `SELECT content_kind AS value, COUNT(*) AS count
+           FROM posts
+          WHERE id IN (${placeholders})
+          GROUP BY content_kind
+          ORDER BY content_kind`
+      )
+      .all(...uniquePostIds) as BulkEditContext["content_kinds"];
+    const cooldowns = db
+      .prepare(
+        `SELECT cooldown_days AS value, COUNT(*) AS count
+           FROM posts
+          WHERE id IN (${placeholders})
+          GROUP BY cooldown_days
+          ORDER BY cooldown_days IS NOT NULL, cooldown_days`
+      )
+      .all(...uniquePostIds) as BulkEditContext["cooldowns"];
+
+    return {
+      post_count: content_statuses.reduce((total, row) => total + row.count, 0),
+      tags,
+      periods,
+      content_statuses,
+      content_kinds,
+      cooldowns,
+    };
+  });
+
+  return read();
+}
+
 // ---- Bulk content-model edit -----------------------------------------------------
 export interface BulkEditPostsInput {
   post_ids: number[];
