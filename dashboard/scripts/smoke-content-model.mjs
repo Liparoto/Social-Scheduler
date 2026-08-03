@@ -217,17 +217,20 @@ async function main() {
   assert(finalPost.content_kind === "one_time", "content_kind was not updated to one_time");
   assert(finalPost.cooldown_days === null, "cooldown_days was not cleared to null");
 
-  // ---- listPosts includes the new content-model + season/target summary columns --
+  // ---- listPosts includes the new content-model + season/target data -------------
   const libraryRows = queries.listPosts();
   const row = libraryRows.find((r) => r.id === postId);
   assert(row, "listPosts did not include the created post");
   assert(row.content_kind === "one_time", "listPosts row missing updated content_kind");
   assert(row.content_status === "ready", "listPosts row missing updated content_status");
   assert(row.target_count === 1, `expected target_count 1, got ${row.target_count}`);
-  assert(row.green_period_count === 1, `expected green_period_count 1, got ${row.green_period_count}`);
   assert(
-    row.blackout_period_count === 1,
-    `expected blackout_period_count 1, got ${row.blackout_period_count}`
+    JSON.stringify(row.periods) ===
+      JSON.stringify([
+        { id: winterId, name: "Holiday Blackout", mode: "blackout" },
+        { id: summerId, name: "Summer Sale (updated)", mode: "green" },
+      ]),
+    `listPosts returned unexpected periods: ${JSON.stringify(row.periods)}`
   );
 
   // ---- deletePeriod ----------------------------------------------------------------
