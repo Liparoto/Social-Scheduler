@@ -29,6 +29,7 @@ export type LibraryCheckboxFilterAction =
       group: "tags" | "platforms";
       values: Set<string>;
     }
+  | { type: "reconcile-available"; available: LibraryCheckboxSelections }
   | { type: "apply" };
 
 function emptySelections(): LibraryCheckboxSelections {
@@ -43,6 +44,30 @@ function copySelections(source: LibraryCheckboxSelections): LibraryCheckboxSelec
   };
 }
 
+function intersectSelections(
+  source: LibraryCheckboxSelections,
+  available: LibraryCheckboxSelections,
+): LibraryCheckboxSelections {
+  return {
+    periods: new Set([...source.periods].filter((value) => available.periods.has(value))),
+    tags: new Set([...source.tags].filter((value) => available.tags.has(value))),
+    platforms: new Set(
+      [...source.platforms].filter((value) => available.platforms.has(value)),
+    ),
+  };
+}
+
+function selectionsEqual(
+  left: LibraryCheckboxSelections,
+  right: LibraryCheckboxSelections,
+): boolean {
+  return (
+    left.periods.size === right.periods.size &&
+    left.tags.size === right.tags.size &&
+    left.platforms.size === right.platforms.size
+  );
+}
+
 export function createLibraryCheckboxFilterState(): LibraryCheckboxFilterState {
   return { draft: emptySelections(), applied: emptySelections() };
 }
@@ -51,6 +76,15 @@ export function libraryCheckboxFilterReducer(
   state: LibraryCheckboxFilterState,
   action: LibraryCheckboxFilterAction,
 ): LibraryCheckboxFilterState {
+  if (action.type === "reconcile-available") {
+    const draft = intersectSelections(state.draft, action.available);
+    const applied = intersectSelections(state.applied, action.available);
+    if (selectionsEqual(draft, state.draft) && selectionsEqual(applied, state.applied)) {
+      return state;
+    }
+    return { draft, applied };
+  }
+
   if (action.type === "apply") {
     return { draft: copySelections(state.draft), applied: copySelections(state.draft) };
   }

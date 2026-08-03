@@ -157,3 +157,46 @@ test("clearing every draft group and applying restores checkbox-filtered posts w
   assert.equal(shown.length, 1);
   assert.equal(shown[0]?.caption, "Football tip");
 });
+
+test("reconciling availability clears stale filters without dropping valid selections", () => {
+  let state = createLibraryCheckboxFilterState();
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "periods",
+    values: new Set([10]),
+  });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "tags",
+    values: new Set(["tips"]),
+  });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "set-draft",
+    group: "platforms",
+    values: new Set(["instagram"]),
+  });
+  state = libraryCheckboxFilterReducer(state, { type: "apply" });
+
+  state = libraryCheckboxFilterReducer(state, {
+    type: "reconcile-available",
+    available: {
+      periods: new Set(),
+      tags: new Set(),
+      platforms: new Set(["instagram"]),
+    },
+  });
+
+  assert.deepEqual([...state.draft.periods], []);
+  assert.deepEqual([...state.draft.tags], []);
+  assert.deepEqual([...state.draft.platforms], ["instagram"]);
+  assert.deepEqual([...state.applied.periods], []);
+  assert.deepEqual([...state.applied.tags], []);
+  assert.deepEqual([...state.applied.platforms], ["instagram"]);
+  assert.equal(
+    matchesLibraryCheckboxFilters(
+      { periods: [], tags: ["other"], platforms: ["instagram"] },
+      state.applied,
+    ),
+    true,
+  );
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useState, useTransition } from "react";
+import { useEffect, useMemo, useReducer, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
@@ -72,6 +72,10 @@ function tomorrow(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+function splitTags(value: string | null): string[] {
+  return value ? value.split(",") : [];
 }
 
 export function LibraryView({
@@ -192,29 +196,55 @@ export function LibraryView({
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
 
-  const splitTags = (s: string | null) => (s ? s.split(",") : []);
-  const allTagNames = Array.from(
-    new Set(posts.flatMap((p) => [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)]))
-  ).sort();
-  const allPeriods = Array.from(
-    new Map<number, string>(
-      posts.flatMap((post) => post.periods.map((period) => [period.id, period.name]))
+  const { allTagNames, allPeriods } = useMemo(() => {
+    const tagNames = Array.from(
+      new Set(
+        posts.flatMap((post) => [
+          ...splitTags(post.time_of_day_tags),
+          ...splitTags(post.topic_tags),
+        ]),
+      ),
+    ).sort();
+    const postPeriods = Array.from(
+      new Map<number, string>(
+        posts.flatMap((post) => post.periods.map((period) => [period.id, period.name])),
+      ),
     )
-  )
-    .map(([id, name]) => ({ id, name }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const periodOptions: CheckboxFilterOption<number>[] = allPeriods.map(({ id, name }) => ({
-    value: id,
-    label: name,
-  }));
-  const tagOptions: CheckboxFilterOption<string>[] = allTagNames.map((name) => ({
-    value: name,
-    label: name,
-  }));
-  const platformOptions: CheckboxFilterOption<string>[] = PLATFORMS.map((platform) => ({
-    value: platform.value,
-    label: platformLabel(platform.value),
-  }));
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { allTagNames: tagNames, allPeriods: postPeriods };
+  }, [posts]);
+  const periodOptions: CheckboxFilterOption<number>[] = useMemo(
+    () => allPeriods.map(({ id, name }) => ({ value: id, label: name })),
+    [allPeriods],
+  );
+  const tagOptions: CheckboxFilterOption<string>[] = useMemo(
+    () => allTagNames.map((name) => ({ value: name, label: name })),
+    [allTagNames],
+  );
+  const platformOptions: CheckboxFilterOption<string>[] = useMemo(
+    () =>
+      PLATFORMS.map((platform) => ({
+        value: platform.value,
+        label: platformLabel(platform.value),
+      })),
+    [],
+  );
+  const availableCheckboxFilters = useMemo(
+    () => ({
+      periods: new Set(periodOptions.map((option) => option.value)),
+      tags: new Set(tagOptions.map((option) => option.value)),
+      platforms: new Set(platformOptions.map((option) => option.value)),
+    }),
+    [periodOptions, tagOptions, platformOptions],
+  );
+
+  useEffect(() => {
+    dispatchCheckboxFilters({
+      type: "reconcile-available",
+      available: availableCheckboxFilters,
+    });
+  }, [availableCheckboxFilters]);
 
   // Counted over the whole library, not the filtered view, so the numbers stay put while
   // you click between formats instead of collapsing to "N Carousel" the moment one is on.
