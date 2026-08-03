@@ -106,7 +106,7 @@ export function BulkEditModal({
       }
       onSaved(labels);
     } catch {
-      setError("Could not reach the dashboard. Nothing was changed; try again.");
+      setError("Could not confirm whether the edit completed. Refresh the Library before retrying.");
     } finally {
       setBusy(false);
     }
