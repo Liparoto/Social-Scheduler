@@ -113,6 +113,10 @@ test("a matching blackout cannot hide a malformed green or blackout", () => {
     librarySeasonStatus("ready", [matchingBlackout, malformedBlackout], evaluationDate),
     "Invalid period"
   );
+  assert.equal(
+    librarySeasonStatus("ready", [malformedBlackout, matchingBlackout], evaluationDate),
+    "Invalid period"
+  );
 });
 
 test("a reversed linked one-off period is invalid for the Library advisory", () => {

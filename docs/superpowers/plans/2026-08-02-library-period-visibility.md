@@ -145,5 +145,5 @@ Deliverable: `ready` posts read **Live** / **Dormant** / **Blocked**.
 - [x] Live DB untouched by testing: `PRAGMA foreign_key_check` empty, row counts unchanged.
 - [x] **The badge agrees with the worker** on a spot-check of at least 3 posts (Task 3's
       cross-check, repeated on the finished UI).
-- [ ] `/code-review` per the project's standing workflow.
+- [x] `/code-review` per the project's standing workflow.
 - [x] Record the timezone decision in `docs/tasks.md` and mark the item done.
