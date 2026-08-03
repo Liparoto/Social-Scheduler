@@ -1031,3 +1031,125 @@ to worker code.** A live heartbeat proves the daemon is alive, not that it is ru
       Pi/old Mac, free-tier VM, scheduled cloud runner) and their trade-offs (image-delivery
       tunnel, secrets handling, kill switch). Its own brainstorm — must stay simple enough for a
       non-technical clone owner to set up.
+### Library workflow (owner-requested 2026-08-02) — each specced separately
+Four independent sub-projects, each with its own design + plan. Related but separately
+shippable; suggested order is the order listed. Only #2 carries a blocking decision.
+| # | Sub-project | Design | Plan |
+|---|---|---|---|
+| 1 | Bulk edit | `specs/2026-08-02-library-bulk-edit-design.md` | `plans/2026-08-02-library-bulk-edit.md` |
+| 2 | Period visibility | `specs/2026-08-02-library-period-visibility-design.md` | `plans/2026-08-02-library-period-visibility.md` |
+| 3 | Quick edit | `specs/2026-08-02-library-quick-edit-design.md` | `plans/2026-08-02-library-quick-edit.md` |
+| 4 | Media → post links | `specs/2026-08-02-media-post-links-design.md` | `plans/2026-08-02-media-post-links.md` |
+
+⚠️ **#2 has an open decision that blocks its in-season indicator** — which timezone the season
+badge uses. See that design's "Open question"; recommendation is `DEFAULT_TIMEZONE`, pending
+owner sign-off. Its first two tasks (names + filter) are unblocked.
+
+- [x] **Bulk edit in the Library — tags, periods, status, kind** (owner-requested 2026-08-02).
+      The Library already has everything needed structurally: an **ordered multi-select**
+      (`selected` in `dashboard/components/library-view.tsx`) and a bulk action bar. What's
+      missing is that only *three* bulk actions were ever wired to it — bulk-schedule
+      (`/api/posts/bulk`), bulk re-target (`/api/posts/targets/bulk`), and merge-into-carousel.
+      Everything else is still one post at a time through `/library/[id]`.
+      **Wanted, at minimum:** bulk add/remove **topic tags**, bulk attach/detach **periods**
+      (green *and* blackout), bulk **content_status** (draft→ready is the big one), bulk
+      **content_kind**, and bulk **cooldown_days**.
+      **Why it's real, not a nicety:** this backlog already carries the evidence.
+      (a) The "before first real use" note above says *only 3 of 139 posts are
+      `content_status='ready'`* — promoting the rest is a 136-click job today.
+      (b) Marking the 36 football posts to Football Season on 2026-08-02 had to be done in raw
+      SQL against the live DB, because the UI offers no way to do it. That's the owner reaching
+      past the app to get routine work done, which is the signal the feature is missing.
+      **Design notes for whoever picks this up:**
+      - Follow `/api/posts/targets/bulk`'s **add/remove verb** shape, not a set/replace shape.
+        Replace semantics on a multi-select would silently wipe tags the other selected posts
+        had — destructive and invisible. Add/remove is idempotent and safe to re-run.
+      - **Validate the whole batch before writing any of it**, the way `/api/posts/bulk-import`
+        does (it validates ≤100 items fully, so any 400 creates zero rows). Note the existing
+        counter-example flagged above: `POST /api/posts/targets/bulk` *"returns 400 on the first
+        over-caption-limit post and abandons the whole batch"* — a partially-applied bulk edit.
+        Don't copy that; wrap the writes in one transaction.
+      - Tags/periods/status are pure local metadata — **no publishing risk, no Meta call, no
+        worker interaction**. That makes this a genuinely low-risk feature and a good candidate
+        to ship before the two heavier items above it.
+      - Consider the same bar on the `/import` page's batch-defaults panel, which already proves
+        the interaction pattern for applying shared metadata to many posts at once.
+      - Worth a confirm step showing "apply X to N posts" — at 36+ posts a misclick is expensive
+        to undo by hand.
+- [ ] **Period visibility in the Library — names, a filter, and an in-season indicator**
+      (owner-requested 2026-08-02). Three related asks; periods are currently near-invisible
+      outside the single-post editor. Natural companion to the bulk-edit item above — do the
+      filter first and bulk-editing a season becomes "filter to it, select all, apply."
+      - **(a) Show *which* periods, not how many.** `listPosts` in `dashboard/lib/queries.ts`
+        only computes `green_period_count` / `blackout_period_count` via a `COUNT(...)`
+        subquery, so `library-view.tsx` can only render `green ×2` — the **names never leave
+        the database**. A post says it has two green periods and gives the owner no way to
+        learn what they are without opening it. `getPostPeriods` already returns the real rows
+        per post; the library list query needs the equivalent (a `GROUP_CONCAT` or a second
+        batched query keyed by post id — avoid N+1 across 139 posts).
+      - **(b) Multi-select period filter.** Same AND-combined pattern as the existing
+        tag/platform/status/kind chips in the Library. Should cover green *and* blackout
+        (filtering to "what's blacked out during X" is as useful as the inverse).
+      - **(c) In-season / green-lit indicator.** The owner's example: a `ready` post attached
+        to Football Season should read as **dormant** in August and **live** once the season
+        opens — right now `ready` looks identical either way, which is misleading, since
+        `content_status='ready'` and *actually eligible today* are orthogonal.
+      **⚠️ The hard part is (c), and it is not a UI task.** The season math exists **only in
+      Python** — `worker/periods.py`'s `period_contains` + `in_season`. There is no TypeScript
+      equivalent anywhere in `dashboard/lib/`. So this needs a port, and a wrong port produces
+      the worst possible outcome: **the dashboard says "green lit" while the worker skips the
+      post**, or vice versa. Four rules that must survive the port —
+      - **Wrap-around years.** Football Season is Aug 25 → Feb 15, i.e. `start > end`. The
+        Python uses a `month*100+day` key and flips to `cur >= start or cur <= end` when the
+        window crosses New Year. Naive date comparison silently breaks every winter season.
+      - **Blackout beats green**, always — it is checked first and short-circuits.
+      - **No green periods means always in season.** The rule is *"if green periods exist, one
+        must contain today"* — so an unattached post is eligible, not ineligible. Easy to
+        invert by accident, and it would mislabel most of the library.
+      - **One-off periods** use `start_date`/`end_date` ISO strings, not month/day.
+      **Open design question — which timezone does the badge use?** `in_season` is evaluated
+      against a **local date in the channel's timezone**, and a post can target several
+      channels in different zones (this install genuinely mixes `America/Los_Angeles` and
+      `America/New_York`), so a post can be in-season for one target and not another on the
+      boundary day. A single library badge cannot be per-channel. Decide deliberately: install
+      default timezone, or a per-target breakdown on the post editor and a
+      "somewhere/everywhere" summary on the card. Don't let this get picked by accident.
+      **Recommended:** rather than reimplement, consider having the *worker* be the only place
+      this math lives and expose the verdict — but note it currently has no API surface (the DB
+      is the contract, by design), so a TS port is the likely answer. If ported, port the
+      Python unit tests alongside it so the two implementations are pinned to the same cases.
+- [ ] **Quick-edit modal in the Library** (owner-requested 2026-08-02). Editing one field
+      currently means a full navigation to `/library/[id]` and back, which is why routine
+      cleanup feels heavy. Want an edit button on the card opening a small dialog for the
+      common fields, staying on the page.
+      - **No new API needed.** `PATCH /api/posts/[id]/content` already accepts exactly this
+        set, and `<PostEditor>` already composes `<TagEditor>` / `<PeriodAttach>` /
+        `<CaptionVariantsEditor>`. This is a repackaging job, not new plumbing.
+      - **Suggested scope:** `content_status`, `content_kind`, `cooldown_days`, tags, periods.
+        These are safe scalars with no publishing side effects.
+      - **Leave out** images, scheduled sends, and targets — those have real consequences and
+        already have considered UI in the full editor. A modal is the wrong place for them.
+      - **Captions are the judgement call.** They're `1..N` variants (generic + per-platform),
+        so "edit the caption" is ambiguous when several exist. Either show the generic variant
+        only and defer the rest to the full editor, or leave captions out of v1.
+      - **⚠️ Dirty-state trap, already paid for once.** The Post-now work records that a post
+        publishes what is **saved**, so an unsaved edit can be silently discarded and stale
+        text posted for real — `PostEditor` had to block Post-now while dirty. A modal makes
+        this *easier* to hit (click-outside, Esc, card scroll all dismiss). Decide the
+        behaviour explicitly: confirm-on-dismiss, or save-then-close. Never silently drop.
+      - After saving, refresh the card in place — a modal that forces a full reload defeats the
+        point. Pairs naturally with the bulk-edit item: same fields, one post vs. many.
+- [ ] **Media page → the post, properly** (owner-requested 2026-08-02). A link *does* already
+      exist (`media-manager.tsx` renders "In post #N" → `/library/[id]`), so the gap is that
+      it's too weak to be useful, not that it's absent:
+      - **Reused media dead-ends.** `listAssetsWithUsage` returns `MIN(pa.post_id)` as
+        `first_post_id` — the **lowest-numbered** post, chosen arbitrarily, not the most
+        relevant. Every other post is collapsed into the plain text `+N more`, which is **not
+        a link and not reachable**. For an asset reused across posts — the normal case for
+        evergreen recycling — most of its posts simply cannot be navigated to.
+      - **"post #47" carries no information.** A bare id gives nothing to recognise the post
+        by. Show the caption's first line and/or a thumbnail so it's identifiable at a glance.
+      - **Fix shape:** return the full set of `(post_id, caption, status)` per asset rather
+        than one `MIN()` id, and render each as a link (a small popover if the list is long).
+        Watch for N+1 across the whole asset store — batch it, the way the period-names query
+        above will need to.
