@@ -96,3 +96,15 @@ test("empty post_ids and invalid scalars return 400", async () => {
   assert.equal((await post({ post_ids: [postId], content_kind: "seasonal" })).status, 400);
   assert.equal((await post({ post_ids: [postId], cooldown_days: -1 })).status, 400);
 });
+
+test("null add/remove lists are rejected instead of treated as empty", async () => {
+  const [postId] = makePosts(1);
+  assert.equal(
+    (await post({ post_ids: [postId], tags: { add: null, remove: [] } })).status,
+    400
+  );
+  assert.equal(
+    (await post({ post_ids: [postId], periods: { add: [], remove: null } })).status,
+    400
+  );
+});

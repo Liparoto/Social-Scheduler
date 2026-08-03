@@ -1,10 +1,10 @@
 import type { ContentKind, ContentStatus, PeriodMode, Tag } from "./types";
 
 export interface BulkEditDraft {
-  tagAction: "add" | "remove";
-  tagIds: number[];
-  periodAction: "add" | "remove";
-  periodModes: Record<number, PeriodMode>;
+  tagAdds: number[];
+  tagRemoves: number[];
+  periodAdds: Record<number, PeriodMode>;
+  periodRemoves: Record<number, PeriodMode>;
   contentStatus: ContentStatus | "unchanged";
   contentKind: ContentKind | "unchanged";
   cooldownMode: "unchanged" | "default" | "custom";
@@ -25,21 +25,19 @@ export interface BulkEditPayload {
 
 export function buildBulkEditPayload(postIds: number[], draft: BulkEditDraft): BulkEditPayload {
   const payload: BulkEditPayload = { post_ids: postIds };
-  if (draft.tagIds.length > 0) {
-    payload.tags = {
-      add: draft.tagAction === "add" ? draft.tagIds : [],
-      remove: draft.tagAction === "remove" ? draft.tagIds : [],
-    };
+  if (draft.tagAdds.length > 0 || draft.tagRemoves.length > 0) {
+    payload.tags = { add: draft.tagAdds, remove: draft.tagRemoves };
   }
-  const periodLinks = Object.entries(draft.periodModes).map(([periodId, mode]) => ({
+  const periodAdds = Object.entries(draft.periodAdds).map(([periodId, mode]) => ({
     periodId: Number(periodId),
     mode,
   }));
-  if (periodLinks.length > 0) {
-    payload.periods = {
-      add: draft.periodAction === "add" ? periodLinks : [],
-      remove: draft.periodAction === "remove" ? periodLinks : [],
-    };
+  const periodRemoves = Object.entries(draft.periodRemoves).map(([periodId, mode]) => ({
+    periodId: Number(periodId),
+    mode,
+  }));
+  if (periodAdds.length > 0 || periodRemoves.length > 0) {
+    payload.periods = { add: periodAdds, remove: periodRemoves };
   }
   if (draft.contentStatus !== "unchanged") payload.content_status = draft.contentStatus;
   if (draft.contentKind !== "unchanged") payload.content_kind = draft.contentKind;
@@ -53,19 +51,26 @@ export function bulkEditChangeLabels(
   tags: Pick<Tag, "id" | "name">[],
   periods: { id: number; name: string }[]
 ): string[] {
-  const tagNames = draft.tagIds
-    .map((id) => tags.find((tag) => tag.id === id)?.name)
-    .filter((name): name is string => !!name);
   const labels: string[] = [];
-  if (tagNames.length > 0) {
+  for (const [verb, ids] of [
+    ["add", draft.tagAdds],
+    ["remove", draft.tagRemoves],
+  ] as const) {
+    const names = ids
+      .map((id) => tags.find((tag) => tag.id === id)?.name)
+      .filter((name): name is string => !!name);
+    if (names.length === 0) continue;
     labels.push(
-      `${draft.tagAction === "add" ? "add" : "remove"} tag${tagNames.length === 1 ? "" : "s"} ${tagNames.join(", ")}`
+      `${verb} tag${names.length === 1 ? "" : "s"} ${names.join(", ")}`
     );
   }
-  for (const [periodId, mode] of Object.entries(draft.periodModes)) {
-    const name = periods.find((period) => period.id === Number(periodId))?.name;
-    if (name) {
-      labels.push(`${draft.periodAction === "add" ? "attach" : "detach"} ${name} as ${mode}`);
+  for (const [verb, links] of [
+    ["attach", draft.periodAdds],
+    ["detach", draft.periodRemoves],
+  ] as const) {
+    for (const [periodId, mode] of Object.entries(links)) {
+      const name = periods.find((period) => period.id === Number(periodId))?.name;
+      if (name) labels.push(`${verb} ${name} as ${mode}`);
     }
   }
   if (draft.contentStatus !== "unchanged") {

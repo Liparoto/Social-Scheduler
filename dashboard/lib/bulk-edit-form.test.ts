@@ -7,10 +7,10 @@ import {
 } from "./bulk-edit-form.ts";
 
 const unchanged: BulkEditDraft = {
-  tagAction: "add",
-  tagIds: [],
-  periodAction: "add",
-  periodModes: {},
+  tagAdds: [],
+  tagRemoves: [],
+  periodAdds: {},
+  periodRemoves: {},
   contentStatus: "unchanged",
   contentKind: "unchanged",
   cooldownMode: "unchanged",
@@ -20,21 +20,21 @@ const unchanged: BulkEditDraft = {
 test("payload keeps add/remove intent explicit and omits unchanged scalars", () => {
   const payload = buildBulkEditPayload([7, 17, 18], {
     ...unchanged,
-    tagAction: "remove",
-    tagIds: [4, 9],
-    periodAction: "add",
-    periodModes: { 6: "green", 8: "blackout" },
+    tagAdds: [12],
+    tagRemoves: [4, 9],
+    periodAdds: { 6: "green", 8: "blackout" },
+    periodRemoves: { 3: "green" },
   });
 
   assert.deepEqual(payload, {
     post_ids: [7, 17, 18],
-    tags: { add: [], remove: [4, 9] },
+    tags: { add: [12], remove: [4, 9] },
     periods: {
       add: [
         { periodId: 6, mode: "green" },
         { periodId: 8, mode: "blackout" },
       ],
-      remove: [],
+      remove: [{ periodId: 3, mode: "green" }],
     },
   });
 });
@@ -51,22 +51,30 @@ test("confirmation labels name the exact actions", () => {
   const labels = bulkEditChangeLabels(
     {
       ...unchanged,
-      tagAction: "remove",
-      tagIds: [4],
-      periodAction: "add",
-      periodModes: { 6: "green" },
+      tagAdds: [5],
+      tagRemoves: [4],
+      periodAdds: { 6: "green" },
+      periodRemoves: { 7: "blackout" },
       contentStatus: "ready",
       contentKind: "one_time",
       cooldownMode: "custom",
       cooldownDays: 45,
     },
-    [{ id: 4, name: "Football" }],
-    [{ id: 6, name: "Football Season" }]
+    [
+      { id: 4, name: "Football" },
+      { id: 5, name: "Summer" },
+    ],
+    [
+      { id: 6, name: "Football Season" },
+      { id: 7, name: "Holiday Blackout" },
+    ]
   );
 
   assert.deepEqual(labels, [
+    "add tag Summer",
     "remove tag Football",
     "attach Football Season as green",
+    "detach Holiday Blackout as blackout",
     "set status to ready",
     "set kind to one-time",
     "set cooldown to 45 days",

@@ -336,6 +336,23 @@ export function LibraryView({
           <option value="stale">Least recently posted</option>
         </select>
         <span className="data text-[11px] text-muted">showing {shown.length} of {posts.length}</span>
+        <button
+          type="button"
+          onClick={() => setSelected(shown.map((post) => post.id))}
+          disabled={shown.length === 0}
+          className="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+        >
+          Select all {shown.length} shown
+        </button>
+        {selected.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setSelected([])}
+            className="rounded-lg px-2 py-2 text-xs text-muted underline underline-offset-2 hover:text-ink"
+          >
+            Clear selection
+          </button>
+        ) : null}
       </div>
 
       {/* Filter bar */}

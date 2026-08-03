@@ -19,6 +19,17 @@ interface BulkEditModalProps {
   onSaved: (labels: string[]) => void;
 }
 
+function withoutMatchingPeriodLinks(
+  current: Record<number, PeriodMode>,
+  next: Record<number, PeriodMode>
+): Record<number, PeriodMode> {
+  const result = { ...current };
+  for (const [periodId, mode] of Object.entries(next)) {
+    if (result[Number(periodId)] === mode) delete result[Number(periodId)];
+  }
+  return result;
+}
+
 export function BulkEditModal({
   postIds,
   periods,
@@ -27,10 +38,10 @@ export function BulkEditModal({
   onClose,
   onSaved,
 }: BulkEditModalProps) {
-  const [tagAction, setTagAction] = useState<"add" | "remove">("add");
-  const [tagIds, setTagIds] = useState<number[]>([]);
-  const [periodAction, setPeriodAction] = useState<"add" | "remove">("add");
-  const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>({});
+  const [tagAdds, setTagAdds] = useState<number[]>([]);
+  const [tagRemoves, setTagRemoves] = useState<number[]>([]);
+  const [periodAdds, setPeriodAdds] = useState<Record<number, PeriodMode>>({});
+  const [periodRemoves, setPeriodRemoves] = useState<Record<number, PeriodMode>>({});
   const [contentStatus, setContentStatus] = useState<ContentStatus | "unchanged">("unchanged");
   const [contentKind, setContentKind] = useState<ContentKind | "unchanged">("unchanged");
   const [cooldownMode, setCooldownMode] = useState<"unchanged" | "default" | "custom">(
@@ -42,10 +53,10 @@ export function BulkEditModal({
   const [error, setError] = useState<string | null>(null);
 
   const draft: BulkEditDraft = {
-    tagAction,
-    tagIds,
-    periodAction,
-    periodModes,
+    tagAdds,
+    tagRemoves,
+    periodAdds,
+    periodRemoves,
     contentStatus,
     contentKind,
     cooldownMode,
@@ -57,12 +68,26 @@ export function BulkEditModal({
     cooldownMode === "custom" && (!Number.isInteger(cooldownDays) || cooldownDays < 0);
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
-  const actionButton = (active: boolean) =>
-    `rounded-lg border px-3 py-1.5 text-sm font-medium ${
-      active
-        ? "border-brand bg-brand-weak text-brand-strong"
-        : "border-border bg-surface text-muted hover:bg-surface-sunken"
-    }`;
+
+  function chooseTagAdds(ids: number[]) {
+    setTagAdds(ids);
+    setTagRemoves((current) => current.filter((id) => !ids.includes(id)));
+  }
+
+  function chooseTagRemoves(ids: number[]) {
+    setTagRemoves(ids);
+    setTagAdds((current) => current.filter((id) => !ids.includes(id)));
+  }
+
+  function choosePeriodAdds(next: Record<number, PeriodMode>) {
+    setPeriodAdds(next);
+    setPeriodRemoves((current) => withoutMatchingPeriodLinks(current, next));
+  }
+
+  function choosePeriodRemoves(next: Record<number, PeriodMode>) {
+    setPeriodRemoves(next);
+    setPeriodAdds((current) => withoutMatchingPeriodLinks(current, next));
+  }
 
   async function apply() {
     if (labels.length === 0 || cooldownInvalid || busy) return;
@@ -80,6 +105,8 @@ export function BulkEditModal({
         return;
       }
       onSaved(labels);
+    } catch {
+      setError("Could not reach the dashboard. Nothing was changed; try again.");
     } finally {
       setBusy(false);
     }
@@ -149,37 +176,51 @@ export function BulkEditModal({
             </div>
 
             <section className="mt-6 border-t border-border pt-5">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-ink">Tags</h3>
-                  <p className="text-xs text-muted">Choose tags, then say explicitly whether to add or remove them.</p>
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-ink">Tags</h3>
+                <p className="text-xs text-muted">
+                  Add and remove lists are separate. Choosing a tag in one list removes the same tag from the other.
+                </p>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-card border border-status-posted/40 p-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-status-posted">Add tags</p>
+                  <TagEditor
+                    timeOfDayTags={timeOfDayTags}
+                    topicTags={topicTags}
+                    value={tagAdds}
+                    onChange={chooseTagAdds}
+                    allowCreateTopic={false}
+                  />
                 </div>
-                <div className="flex gap-2">
-                  <button type="button" className={actionButton(tagAction === "add")} onClick={() => setTagAction("add")}>Add these tags</button>
-                  <button type="button" className={actionButton(tagAction === "remove")} onClick={() => setTagAction("remove")}>Remove these tags</button>
+                <div className="rounded-card border border-border p-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-soft">Remove tags</p>
+                  <TagEditor
+                    timeOfDayTags={timeOfDayTags}
+                    topicTags={topicTags}
+                    value={tagRemoves}
+                    onChange={chooseTagRemoves}
+                    allowCreateTopic={false}
+                  />
                 </div>
               </div>
-              <TagEditor
-                timeOfDayTags={timeOfDayTags}
-                topicTags={topicTags}
-                value={tagIds}
-                onChange={setTagIds}
-                allowCreateTopic={false}
-              />
             </section>
 
             <section className="mt-6 border-t border-border pt-5">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-ink">Periods</h3>
+                <p className="text-xs text-muted">Choose exact green or blackout links independently for attach and detach.</p>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">
                 <div>
-                  <h3 className="text-sm font-semibold text-ink">Periods</h3>
-                  <p className="text-xs text-muted">Choose the exact green or blackout link to attach or detach.</p>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-posted">Attach periods</p>
+                  <PeriodAttach periods={periods} value={periodAdds} onChange={choosePeriodAdds} />
                 </div>
-                <div className="flex gap-2">
-                  <button type="button" className={actionButton(periodAction === "add")} onClick={() => setPeriodAction("add")}>Attach these periods</button>
-                  <button type="button" className={actionButton(periodAction === "remove")} onClick={() => setPeriodAction("remove")}>Detach these periods</button>
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-soft">Detach periods</p>
+                  <PeriodAttach periods={periods} value={periodRemoves} onChange={choosePeriodRemoves} />
                 </div>
               </div>
-              <PeriodAttach periods={periods} value={periodModes} onChange={setPeriodModes} />
             </section>
 
             <section className="mt-6 border-t border-border pt-5">

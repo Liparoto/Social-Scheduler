@@ -37,8 +37,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "tags must contain add/remove arrays." }, { status: 400 });
     }
     const validTagIds = new Set(listTags().map((tag) => tag.id));
-    const add = parseTagIds(body.tags.add ?? [], (id) => validTagIds.has(id));
-    const remove = parseTagIds(body.tags.remove ?? [], (id) => validTagIds.has(id));
+    const add = parseTagIds(body.tags.add === undefined ? [] : body.tags.add, (id) => validTagIds.has(id));
+    const remove = parseTagIds(body.tags.remove === undefined ? [] : body.tags.remove, (id) => validTagIds.has(id));
     if (add === "invalid" || remove === "invalid") {
       return NextResponse.json({ error: "Invalid tag add/remove list." }, { status: 400 });
     }
@@ -54,8 +54,11 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    const add = parsePeriodLinks(body.periods.add ?? [], getPeriod);
-    const remove = parsePeriodLinks(body.periods.remove ?? [], getPeriod);
+    const add = parsePeriodLinks(body.periods.add === undefined ? [] : body.periods.add, getPeriod);
+    const remove = parsePeriodLinks(
+      body.periods.remove === undefined ? [] : body.periods.remove,
+      getPeriod
+    );
     if (add === "invalid" || remove === "invalid") {
       return NextResponse.json({ error: "Invalid period add/remove list." }, { status: 400 });
     }
