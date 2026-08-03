@@ -1448,6 +1448,97 @@ export function setCaptionVariants(
   tx(variants);
 }
 
+// ---- Bulk content-model edit -----------------------------------------------------
+export interface BulkEditPostsInput {
+  post_ids: number[];
+  tags?: { add: number[]; remove: number[] };
+  periods?: {
+    add: { periodId: number; mode: PeriodMode }[];
+    remove: { periodId: number; mode: PeriodMode }[];
+  };
+  content_status?: ContentStatus;
+  content_kind?: ContentKind;
+  cooldown_days?: number | null;
+}
+
+export interface BulkEditPostsResult {
+  tags_added: number;
+  tags_removed: number;
+  periods_added: number;
+  periods_removed: number;
+  posts_updated: number;
+}
+
+/**
+ * Apply local content-model metadata to several posts in one transaction.
+ *
+ * Tags and periods use exact add/remove pairs so unrelated links are never replaced.
+ * Callers validate foreign keys and scalar values before invoking this write layer.
+ */
+export function bulkEditPosts(input: BulkEditPostsInput): BulkEditPostsResult {
+  const db = getDb();
+  const tx = db.transaction((edit: BulkEditPostsInput): BulkEditPostsResult => {
+    const result: BulkEditPostsResult = {
+      tags_added: 0,
+      tags_removed: 0,
+      periods_added: 0,
+      periods_removed: 0,
+      posts_updated: 0,
+    };
+
+    const deleteTag = db.prepare(
+      "DELETE FROM post_tags WHERE post_id = ? AND tag_id = ?"
+    );
+    const addTag = db.prepare(
+      "INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)"
+    );
+    for (const postId of edit.post_ids) {
+      for (const tagId of edit.tags?.remove ?? []) {
+        result.tags_removed += deleteTag.run(postId, tagId).changes;
+      }
+      for (const tagId of edit.tags?.add ?? []) {
+        result.tags_added += addTag.run(postId, tagId).changes;
+      }
+    }
+
+    const deletePeriod = db.prepare(
+      "DELETE FROM post_periods WHERE post_id = ? AND period_id = ? AND mode = ?"
+    );
+    const addPeriod = db.prepare(
+      "INSERT OR IGNORE INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
+    );
+    for (const postId of edit.post_ids) {
+      for (const link of edit.periods?.remove ?? []) {
+        result.periods_removed += deletePeriod.run(postId, link.periodId, link.mode).changes;
+      }
+      for (const link of edit.periods?.add ?? []) {
+        result.periods_added += addPeriod.run(postId, link.periodId, link.mode).changes;
+      }
+    }
+
+    const scalarFields: Record<string, string | number | null> = {};
+    if (edit.content_status !== undefined) scalarFields.content_status = edit.content_status;
+    if (edit.content_kind !== undefined) scalarFields.content_kind = edit.content_kind;
+    if (edit.cooldown_days !== undefined) scalarFields.cooldown_days = edit.cooldown_days;
+    const scalarKeys = Object.keys(scalarFields);
+    if (scalarKeys.length > 0 && edit.post_ids.length > 0) {
+      const setClause = scalarKeys.map((key) => `${key} = @${key}`).join(", ");
+      const postParams = Object.fromEntries(edit.post_ids.map((id, i) => [`post_${i}`, id]));
+      const postPlaceholders = edit.post_ids.map((_, i) => `@post_${i}`).join(", ");
+      result.posts_updated = db
+        .prepare(
+          `UPDATE posts SET ${setClause}, updated_at = @updated_at
+            WHERE id IN (${postPlaceholders})`
+        )
+        .run({ ...scalarFields, ...postParams, updated_at: nowIso() }).changes;
+    }
+
+    return result;
+  });
+
+  return tx(input);
+}
+
 // ---- Bulk re-target (add/remove one or more channels across many posts) ----------
 /** Idempotent: INSERT OR IGNORE so re-running "add" over already-targeted pairs is a no-op. */
 export function bulkAddTargets(postIds: number[], channelIds: number[]): void {
