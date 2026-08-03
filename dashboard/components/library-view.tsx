@@ -27,8 +27,7 @@ interface PostLite {
   content_kind: "one_time" | "evergreen";
   content_status: "draft" | "ready" | "retired";
   target_count: number;
-  green_period_count: number;
-  blackout_period_count: number;
+  periods: { id: number; name: string; mode: "green" | "blackout" }[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
   target_platforms: string | null;
@@ -502,11 +501,24 @@ export function LibraryView({
                   <span>
                     {p.target_count > 0 ? `→ ${p.target_count} account(s)` : "no targets"}
                   </span>
-                  {p.green_period_count > 0 ? <span>green ×{p.green_period_count}</span> : null}
-                  {p.blackout_period_count > 0 ? (
-                    <span>blackout ×{p.blackout_period_count}</span>
-                  ) : null}
                 </div>
+                {p.periods.length > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {p.periods.map((period) => (
+                      <span
+                        key={`${period.id}-${period.mode}`}
+                        title={period.mode === "green" ? "In-season period" : "Blackout period"}
+                        className={`data rounded-full border px-2 py-0.5 text-[11px] ${
+                          period.mode === "green"
+                            ? "border-status-posted/30 bg-status-posted/10 text-status-posted"
+                            : "border-status-failed/30 bg-status-failed/10 text-status-failed"
+                        }`}
+                      >
+                        {period.name}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {[...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)].length > 0 ? (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {[...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)].map((name) => (

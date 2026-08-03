@@ -947,8 +947,7 @@ export interface PostLibraryRow extends Post {
   posted_count: number;
   last_posted_at: string | null;
   target_count: number;
-  green_period_count: number;
-  blackout_period_count: number;
+  periods: PostLibraryPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
   target_platforms: string | null;
@@ -959,8 +958,15 @@ export interface PostLibraryRow extends Post {
   queued_publication_count: number;
 }
 
+export interface PostLibraryPeriod {
+  id: number;
+  name: string;
+  mode: PeriodMode;
+}
+
 export function listPosts(limit = 200): PostLibraryRow[] {
-  return getDb()
+  const db = getDb();
+  const posts = db
     .prepare(
       `SELECT p.*,
          (SELECT pa.asset_id FROM post_assets pa WHERE pa.post_id = p.id
@@ -984,10 +990,6 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT MAX(pub.published_at) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status = 'posted') AS last_posted_at,
          (SELECT COUNT(*) FROM post_targets pt WHERE pt.post_id = p.id) AS target_count,
-         (SELECT COUNT(*) FROM post_periods pp WHERE pp.post_id = p.id
-            AND pp.mode = 'green') AS green_period_count,
-         (SELECT COUNT(*) FROM post_periods pp WHERE pp.post_id = p.id
-            AND pp.mode = 'blackout') AS blackout_period_count,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
             WHERE pt.post_id = p.id AND t.kind = 'time_of_day') AS time_of_day_tags,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
@@ -1000,7 +1002,33 @@ export function listPosts(limit = 200): PostLibraryRow[] {
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`
     )
-    .all(limit) as PostLibraryRow[];
+    .all(limit) as Omit<PostLibraryRow, "periods">[];
+
+  if (posts.length === 0) return [];
+
+  // Fetch every visible post's period rows together. Keeping this as one batched query
+  // avoids a getPostPeriods() call per card and leaves room to add more period fields later.
+  const placeholders = posts.map(() => "?").join(",");
+  const periodRows = db
+    .prepare(
+      `SELECT pp.post_id, p.id, p.name, pp.mode
+         FROM post_periods pp
+         JOIN periods p ON p.id = pp.period_id
+        WHERE pp.post_id IN (${placeholders})
+        ORDER BY p.name COLLATE NOCASE ASC, p.id ASC, pp.mode ASC`
+    )
+    .all(...posts.map((post) => post.id)) as (PostLibraryPeriod & { post_id: number })[];
+  const periodsByPost = new Map<number, PostLibraryPeriod[]>();
+  for (const { post_id, id, name, mode } of periodRows) {
+    const periods = periodsByPost.get(post_id) ?? [];
+    periods.push({ id, name, mode });
+    periodsByPost.set(post_id, periods);
+  }
+
+  return posts.map((post) => ({
+    ...post,
+    periods: periodsByPost.get(post.id) ?? [],
+  }));
 }
 
 export interface BulkEntry {
