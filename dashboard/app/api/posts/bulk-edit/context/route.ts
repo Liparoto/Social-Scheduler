@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBulkEditContext, getPost } from "@/lib/queries";
+import { getBulkEditContext, getExistingPostIds } from "@/lib/queries";
 
 export const runtime = "nodejs";
 
@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
   }
 
   const postIds = [...new Set<number>(body.post_ids)];
-  const unknownPostId = postIds.find((id) => !getPost(id));
+  const existingPostIds = new Set(getExistingPostIds(postIds));
+  const unknownPostId = postIds.find((id) => !existingPostIds.has(id));
   if (unknownPostId !== undefined) {
     return NextResponse.json({ error: `Unknown post ${unknownPostId}.` }, { status: 400 });
   }

@@ -83,3 +83,19 @@ test("bulk edit context safely handles an empty selection", () => {
     cooldowns: [],
   });
 });
+
+test("existing post ids use one deduplicated deterministic result", () => {
+  const postA = q.createDraftPost({
+    caption: "bulk-existing-a",
+    first_comment: "",
+    asset_ids: [],
+  });
+  const postB = q.createDraftPost({
+    caption: "bulk-existing-b",
+    first_comment: "",
+    asset_ids: [],
+  });
+
+  assert.deepEqual(q.getExistingPostIds([postB, 999999, postA, postB]), [postA, postB]);
+  assert.deepEqual(q.getExistingPostIds([]), []);
+});

@@ -1458,6 +1458,18 @@ export interface BulkEditContext {
   cooldowns: { value: number | null; count: number }[];
 }
 
+/** Return the selected post ids that exist using one parameterized database query. */
+export function getExistingPostIds(postIds: number[]): number[] {
+  const uniquePostIds = [...new Set(postIds)];
+  if (uniquePostIds.length === 0) return [];
+
+  const placeholders = uniquePostIds.map(() => "?").join(", ");
+  const rows = getDb()
+    .prepare(`SELECT id FROM posts WHERE id IN (${placeholders}) ORDER BY id`)
+    .all(...uniquePostIds) as { id: number }[];
+  return rows.map((row) => row.id);
+}
+
 /** Summarize the metadata currently attached to a selected set of posts. */
 export function getBulkEditContext(postIds: number[]): BulkEditContext {
   const uniquePostIds = [...new Set(postIds)];

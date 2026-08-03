@@ -38,8 +38,14 @@ q.createDraftPost({
 
 const { POST } = await import("../app/api/posts/bulk-edit/context/route.ts");
 
-function linkCount(table: "post_tags" | "post_periods"): number {
-  return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+function readStoredRows() {
+  return {
+    posts: db.prepare("SELECT * FROM posts WHERE id IN (?, ?) ORDER BY id").all(postA, postB),
+    tags: db.prepare("SELECT * FROM post_tags ORDER BY post_id, tag_id").all(),
+    periods: db
+      .prepare("SELECT * FROM post_periods ORDER BY post_id, period_id, mode")
+      .all(),
+  };
 }
 
 async function post(body: unknown) {
@@ -98,8 +104,7 @@ test("an unknown post id is rejected before context is returned", async () => {
 });
 
 test("a duplicate selection returns deduplicated context without writing links", async () => {
-  const beforeTags = linkCount("post_tags");
-  const beforePeriods = linkCount("post_periods");
+  const before = readStoredRows();
 
   const response = await post({ post_ids: [postA, postB, postA] });
 
@@ -112,6 +117,5 @@ test("a duplicate selection returns deduplicated context without writing links",
     content_kinds: [{ value: "evergreen", count: 2 }],
     cooldowns: [{ value: null, count: 2 }],
   });
-  assert.equal(linkCount("post_tags"), beforeTags);
-  assert.equal(linkCount("post_periods"), beforePeriods);
+  assert.deepEqual(readStoredRows(), before);
 });
