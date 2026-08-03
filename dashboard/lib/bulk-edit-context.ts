@@ -9,6 +9,42 @@ export interface BulkEditContext {
   cooldowns: { value: number | null; count: number }[];
 }
 
+export interface BulkContextLoadState {
+  context: BulkEditContext | null;
+  loading: boolean;
+  error: string | null;
+}
+
+export type BulkContextLoadAction =
+  | { type: "start" }
+  | { type: "success"; context: BulkEditContext }
+  | { type: "error"; error: string };
+
+export function bulkContextLoadReducer(
+  state: BulkContextLoadState,
+  action: BulkContextLoadAction,
+): BulkContextLoadState {
+  if (action.type === "start") return { context: null, loading: true, error: null };
+  if (action.type === "success") {
+    return { context: action.context, loading: false, error: null };
+  }
+  return { context: null, loading: false, error: action.error };
+}
+
+export function bulkReviewReady(
+  changeCount: number,
+  cooldownInvalid: boolean,
+  contextState: BulkContextLoadState,
+): boolean {
+  return (
+    changeCount > 0 &&
+    !cooldownInvalid &&
+    !contextState.loading &&
+    !contextState.error &&
+    contextState.context !== null
+  );
+}
+
 function normalizedCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }

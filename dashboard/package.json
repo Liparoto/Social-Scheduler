@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --conditions=react-server --import ./test/hook.mjs --test --test-concurrency=1 \"lib/*.test.ts\" \"test/*.test.ts\""
+    "test": "node --import ./test/hook.mjs --test --test-concurrency=1 test/bulk-edit-context-ui.test.ts && SKIP_UI_RENDER=1 node --conditions=react-server --import ./test/hook.mjs --test --test-concurrency=1 \"lib/*.test.ts\" \"test/*.test.ts\""
   },
   "dependencies": {
     "better-sqlite3": "^13.0.1",

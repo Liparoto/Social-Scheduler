@@ -1,7 +1,15 @@
 import { registerHooks } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const dashboardRoot = new URL("../", import.meta.url);
+const clientReactModules = new Map([
+  ["react", new URL("../node_modules/react/index.js", import.meta.url)],
+  ["react/jsx-runtime", new URL("../node_modules/react/jsx-runtime.js", import.meta.url)],
+  ["react/jsx-dev-runtime", new URL("../node_modules/react/jsx-dev-runtime.js", import.meta.url)],
+  ["react-dom/server", new URL("../node_modules/react-dom/server.node.js", import.meta.url)],
+]);
 
 // Next's bundler resolves extensionless relative imports ("./db"); Node's ESM resolver
 // does not, so importing lib/queries.ts directly fails on its own internal imports.
@@ -9,11 +17,18 @@ const dashboardRoot = new URL("../", import.meta.url);
 // genuine extensionless file (or a package) still resolves normally.
 registerHooks({
   resolve(spec, ctx, next) {
+    const clientReactModule = clientReactModules.get(spec);
+    if (clientReactModule) return next(clientReactModule.href, ctx);
     if (spec === "next/server") return next("next/server.js", ctx);
+    if (spec === "next/link") {
+      return next(new URL("./react-link-stub.mjs", import.meta.url).href, ctx);
+    }
     if (spec.startsWith("@/")) {
       const bare = new URL(spec.slice(2), dashboardRoot);
       const ts = new URL(spec.slice(2) + ".ts", dashboardRoot);
+      const tsx = new URL(spec.slice(2) + ".tsx", dashboardRoot);
       if (!existsSync(bare) && existsSync(ts)) return next(ts.href, ctx);
+      if (!existsSync(bare) && existsSync(tsx)) return next(tsx.href, ctx);
       return next(bare.href, ctx);
     }
     if (spec.startsWith(".") && !/\.[a-z]+$/i.test(spec)) {
@@ -22,5 +37,23 @@ registerHooks({
       if (!existsSync(bare) && existsSync(ts)) return next(spec + ".ts", ctx);
     }
     return next(spec, ctx);
+  },
+  load(url, ctx, next) {
+    if (url.endsWith(".tsx")) {
+      const source = readFileSync(fileURLToPath(url), "utf8");
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: ts.transpileModule(source, {
+          compilerOptions: {
+            jsx: ts.JsxEmit.ReactJSX,
+            module: ts.ModuleKind.ESNext,
+            target: ts.ScriptTarget.ES2022,
+          },
+          fileName: fileURLToPath(url),
+        }).outputText,
+      };
+    }
+    return next(url, ctx);
   },
 });

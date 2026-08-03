@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
 import {
+  bulkContextLoadReducer,
+  bulkReviewReady,
   coverageLabel,
   coverageState,
   type BulkEditContext,
@@ -62,6 +64,39 @@ function CurrentValueRow({
   );
 }
 
+export function CurrentSelectionSummary({ context }: { context: BulkEditContext }) {
+  const total = context.post_count;
+  return (
+    <div className="mb-4 space-y-2 rounded-lg border border-border bg-surface-sunken p-4" aria-label="Current values on selected posts">
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-soft">Current selection</p>
+      <CurrentValueRow
+        label="Status"
+        total={total}
+        values={context.content_statuses.map((row) => ({
+          label: { ready: "Ready", draft: "Draft", retired: "Retired" }[row.value],
+          count: row.count,
+        }))}
+      />
+      <CurrentValueRow
+        label="Kind"
+        total={total}
+        values={context.content_kinds.map((row) => ({
+          label: row.value === "one_time" ? "One-time" : "Evergreen",
+          count: row.count,
+        }))}
+      />
+      <CurrentValueRow
+        label="Cooldown"
+        total={total}
+        values={context.cooldowns.map((row) => ({
+          label: row.value === null ? "Channel default" : `${row.value} day${row.value === 1 ? "" : "s"}`,
+          count: row.count,
+        }))}
+      />
+    </div>
+  );
+}
+
 function withoutMatchingPeriodLinks(
   current: Record<number, PeriodMode>,
   next: Record<number, PeriodMode>
@@ -94,14 +129,18 @@ export function BulkEditModal({
   const [reviewing, setReviewing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [context, setContext] = useState<BulkEditContext | null>(null);
-  const [contextLoading, setContextLoading] = useState(true);
-  const [contextError, setContextError] = useState<string | null>(null);
+  const [contextState, dispatchContext] = useReducer(bulkContextLoadReducer, {
+    context: null,
+    loading: true,
+    error: null,
+  });
   const [retryAttempt, setRetryAttempt] = useState(0);
   const contextRequestBody = JSON.stringify({ post_ids: postIds });
+  const { context, loading: contextLoading, error: contextError } = contextState;
 
   useEffect(() => {
     const controller = new AbortController();
+    dispatchContext({ type: "start" });
 
     async function loadContext() {
       try {
@@ -125,14 +164,13 @@ export function BulkEditModal({
         ) {
           throw new Error("The existing metadata response was incomplete.");
         }
-        setContext(body as BulkEditContext);
+        dispatchContext({ type: "success", context: body as BulkEditContext });
       } catch (loadError) {
         if (controller.signal.aborted) return;
-        setContextError(
-          loadError instanceof Error ? loadError.message : "Could not load existing metadata.",
-        );
-      } finally {
-        if (!controller.signal.aborted) setContextLoading(false);
+        dispatchContext({
+          type: "error",
+          error: loadError instanceof Error ? loadError.message : "Could not load existing metadata.",
+        });
       }
     }
 
@@ -161,6 +199,7 @@ export function BulkEditModal({
   const selectedPostCount = context?.post_count ?? 0;
   const cooldownInvalid =
     cooldownMode === "custom" && (!Number.isInteger(cooldownDays) || cooldownDays < 0);
+  const reviewReady = bulkReviewReady(labels.length, cooldownInvalid, contextState);
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
 
@@ -185,9 +224,6 @@ export function BulkEditModal({
   }
 
   function retryContext() {
-    setContext(null);
-    setContextLoading(true);
-    setContextError(null);
     setRetryAttempt((attempt) => attempt + 1);
   }
 
@@ -390,33 +426,7 @@ export function BulkEditModal({
             <section className="mt-6 border-t border-border pt-5">
               <h3 className="text-sm font-semibold text-ink">Set shared values</h3>
               <p className="mb-3 text-xs text-muted">Leave a field unchanged to preserve each post&apos;s current value.</p>
-              <div className="mb-4 space-y-2 rounded-lg border border-border bg-surface-sunken p-4" aria-label="Current values on selected posts">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-soft">Current selection</p>
-                <CurrentValueRow
-                  label="Status"
-                  total={selectedPostCount}
-                  values={context.content_statuses.map((row) => ({
-                    label: { ready: "Ready", draft: "Draft", retired: "Retired" }[row.value],
-                    count: row.count,
-                  }))}
-                />
-                <CurrentValueRow
-                  label="Kind"
-                  total={selectedPostCount}
-                  values={context.content_kinds.map((row) => ({
-                    label: row.value === "one_time" ? "One-time" : "Evergreen",
-                    count: row.count,
-                  }))}
-                />
-                <CurrentValueRow
-                  label="Cooldown"
-                  total={selectedPostCount}
-                  values={context.cooldowns.map((row) => ({
-                    label: row.value === null ? "Channel default" : `${row.value} day${row.value === 1 ? "" : "s"}`,
-                    count: row.count,
-                  }))}
-                />
-              </div>
+              <CurrentSelectionSummary context={context} />
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="text-xs text-ink-soft">
                   <span className="mb-1 block">Status</span>
@@ -466,7 +476,7 @@ export function BulkEditModal({
                 <button
                   type="button"
                   onClick={() => setReviewing(true)}
-                  disabled={labels.length === 0 || cooldownInvalid || contextLoading || Boolean(contextError) || !context}
+                  disabled={!reviewReady}
                   className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink disabled:opacity-50"
                 >
                   Review changes

@@ -18,6 +18,7 @@ import type {
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
+import type { BulkEditContext } from "./bulk-edit-context";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -1449,15 +1450,6 @@ export function setCaptionVariants(
 }
 
 // ---- Bulk content-model context --------------------------------------------------
-export interface BulkEditContext {
-  post_count: number;
-  tags: { tag_id: number; count: number }[];
-  periods: { period_id: number; mode: PeriodMode; count: number }[];
-  content_statuses: { value: ContentStatus; count: number }[];
-  content_kinds: { value: ContentKind; count: number }[];
-  cooldowns: { value: number | null; count: number }[];
-}
-
 /** Return the selected post ids that exist using one parameterized database query. */
 export function getExistingPostIds(postIds: number[]): number[] {
   const uniquePostIds = [...new Set(postIds)];
