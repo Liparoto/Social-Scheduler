@@ -22,11 +22,13 @@ export function TagEditor({
   topicTags,
   value,
   onChange,
+  allowCreateTopic = true,
 }: {
   timeOfDayTags: Tag[];
   topicTags: Tag[];
   value: number[];
   onChange: (ids: number[]) => void;
+  allowCreateTopic?: boolean;
 }) {
   const [topics, setTopics] = useState<Tag[]>(topicTags);
   const [draft, setDraft] = useState("");
@@ -75,7 +77,7 @@ export function TagEditor({
           ))}
         </div>
         <p className="mt-1 text-xs text-faint">
-          Sets when auto-fill posts this. Anytime (or none) uses the channel's default time.
+          Sets when auto-fill posts this. Anytime (or none) uses the channel&apos;s default time.
         </p>
       </div>
 
@@ -88,28 +90,30 @@ export function TagEditor({
             </button>
           ))}
         </div>
-        <div className="mt-2 flex gap-2">
-          <input
-            className="w-48 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-faint focus:border-brand"
-            placeholder="Add a topic…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addTopic();
-              }
-            }}
-          />
-          <button
-            type="button"
-            onClick={addTopic}
-            disabled={busy || !draft.trim()}
-            className="rounded-lg border border-border px-3 py-1.5 text-sm text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
-          >
-            Add
-          </button>
-        </div>
+        {allowCreateTopic ? (
+          <div className="mt-2 flex gap-2">
+            <input
+              className="w-48 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-faint focus:border-brand"
+              placeholder="Add a topic…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addTopic();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={addTopic}
+              disabled={busy || !draft.trim()}
+              className="rounded-lg border border-border px-3 py-1.5 text-sm text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
+            >
+              Add
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listPosts, getActiveChannels } from "@/lib/queries";
+import { getActiveChannels, listPeriods, listPosts, listTags } from "@/lib/queries";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { LibraryView } from "@/components/library-view";
 
@@ -76,7 +76,13 @@ export default function LibraryPage() {
             .
           </EmptyState>
         ) : (
-          <LibraryView posts={posts} channels={channels} />
+          <LibraryView
+            posts={posts}
+            channels={channels}
+            periods={listPeriods()}
+            timeOfDayTags={listTags("time_of_day")}
+            topicTags={listTags("topic")}
+          />
         )}
       </div>
     </div>
