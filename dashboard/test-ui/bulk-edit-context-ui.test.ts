@@ -13,7 +13,6 @@ import {
 import type { Period, Tag } from "../lib/types.ts";
 
 const noop = () => {};
-const renderTest = process.env.SKIP_UI_RENDER ? test.skip : test;
 
 const tags: Tag[] = [
   { id: 1, name: "morning", kind: "time_of_day" },
@@ -64,7 +63,7 @@ const context: BulkEditContext = {
   ],
 };
 
-renderTest("TagEditor keeps legacy rendering when coverage is omitted", () => {
+test("TagEditor keeps legacy rendering when coverage is omitted", () => {
   const html = renderToStaticMarkup(
     React.createElement(TagEditor, {
       timeOfDayTags: tags.filter((tag) => tag.kind === "time_of_day"),
@@ -79,7 +78,7 @@ renderTest("TagEditor keeps legacy rendering when coverage is omitted", () => {
   assert.doesNotMatch(html, /All 3|1 of 3|None/);
 });
 
-renderTest("TagEditor filters and sorts remove coverage and disables full add coverage", () => {
+test("TagEditor filters and sorts remove coverage and disables full add coverage", () => {
   const removeHtml = renderToStaticMarkup(
     React.createElement(TagEditor, {
       timeOfDayTags: [],
@@ -113,7 +112,7 @@ renderTest("TagEditor filters and sorts remove coverage and disables full add co
   assert.doesNotMatch(addHtml, /<button[^>]*disabled=""[^>]*>Partial/);
 });
 
-renderTest("PeriodAttach preserves legacy classes without coverage", () => {
+test("PeriodAttach preserves legacy classes without coverage", () => {
   const html = renderToStaticMarkup(
     React.createElement(PeriodAttach, { periods: periods.slice(0, 1), value: {}, onChange: noop }),
   );
@@ -123,7 +122,7 @@ renderTest("PeriodAttach preserves legacy classes without coverage", () => {
   assert.doesNotMatch(html, /All 3|1 of 3|None/);
 });
 
-renderTest("PeriodAttach keeps exact coverage modes separate", () => {
+test("PeriodAttach keeps exact coverage modes separate", () => {
   const removeHtml = renderToStaticMarkup(
     React.createElement(PeriodAttach, {
       periods,
@@ -153,7 +152,7 @@ renderTest("PeriodAttach keeps exact coverage modes separate", () => {
   assert.doesNotMatch(addHtml, /<button[^>]*disabled=""[^>]*>Blackout/);
 });
 
-renderTest("current selection summary humanizes scalar values and coverage", () => {
+test("current selection summary humanizes scalar values and coverage", () => {
   const html = renderToStaticMarkup(React.createElement(CurrentSelectionSummary, { context }));
 
   for (const label of ["Ready", "Draft", "Evergreen", "Channel default", "1 day"]) {
