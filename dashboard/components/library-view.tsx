@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { matchesPeriodFilter } from "@/lib/library-period-filter";
+import {
+  librarySeasonStatus,
+  type LibrarySeasonPeriod,
+  type LibrarySeasonStatus,
+} from "@/lib/library-season-status";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
@@ -28,7 +33,7 @@ interface PostLite {
   content_kind: "one_time" | "evergreen";
   content_status: "draft" | "ready" | "retired";
   target_count: number;
-  periods: { id: number; name: string; mode: "green" | "blackout" }[];
+  periods: LibrarySeasonPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
   target_platforms: string | null;
@@ -63,9 +68,13 @@ function tomorrow(): string {
 export function LibraryView({
   posts,
   channels,
+  evaluationDate,
+  evaluationTimezone,
 }: {
   posts: PostLite[];
   channels: ChannelLite[];
+  evaluationDate: string;
+  evaluationTimezone: string;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<number[]>([]); // ordered = post order
@@ -256,6 +265,14 @@ export function LibraryView({
     return sort === "recent" ? bv.localeCompare(av) : av.localeCompare(bv);
   });
 
+  const readySeasonStatusClass: Record<LibrarySeasonStatus, string> = {
+    Live: "border-status-posted/30 bg-status-posted/10 text-status-posted",
+    Dormant: "border-status-scheduled/30 bg-status-scheduled/10 text-status-scheduled",
+    Blocked: "border-status-failed/30 bg-status-failed/10 text-status-failed",
+    Draft: "",
+    Retired: "",
+  };
+
   return (
     <div className="space-y-5">
       {/* Summary: whole-library makeup */}
@@ -364,6 +381,7 @@ export function LibraryView({
           {periodFilter.size > 0 ? (
             <button
               onClick={() => setPeriodFilter(new Set())}
+              aria-label="Clear period filters"
               className="text-[11px] text-faint underline underline-offset-2"
             >
               Clear
@@ -428,6 +446,11 @@ export function LibraryView({
         {sorted.map((p) => {
           const on = selected.includes(p.id);
           const order = selected.indexOf(p.id) + 1;
+          const seasonStatus = librarySeasonStatus(p.content_status, p.periods, evaluationDate);
+          const seasonTitle =
+            p.content_status === "ready"
+              ? `Advisory season status for ${evaluationDate} in ${evaluationTimezone}. The worker evaluates eligibility using each target channel's timezone.`
+              : undefined;
           return (
             <div
               key={p.id}
@@ -534,21 +557,18 @@ export function LibraryView({
                 </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.content_kind === "evergreen" ? "Evergreen" : "One-time"}</span>
-                  <span
-                    className={
-                      p.content_status === "ready"
-                        ? "text-status-posted"
-                        : p.content_status === "draft"
-                          ? "text-muted"
-                          : "text-faint"
-                    }
-                  >
-                    {p.content_status === "ready"
-                      ? "Ready"
-                      : p.content_status === "draft"
-                        ? "Draft"
-                        : "Retired"}
-                  </span>
+                  {p.content_status === "ready" ? (
+                    <span
+                      title={seasonTitle}
+                      className={`rounded-full border px-1.5 py-px ${readySeasonStatusClass[seasonStatus]}`}
+                    >
+                      {seasonStatus}
+                    </span>
+                  ) : (
+                    <span className={p.content_status === "draft" ? "text-muted" : "text-faint"}>
+                      {seasonStatus}
+                    </span>
+                  )}
                   <span>
                     {p.target_count > 0 ? `→ ${p.target_count} account(s)` : "no targets"}
                   </span>

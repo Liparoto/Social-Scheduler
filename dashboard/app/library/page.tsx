@@ -2,10 +2,13 @@ import Link from "next/link";
 import { listPosts, getActiveChannels } from "@/lib/queries";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { LibraryView } from "@/components/library-view";
+import { config } from "@/lib/config";
+import { localDate } from "@/lib/periods";
 
 export const dynamic = "force-dynamic";
 
 export default function LibraryPage() {
+  const evaluationDate = localDate(new Date(), config.defaultTimezone);
   const posts = listPosts().map((p) => ({
     id: p.id,
     caption: p.caption,
@@ -75,7 +78,12 @@ export default function LibraryPage() {
             .
           </EmptyState>
         ) : (
-          <LibraryView posts={posts} channels={channels} />
+          <LibraryView
+            posts={posts}
+            channels={channels}
+            evaluationDate={evaluationDate}
+            evaluationTimezone={config.defaultTimezone}
+          />
         )}
       </div>
     </div>

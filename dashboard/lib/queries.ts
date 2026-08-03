@@ -18,6 +18,7 @@ import type {
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
+import type { PeriodWindow } from "./periods";
 
 // ---- Channels -------------------------------------------------------------------
 export function getChannels(): Channel[] {
@@ -958,7 +959,7 @@ export interface PostLibraryRow extends Post {
   queued_publication_count: number;
 }
 
-export interface PostLibraryPeriod {
+export interface PostLibraryPeriod extends PeriodWindow {
   id: number;
   name: string;
   mode: PeriodMode;
@@ -1011,7 +1012,9 @@ export function listPosts(limit = 200): PostLibraryRow[] {
   const placeholders = posts.map(() => "?").join(",");
   const periodRows = db
     .prepare(
-      `SELECT pp.post_id, p.id, p.name, pp.mode
+      `SELECT pp.post_id, p.id, p.name, pp.mode,
+              p.recurs_yearly, p.start_month, p.start_day, p.end_month, p.end_day,
+              p.start_date, p.end_date
          FROM post_periods pp
          JOIN periods p ON p.id = pp.period_id
         WHERE pp.post_id IN (${placeholders})
@@ -1019,9 +1022,9 @@ export function listPosts(limit = 200): PostLibraryRow[] {
     )
     .all(...posts.map((post) => post.id)) as (PostLibraryPeriod & { post_id: number })[];
   const periodsByPost = new Map<number, PostLibraryPeriod[]>();
-  for (const { post_id, id, name, mode } of periodRows) {
+  for (const { post_id, ...period } of periodRows) {
     const periods = periodsByPost.get(post_id) ?? [];
-    periods.push({ id, name, mode });
+    periods.push(period);
     periodsByPost.set(post_id, periods);
   }
 
