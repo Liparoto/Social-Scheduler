@@ -6,6 +6,7 @@ import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
 import { matchesPeriodFilter } from "@/lib/library-period-filter";
 import {
+  librarySeasonBadgeDetails,
   librarySeasonStatus,
   type LibrarySeasonPeriod,
   type LibrarySeasonStatus,
@@ -269,6 +270,8 @@ export function LibraryView({
     Live: "border-status-posted/30 bg-status-posted/10 text-status-posted",
     Dormant: "border-status-scheduled/30 bg-status-scheduled/10 text-status-scheduled",
     Blocked: "border-status-failed/30 bg-status-failed/10 text-status-failed",
+    "Invalid period":
+      "border-status-publishing/40 bg-status-publishing/10 text-status-publishing",
     Draft: "",
     Retired: "",
   };
@@ -447,10 +450,15 @@ export function LibraryView({
           const on = selected.includes(p.id);
           const order = selected.indexOf(p.id) + 1;
           const seasonStatus = librarySeasonStatus(p.content_status, p.periods, evaluationDate);
-          const seasonTitle =
+          const badgeDetails =
             p.content_status === "ready"
-              ? `Advisory season status for ${evaluationDate} in ${evaluationTimezone}. The worker evaluates eligibility using each target channel's timezone.`
-              : undefined;
+              ? librarySeasonBadgeDetails(
+                  p.id,
+                  seasonStatus,
+                  evaluationDate,
+                  evaluationTimezone
+                )
+              : null;
           return (
             <div
               key={p.id}
@@ -557,13 +565,18 @@ export function LibraryView({
                 </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.content_kind === "evergreen" ? "Evergreen" : "One-time"}</span>
-                  {p.content_status === "ready" ? (
-                    <span
-                      title={seasonTitle}
-                      className={`rounded-full border px-1.5 py-px ${readySeasonStatusClass[seasonStatus]}`}
-                    >
-                      {seasonStatus}
-                    </span>
+                  {p.content_status === "ready" && badgeDetails ? (
+                    <>
+                      <span
+                        {...badgeDetails.badgeProps}
+                        className={`rounded-full border px-1.5 py-px ${readySeasonStatusClass[seasonStatus]}`}
+                      >
+                        {seasonStatus}
+                      </span>
+                      <span id={badgeDetails.descriptionId} className="sr-only">
+                        {badgeDetails.description}
+                      </span>
+                    </>
                   ) : (
                     <span className={p.content_status === "draft" ? "text-muted" : "text-faint"}>
                       {seasonStatus}

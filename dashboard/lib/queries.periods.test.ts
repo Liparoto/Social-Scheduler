@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makeTestDb } from "../test/helpers.ts";
+import { librarySeasonStatus } from "./library-season-status.ts";
 
 test("listPosts includes complete recurring and one-off period windows", async () => {
   makeTestDb();
@@ -58,4 +59,33 @@ test("listPosts includes complete recurring and one-off period windows", async (
       end_date: null,
     },
   ]);
+
+  const malformed = q.createPeriod({
+    name: "Malformed one-off",
+    recurs_yearly: false,
+    start_date: "2026-02-30",
+    end_date: "2026-03-02",
+  });
+  const malformedPostId = q.createDraftPost({
+    caption: "Malformed seasonal post",
+    first_comment: "",
+    post_type: "text",
+    asset_ids: [],
+    period_links: [{ periodId: malformed, mode: "green" }],
+  });
+  const livePostId = q.createDraftPost({
+    caption: "Unaffected post",
+    first_comment: "",
+    post_type: "text",
+    asset_ids: [],
+  });
+  q.updatePostContentModel(malformedPostId, { content_status: "ready" });
+  q.updatePostContentModel(livePostId, { content_status: "ready" });
+
+  const statuses = q
+    .listPosts()
+    .filter((row) => row.id === malformedPostId || row.id === livePostId)
+    .sort((a, b) => a.id - b.id)
+    .map((row) => librarySeasonStatus(row.content_status, row.periods, "2026-08-03"));
+  assert.deepEqual(statuses, ["Invalid period", "Live"]);
 });

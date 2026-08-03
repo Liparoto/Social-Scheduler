@@ -9,22 +9,26 @@ export interface PeriodWindow {
   end_date: string | null;
 }
 
+/** Validation failures callers may safely turn into an invalid-period verdict. */
+export class PeriodWindowTypeError extends TypeError {}
+export class PeriodWindowRangeError extends RangeError {}
+
 function monthDay(month: number, day: number): number {
   return month * 100 + day;
 }
 
 function recurringInteger(value: unknown, label: string): number {
   if (!Number.isInteger(value)) {
-    throw new TypeError(`${label} must be an integer`);
+    throw new PeriodWindowTypeError(`${label} must be an integer`);
   }
   return value as number;
 }
 
-function assertIsoCalendarDate(value: string | null, label: string): asserts value is string {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
-  if (!match) {
-    throw new RangeError(`${label} must be a valid YYYY-MM-DD calendar date`);
-  }
+/** Return whether a value is a real calendar date in strict YYYY-MM-DD form. */
+export function isIsoCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
 
   const year = Number(match[1]);
   const month = Number(match[2]);
@@ -32,8 +36,25 @@ function assertIsoCalendarDate(value: string | null, label: string): asserts val
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-  if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) {
-    throw new RangeError(`${label} must be a valid YYYY-MM-DD calendar date`);
+  return !(
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1]
+  );
+}
+
+export function hasValidOneOffPeriodDates(period: {
+  start_date?: unknown;
+  end_date?: unknown;
+}): boolean {
+  return isIsoCalendarDate(period.start_date) && isIsoCalendarDate(period.end_date);
+}
+
+function assertIsoCalendarDate(value: string | null, label: string): asserts value is string {
+  if (!isIsoCalendarDate(value)) {
+    throw new PeriodWindowRangeError(`${label} must be a valid YYYY-MM-DD calendar date`);
   }
 }
 

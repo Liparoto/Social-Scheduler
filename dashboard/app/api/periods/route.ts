@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPeriod, listPeriods } from "@/lib/queries";
+import { hasValidOneOffPeriodDates } from "@/lib/periods";
 
 export const runtime = "nodejs";
 
@@ -44,10 +45,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ id }, { status: 201 });
   }
 
-  const isoDate = /^\d{4}-\d{2}-\d{2}$/;
-  if (!isoDate.test(body.start_date) || !isoDate.test(body.end_date)) {
+  if (!hasValidOneOffPeriodDates(body)) {
     return NextResponse.json(
-      { error: "One-off periods require start_date/end_date as ISO YYYY-MM-DD." },
+      { error: "One-off periods require valid start_date/end_date calendar dates." },
       { status: 400 }
     );
   }

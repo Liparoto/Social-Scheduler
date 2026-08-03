@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  hasValidOneOffPeriodDates,
   inSeason,
+  isIsoCalendarDate,
   localDate,
   periodContains,
   type PeriodWindow,
@@ -112,6 +114,26 @@ test("leap day is accepted only in a leap year", () => {
   assert.throws(
     () => periodContains(oneOff("2027-02-29", "2027-02-29"), "2027-02-28"),
     RangeError
+  );
+});
+
+test("strict ISO calendar validation rejects impossible one-off write dates", () => {
+  assert.equal(isIsoCalendarDate("2026-02-30"), false);
+  assert.equal(isIsoCalendarDate("2026-2-03"), false);
+  assert.equal(isIsoCalendarDate("2028-02-29"), true);
+});
+
+test("one-off write validation checks the complete merged PATCH shape", () => {
+  const current = { start_date: "2026-02-28", end_date: "2026-03-02" };
+
+  assert.equal(hasValidOneOffPeriodDates(current), true);
+  assert.equal(
+    hasValidOneOffPeriodDates({ ...current, start_date: "2026-02-30" }),
+    false
+  );
+  assert.equal(
+    hasValidOneOffPeriodDates({ ...current, end_date: "2026-03-40" }),
+    false
   );
 });
 
