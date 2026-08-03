@@ -69,11 +69,17 @@ async function main() {
   const dbPath = process.env.DATABASE_PATH;
   assert(dbPath, "DATABASE_PATH was not set before import");
 
-  // 1) Apply migrations 0001 + 0002 directly against the temp DB file.
+  // 1) Apply the current schema to the temp DB file. The query layer evolves with later
+  // migrations too, so limiting this content-model smoke test to 0001 + 0002 eventually
+  // leaves its scratch schema too old to exercise today's queries.
   const { default: Database } = await import("better-sqlite3");
   const migrationDb = new Database(dbPath);
   migrationDb.pragma("foreign_keys = ON");
-  for (const file of ["0001_init.sql", "0002_content_model.sql"]) {
+  const migrationFiles = fs
+    .readdirSync(path.join(repoRoot, "migrations"))
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+  for (const file of migrationFiles) {
     const sql = fs.readFileSync(path.join(repoRoot, "migrations", file), "utf8");
     migrationDb.exec(sql);
   }
@@ -217,17 +223,42 @@ async function main() {
   assert(finalPost.content_kind === "one_time", "content_kind was not updated to one_time");
   assert(finalPost.cooldown_days === null, "cooldown_days was not cleared to null");
 
-  // ---- listPosts includes the new content-model + season/target summary columns --
+  // ---- listPosts includes the new content-model + season/target data -------------
   const libraryRows = queries.listPosts();
   const row = libraryRows.find((r) => r.id === postId);
   assert(row, "listPosts did not include the created post");
   assert(row.content_kind === "one_time", "listPosts row missing updated content_kind");
   assert(row.content_status === "ready", "listPosts row missing updated content_status");
   assert(row.target_count === 1, `expected target_count 1, got ${row.target_count}`);
-  assert(row.green_period_count === 1, `expected green_period_count 1, got ${row.green_period_count}`);
   assert(
-    row.blackout_period_count === 1,
-    `expected blackout_period_count 1, got ${row.blackout_period_count}`
+    JSON.stringify(row.periods) ===
+      JSON.stringify([
+        {
+          id: winterId,
+          name: "Holiday Blackout",
+          mode: "blackout",
+          recurs_yearly: 0,
+          start_month: null,
+          start_day: null,
+          end_month: null,
+          end_day: null,
+          start_date: "2026-12-20",
+          end_date: "2027-01-02",
+        },
+        {
+          id: summerId,
+          name: "Summer Sale (updated)",
+          mode: "green",
+          recurs_yearly: 1,
+          start_month: 6,
+          start_day: 1,
+          end_month: 9,
+          end_day: 31,
+          start_date: null,
+          end_date: null,
+        },
+      ]),
+    `listPosts returned unexpected periods: ${JSON.stringify(row.periods)}`
   );
 
   // ---- deletePeriod ----------------------------------------------------------------

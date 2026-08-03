@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deletePeriod, getPeriod, updatePeriod } from "@/lib/queries";
+import { hasValidOneOffPeriodDates, isIsoCalendarDate } from "@/lib/periods";
 
 export const runtime = "nodejs";
 
 const MONTH_FIELDS = ["start_month", "end_month"] as const;
 const DAY_FIELDS = ["start_day", "end_day"] as const;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function PATCH(
   req: NextRequest,
@@ -49,18 +49,18 @@ export async function PATCH(
     }
   }
   if ("start_date" in body) {
-    if (!ISO_DATE.test(body.start_date)) {
+    if (!isIsoCalendarDate(body.start_date)) {
       return NextResponse.json(
-        { error: "start_date must be ISO YYYY-MM-DD." },
+        { error: "start_date must be a valid YYYY-MM-DD calendar date." },
         { status: 400 }
       );
     }
     fields.start_date = body.start_date;
   }
   if ("end_date" in body) {
-    if (!ISO_DATE.test(body.end_date)) {
+    if (!isIsoCalendarDate(body.end_date)) {
       return NextResponse.json(
-        { error: "end_date must be ISO YYYY-MM-DD." },
+        { error: "end_date must be a valid YYYY-MM-DD calendar date." },
         { status: 400 }
       );
     }
@@ -87,14 +87,9 @@ export async function PATCH(
       );
     }
   } else {
-    const datesOk =
-      typeof merged.start_date === "string" &&
-      ISO_DATE.test(merged.start_date) &&
-      typeof merged.end_date === "string" &&
-      ISO_DATE.test(merged.end_date);
-    if (!datesOk) {
+    if (!hasValidOneOffPeriodDates(merged)) {
       return NextResponse.json(
-        { error: "One-off periods require start_date/end_date as ISO YYYY-MM-DD." },
+        { error: "One-off periods require valid start_date/end_date calendar dates." },
         { status: 400 }
       );
     }

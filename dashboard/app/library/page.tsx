@@ -2,10 +2,13 @@ import Link from "next/link";
 import { getActiveChannels, listPeriods, listPosts, listTags } from "@/lib/queries";
 import { PageHeader, EmptyState } from "@/components/ui";
 import { LibraryView } from "@/components/library-view";
+import { config } from "@/lib/config";
+import { localDate } from "@/lib/periods";
 
 export const dynamic = "force-dynamic";
 
 export default function LibraryPage() {
+  const evaluationDate = localDate(new Date(), config.defaultTimezone);
   const posts = listPosts().map((p) => ({
     id: p.id,
     caption: p.caption,
@@ -27,8 +30,7 @@ export default function LibraryPage() {
     content_kind: p.content_kind,
     content_status: p.content_status,
     target_count: p.target_count,
-    green_period_count: p.green_period_count,
-    blackout_period_count: p.blackout_period_count,
+    periods: p.periods,
     time_of_day_tags: p.time_of_day_tags,
     topic_tags: p.topic_tags,
     target_platforms: p.target_platforms,
@@ -82,6 +84,8 @@ export default function LibraryPage() {
             periods={listPeriods()}
             timeOfDayTags={listTags("time_of_day")}
             topicTags={listTags("topic")}
+            evaluationDate={evaluationDate}
+            evaluationTimezone={config.defaultTimezone}
           />
         )}
       </div>

@@ -4,6 +4,13 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
+import { matchesPeriodFilter } from "@/lib/library-period-filter";
+import {
+  librarySeasonBadgeDetails,
+  librarySeasonStatus,
+  type LibrarySeasonPeriod,
+  type LibrarySeasonStatus,
+} from "@/lib/library-season-status";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
@@ -29,8 +36,7 @@ interface PostLite {
   content_kind: "one_time" | "evergreen";
   content_status: "draft" | "ready" | "retired";
   target_count: number;
-  green_period_count: number;
-  blackout_period_count: number;
+  periods: LibrarySeasonPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
   target_platforms: string | null;
@@ -68,12 +74,16 @@ export function LibraryView({
   periods,
   timeOfDayTags,
   topicTags,
+  evaluationDate,
+  evaluationTimezone,
 }: {
   posts: PostLite[];
   channels: ChannelLite[];
   periods: Period[];
   timeOfDayTags: Tag[];
   topicTags: Tag[];
+  evaluationDate: string;
+  evaluationTimezone: string;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<number[]>([]); // ordered = post order
@@ -85,6 +95,7 @@ export function LibraryView({
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startT] = useTransition();
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [periodFilter, setPeriodFilter] = useState<Set<number>>(new Set());
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
   // Deliberately separate from statusFilter: content_status is the lifecycle (is this piece
@@ -110,6 +121,14 @@ export function LibraryView({
       if (n.has(id)) n.delete(id);
       else n.add(id);
       return n;
+    });
+  }
+  function togglePeriod(id: number) {
+    setPeriodFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   }
 
@@ -177,6 +196,13 @@ export function LibraryView({
   const allTagNames = Array.from(
     new Set(posts.flatMap((p) => [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)]))
   ).sort();
+  const allPeriods = Array.from(
+    new Map<number, string>(
+      posts.flatMap((post) => post.periods.map((period) => [period.id, period.name]))
+    )
+  )
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // Counted over the whole library, not the filtered view, so the numbers stay put while
   // you click between formats instead of collapsing to "N Carousel" the moment one is on.
@@ -187,6 +213,7 @@ export function LibraryView({
 
   const q = search.trim().toLowerCase();
   const shown = posts.filter((p) => {
+    if (!matchesPeriodFilter(p.periods, periodFilter)) return false;
     if (tagFilter) {
       const names = [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)];
       if (!names.includes(tagFilter)) return false;
@@ -254,6 +281,16 @@ export function LibraryView({
     if (bv === null) return -1;
     return sort === "recent" ? bv.localeCompare(av) : av.localeCompare(bv);
   });
+
+  const readySeasonStatusClass: Record<LibrarySeasonStatus, string> = {
+    Live: "border-status-posted/30 bg-status-posted/10 text-status-posted",
+    Dormant: "border-status-scheduled/30 bg-status-scheduled/10 text-status-scheduled",
+    Blocked: "border-status-failed/30 bg-status-failed/10 text-status-failed",
+    "Invalid period":
+      "border-status-publishing/40 bg-status-publishing/10 text-status-publishing",
+    Draft: "",
+    Retired: "",
+  };
 
   return (
     <div className="space-y-5">
@@ -355,6 +392,40 @@ export function LibraryView({
         ) : null}
       </div>
 
+      {/* Periods are multi-select: selected chips form a union, then compose with every
+          other Library filter below as an AND condition. */}
+      {allPeriods.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-ink-soft">Periods:</span>
+          {allPeriods.map((period) => {
+            const on = periodFilter.has(period.id);
+            return (
+              <button
+                key={period.id}
+                onClick={() => togglePeriod(period.id)}
+                aria-pressed={on}
+                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  on
+                    ? "border-brand bg-brand/10 text-brand-strong"
+                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
+                }`}
+              >
+                {period.name}
+              </button>
+            );
+          })}
+          {periodFilter.size > 0 ? (
+            <button
+              onClick={() => setPeriodFilter(new Set())}
+              aria-label="Clear period filters"
+              className="text-[11px] text-faint underline underline-offset-2"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Filter bar */}
       {allTagNames.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -411,6 +482,16 @@ export function LibraryView({
         {sorted.map((p) => {
           const on = selected.includes(p.id);
           const order = selected.indexOf(p.id) + 1;
+          const seasonStatus = librarySeasonStatus(p.content_status, p.periods, evaluationDate);
+          const badgeDetails =
+            p.content_status === "ready"
+              ? librarySeasonBadgeDetails(
+                  p.id,
+                  seasonStatus,
+                  evaluationDate,
+                  evaluationTimezone
+                )
+              : null;
           return (
             <div
               key={p.id}
@@ -517,29 +598,48 @@ export function LibraryView({
                 </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.content_kind === "evergreen" ? "Evergreen" : "One-time"}</span>
-                  <span
-                    className={
-                      p.content_status === "ready"
-                        ? "text-status-posted"
-                        : p.content_status === "draft"
-                          ? "text-muted"
-                          : "text-faint"
-                    }
-                  >
-                    {p.content_status === "ready"
-                      ? "Ready"
-                      : p.content_status === "draft"
-                        ? "Draft"
-                        : "Retired"}
-                  </span>
+                  {p.content_status === "ready" && badgeDetails ? (
+                    <span className="group relative inline-flex">
+                      <button
+                        {...badgeDetails.triggerProps}
+                        onClick={(event) => event.stopPropagation()}
+                        className={`cursor-help rounded-full border px-1.5 py-px ${readySeasonStatusClass[seasonStatus]}`}
+                      >
+                        {seasonStatus}
+                      </button>
+                      <span
+                        {...badgeDetails.tooltipProps}
+                        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-64 -translate-x-1/2 rounded-md border border-border-strong bg-ink px-2.5 py-2 text-left font-sans text-[11px] leading-4 text-surface opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                      >
+                        {badgeDetails.description}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className={p.content_status === "draft" ? "text-muted" : "text-faint"}>
+                      {seasonStatus}
+                    </span>
+                  )}
                   <span>
                     {p.target_count > 0 ? `→ ${p.target_count} account(s)` : "no targets"}
                   </span>
-                  {p.green_period_count > 0 ? <span>green ×{p.green_period_count}</span> : null}
-                  {p.blackout_period_count > 0 ? (
-                    <span>blackout ×{p.blackout_period_count}</span>
-                  ) : null}
                 </div>
+                {p.periods.length > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {p.periods.map((period) => (
+                      <span
+                        key={`${period.id}-${period.mode}`}
+                        title={period.mode === "green" ? "In-season period" : "Blackout period"}
+                        className={`data rounded-full border px-2 py-0.5 text-[11px] ${
+                          period.mode === "green"
+                            ? "border-status-posted/30 bg-status-posted/10 text-status-posted"
+                            : "border-status-failed/30 bg-status-failed/10 text-status-failed"
+                        }`}
+                      >
+                        {period.name}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {[...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)].length > 0 ? (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {[...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)].map((name) => (
