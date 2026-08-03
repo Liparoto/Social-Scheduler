@@ -49,6 +49,22 @@ test("panel renders search, group actions, options, and checked state", () => {
   assert.match(html, /type="checkbox"[^>]*checked=""/);
 });
 
+test("opening panel marks its search field for focus", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(CheckboxFilterPanel<number>, {
+      label: "Periods",
+      options: periodOptions,
+      selected: new Set<number>(),
+      onChange: noop,
+      query: "",
+      onQueryChange: noop,
+      autoFocus: true,
+    }),
+  );
+
+  assert.match(html, /type="search"[^>]*autofocus=""/);
+});
+
 test("panel reports no matches without rendering checkboxes", () => {
   const html = renderToStaticMarkup(
     React.createElement(CheckboxFilterPanel<number>, {

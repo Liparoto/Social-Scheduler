@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   allOptionValues,
   filterCheckboxOptions,
@@ -19,6 +19,8 @@ interface CheckboxFilterPanelProps<T extends CheckboxFilterValue>
   extends CheckboxFilterInputs<T> {
   query: string;
   onQueryChange: (query: string) => void;
+  autoFocus?: boolean;
+  searchInputRef?: RefObject<HTMLInputElement | null>;
 }
 
 export function CheckboxFilterPanel<T extends CheckboxFilterValue>({
@@ -28,6 +30,8 @@ export function CheckboxFilterPanel<T extends CheckboxFilterValue>({
   onChange,
   query,
   onQueryChange,
+  autoFocus = false,
+  searchInputRef,
 }: CheckboxFilterPanelProps<T>) {
   const visibleOptions = filterCheckboxOptions(options, query);
 
@@ -45,7 +49,9 @@ export function CheckboxFilterPanel<T extends CheckboxFilterValue>({
       className="w-72 rounded-lg border border-border bg-surface p-3 shadow-lg"
     >
       <input
+        ref={searchInputRef}
         type="search"
+        autoFocus={autoFocus}
         aria-label={`Search ${label}`}
         placeholder={`Search ${label.toLocaleLowerCase()}…`}
         value={query}
@@ -107,18 +113,25 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
   const [openSignal, setOpenSignal] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const open = openSignal === closeSignal;
   const disabled = options.length === 0;
 
   useEffect(() => {
     if (!open) return;
 
+    searchInputRef.current?.focus();
+
     function closeOnOutsideMouseDown(event: MouseEvent) {
       if (!containerRef.current?.contains(event.target as Node)) setOpenSignal(null);
     }
 
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpenSignal(null);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpenSignal(null);
+      triggerRef.current?.focus();
     }
 
     document.addEventListener("mousedown", closeOnOutsideMouseDown);
@@ -138,6 +151,7 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
   return (
     <div ref={containerRef} className="relative inline-block">
       <button
+        ref={triggerRef}
         type="button"
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -156,6 +170,8 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
             onChange={onChange}
             query={query}
             onQueryChange={setQuery}
+            autoFocus
+            searchInputRef={searchInputRef}
           />
         </div>
       ) : null}
