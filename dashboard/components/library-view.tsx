@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
+import { matchesPeriodFilter } from "@/lib/library-period-filter";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
@@ -76,6 +77,7 @@ export function LibraryView({
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, startT] = useTransition();
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [periodFilter, setPeriodFilter] = useState<Set<number>>(new Set());
   const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
   // Deliberately separate from statusFilter: content_status is the lifecycle (is this piece
@@ -100,6 +102,14 @@ export function LibraryView({
       if (n.has(id)) n.delete(id);
       else n.add(id);
       return n;
+    });
+  }
+  function togglePeriod(id: number) {
+    setPeriodFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   }
 
@@ -167,6 +177,13 @@ export function LibraryView({
   const allTagNames = Array.from(
     new Set(posts.flatMap((p) => [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)]))
   ).sort();
+  const allPeriods = Array.from(
+    new Map<number, string>(
+      posts.flatMap((post) => post.periods.map((period) => [period.id, period.name]))
+    )
+  )
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // Counted over the whole library, not the filtered view, so the numbers stay put while
   // you click between formats instead of collapsing to "N Carousel" the moment one is on.
@@ -177,6 +194,7 @@ export function LibraryView({
 
   const q = search.trim().toLowerCase();
   const shown = posts.filter((p) => {
+    if (!matchesPeriodFilter(p.periods, periodFilter)) return false;
     if (tagFilter) {
       const names = [...splitTags(p.time_of_day_tags), ...splitTags(p.topic_tags)];
       if (!names.includes(tagFilter)) return false;
@@ -320,6 +338,39 @@ export function LibraryView({
         </select>
         <span className="data text-[11px] text-muted">showing {shown.length} of {posts.length}</span>
       </div>
+
+      {/* Periods are multi-select: selected chips form a union, then compose with every
+          other Library filter below as an AND condition. */}
+      {allPeriods.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-ink-soft">Periods:</span>
+          {allPeriods.map((period) => {
+            const on = periodFilter.has(period.id);
+            return (
+              <button
+                key={period.id}
+                onClick={() => togglePeriod(period.id)}
+                aria-pressed={on}
+                className={`data rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  on
+                    ? "border-brand bg-brand/10 text-brand-strong"
+                    : "border-border bg-surface text-muted hover:bg-surface-sunken"
+                }`}
+              >
+                {period.name}
+              </button>
+            );
+          })}
+          {periodFilter.size > 0 ? (
+            <button
+              onClick={() => setPeriodFilter(new Set())}
+              className="text-[11px] text-faint underline underline-offset-2"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Filter bar */}
       {allTagNames.length > 0 ? (
