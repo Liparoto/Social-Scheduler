@@ -80,3 +80,26 @@ test("confirmation labels name the exact actions", () => {
     "set cooldown to 45 days",
   ]);
 });
+
+test("both exact modes for one period survive into payload and confirmation", () => {
+  const dualModes = [
+    { periodId: 6, mode: "green" as const },
+    { periodId: 6, mode: "blackout" as const },
+  ];
+  const draft: BulkEditDraft = {
+    ...unchanged,
+    periodAdds: dualModes,
+    periodRemoves: dualModes,
+  };
+
+  assert.deepEqual(buildBulkEditPayload([7], draft).periods, {
+    add: dualModes,
+    remove: dualModes,
+  });
+  assert.deepEqual(bulkEditChangeLabels(draft, [], [{ id: 6, name: "Season" }]), [
+    "attach Season as green",
+    "attach Season as blackout",
+    "detach Season as green",
+    "detach Season as blackout",
+  ]);
+});

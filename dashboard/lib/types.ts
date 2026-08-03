@@ -25,6 +25,10 @@ export type PublicationStatus =
 export type ContentKind = "one_time" | "evergreen";
 export type ContentStatus = "draft" | "ready" | "retired";
 export type PeriodMode = "green" | "blackout";
+export interface PeriodLink {
+  periodId: number;
+  mode: PeriodMode;
+}
 
 export interface Channel {
   id: number;

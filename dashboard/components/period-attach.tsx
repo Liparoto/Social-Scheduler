@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { Period, PeriodMode } from "@/lib/types";
+import type { Period, PeriodLink, PeriodMode } from "@/lib/types";
 import { describePeriod } from "@/lib/format";
 import {
   coverageLabel,
@@ -15,24 +15,63 @@ const coverageBadgeClass: Record<CoverageState, string> = {
   none: "border-border bg-surface text-faint",
 };
 
-export function PeriodAttach({
-  periods,
-  value,
-  onChange,
-  coverage,
-  selectedPostCount = 0,
-  hideZeroCoverage = false,
-  disableFullCoverage = false,
-}: {
+export function toggleExactPeriodLink(
+  current: PeriodLink[],
+  periodId: number,
+  mode: PeriodMode,
+): PeriodLink[] {
+  const selected = current.some((link) => link.periodId === periodId && link.mode === mode);
+  if (selected) {
+    return current.filter((link) => link.periodId !== periodId || link.mode !== mode);
+  }
+  return [...current, { periodId, mode }];
+}
+
+interface SharedPeriodAttachProps {
   periods: Period[];
-  value: Record<number, PeriodMode>;
-  onChange: (v: Record<number, PeriodMode>) => void;
   coverage?: Record<string, number>;
   selectedPostCount?: number;
   hideZeroCoverage?: boolean;
   disableFullCoverage?: boolean;
-}) {
+}
+
+type PeriodAttachProps = SharedPeriodAttachProps &
+  (
+    | {
+        value: Record<number, PeriodMode>;
+        onChange: (value: Record<number, PeriodMode>) => void;
+        exactValue?: never;
+        onExactChange?: never;
+      }
+    | {
+        exactValue: PeriodLink[];
+        onExactChange: (value: PeriodLink[]) => void;
+        value?: never;
+        onChange?: never;
+      }
+  );
+
+export function PeriodAttach({
+  periods,
+  value,
+  onChange,
+  exactValue,
+  onExactChange,
+  coverage,
+  selectedPostCount = 0,
+  hideZeroCoverage = false,
+  disableFullCoverage = false,
+}: PeriodAttachProps) {
   function setMode(periodId: number, mode: PeriodMode | null) {
+    if (exactValue && onExactChange) {
+      onExactChange(
+        mode === null
+          ? exactValue.filter((link) => link.periodId !== periodId)
+          : toggleExactPeriodLink(exactValue, periodId, mode),
+      );
+      return;
+    }
+    if (!value || !onChange) return;
     const next = { ...value };
     if (mode === null) delete next[periodId];
     else next[periodId] = mode;
@@ -96,7 +135,12 @@ export function PeriodAttach({
       ) : (
         <ul className="space-y-2">
           {visiblePeriods.map((p) => {
-            const mode = value[p.id];
+            const mode = value?.[p.id];
+            const hasExactMode = (candidate: PeriodMode) =>
+              exactValue?.some(
+                (link) => link.periodId === p.id && link.mode === candidate,
+              ) ?? false;
+            const hasAnyExactMode = exactValue?.some((link) => link.periodId === p.id) ?? false;
             const greenCount = countFor(p.id, "green");
             const blackoutCount = countFor(p.id, "blackout");
             return (
@@ -121,7 +165,10 @@ export function PeriodAttach({
                 >
                   <button
                     type="button"
-                    className={segBtn(!mode, "bg-brand-weak text-brand-strong")}
+                    className={segBtn(
+                      exactValue ? !hasAnyExactMode : !mode,
+                      "bg-brand-weak text-brand-strong",
+                    )}
                     onClick={() => setMode(p.id, null)}
                   >
                     Off
@@ -129,7 +176,7 @@ export function PeriodAttach({
                   {!coverage || !hideZeroCoverage || greenCount > 0 ? (
                     <button
                       type="button"
-                      className={`${segBtn(mode === "green", "bg-status-posted/20 text-brand-strong")} disabled:cursor-not-allowed disabled:opacity-60`}
+                      className={`${segBtn(exactValue ? hasExactMode("green") : mode === "green", "bg-status-posted/20 text-brand-strong")} disabled:cursor-not-allowed disabled:opacity-60`}
                       onClick={() => setMode(p.id, "green")}
                       disabled={modeDisabled(p.id, "green")}
                     >
@@ -139,7 +186,7 @@ export function PeriodAttach({
                   {!coverage || !hideZeroCoverage || blackoutCount > 0 ? (
                     <button
                       type="button"
-                      className={`${segBtn(mode === "blackout", "bg-surface-sunken text-ink")} disabled:cursor-not-allowed disabled:opacity-60`}
+                      className={`${segBtn(exactValue ? hasExactMode("blackout") : mode === "blackout", "bg-surface-sunken text-ink")} disabled:cursor-not-allowed disabled:opacity-60`}
                       onClick={() => setMode(p.id, "blackout")}
                       disabled={modeDisabled(p.id, "blackout")}
                     >

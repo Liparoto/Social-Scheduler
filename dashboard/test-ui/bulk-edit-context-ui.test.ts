@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TagEditor } from "../components/tag-editor.tsx";
-import { PeriodAttach } from "../components/period-attach.tsx";
+import { PeriodAttach, toggleExactPeriodLink } from "../components/period-attach.tsx";
 import { CurrentSelectionSummary } from "../components/bulk-edit-modal.tsx";
 import {
   bulkContextLoadReducer,
@@ -150,6 +150,16 @@ test("PeriodAttach keeps exact coverage modes separate", () => {
   );
   assert.match(addHtml, /<button[^>]*disabled=""[^>]*>Green/);
   assert.doesNotMatch(addHtml, /<button[^>]*disabled=""[^>]*>Blackout/);
+});
+
+test("PeriodAttach exact selection keeps sequential green and blackout choices", () => {
+  const green = toggleExactPeriodLink([], 10, "green");
+  const both = toggleExactPeriodLink(green, 10, "blackout");
+
+  assert.deepEqual(both, [
+    { periodId: 10, mode: "green" },
+    { periodId: 10, mode: "blackout" },
+  ]);
 });
 
 test("current selection summary humanizes scalar values and coverage", () => {

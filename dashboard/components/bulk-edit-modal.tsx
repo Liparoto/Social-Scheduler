@@ -16,7 +16,7 @@ import {
   bulkEditChangeLabels,
   type BulkEditDraft,
 } from "@/lib/bulk-edit-form";
-import type { ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
+import type { ContentKind, ContentStatus, Period, PeriodLink, Tag } from "@/lib/types";
 
 interface BulkEditModalProps {
   postIds: number[];
@@ -98,14 +98,11 @@ export function CurrentSelectionSummary({ context }: { context: BulkEditContext 
 }
 
 function withoutMatchingPeriodLinks(
-  current: Record<number, PeriodMode>,
-  next: Record<number, PeriodMode>
-): Record<number, PeriodMode> {
-  const result = { ...current };
-  for (const [periodId, mode] of Object.entries(next)) {
-    if (result[Number(periodId)] === mode) delete result[Number(periodId)];
-  }
-  return result;
+  current: PeriodLink[],
+  next: PeriodLink[],
+): PeriodLink[] {
+  const nextKeys = new Set(next.map((link) => `${link.periodId}:${link.mode}`));
+  return current.filter((link) => !nextKeys.has(`${link.periodId}:${link.mode}`));
 }
 
 export function BulkEditModal({
@@ -118,8 +115,8 @@ export function BulkEditModal({
 }: BulkEditModalProps) {
   const [tagAdds, setTagAdds] = useState<number[]>([]);
   const [tagRemoves, setTagRemoves] = useState<number[]>([]);
-  const [periodAdds, setPeriodAdds] = useState<Record<number, PeriodMode>>({});
-  const [periodRemoves, setPeriodRemoves] = useState<Record<number, PeriodMode>>({});
+  const [periodAdds, setPeriodAdds] = useState<PeriodLink[]>([]);
+  const [periodRemoves, setPeriodRemoves] = useState<PeriodLink[]>([]);
   const [contentStatus, setContentStatus] = useState<ContentStatus | "unchanged">("unchanged");
   const [contentKind, setContentKind] = useState<ContentKind | "unchanged">("unchanged");
   const [cooldownMode, setCooldownMode] = useState<"unchanged" | "default" | "custom">(
@@ -213,12 +210,12 @@ export function BulkEditModal({
     setTagAdds((current) => current.filter((id) => !ids.includes(id)));
   }
 
-  function choosePeriodAdds(next: Record<number, PeriodMode>) {
+  function choosePeriodAdds(next: PeriodLink[]) {
     setPeriodAdds(next);
     setPeriodRemoves((current) => withoutMatchingPeriodLinks(current, next));
   }
 
-  function choosePeriodRemoves(next: Record<number, PeriodMode>) {
+  function choosePeriodRemoves(next: PeriodLink[]) {
     setPeriodRemoves(next);
     setPeriodAdds((current) => withoutMatchingPeriodLinks(current, next));
   }
@@ -402,8 +399,8 @@ export function BulkEditModal({
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-status-posted">Attach periods</p>
                   <PeriodAttach
                     periods={periods}
-                    value={periodAdds}
-                    onChange={choosePeriodAdds}
+                    exactValue={periodAdds}
+                    onExactChange={choosePeriodAdds}
                     coverage={periodCoverage}
                     selectedPostCount={selectedPostCount}
                     disableFullCoverage
@@ -413,8 +410,8 @@ export function BulkEditModal({
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-soft">Detach periods</p>
                   <PeriodAttach
                     periods={periods}
-                    value={periodRemoves}
-                    onChange={choosePeriodRemoves}
+                    exactValue={periodRemoves}
+                    onExactChange={choosePeriodRemoves}
                     coverage={periodCoverage}
                     selectedPostCount={selectedPostCount}
                     hideZeroCoverage

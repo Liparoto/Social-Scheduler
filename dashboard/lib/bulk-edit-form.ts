@@ -1,10 +1,12 @@
-import type { ContentKind, ContentStatus, PeriodMode, Tag } from "./types";
+import type { ContentKind, ContentStatus, PeriodLink, PeriodMode, Tag } from "./types";
+
+export type BulkPeriodSelection = Record<number, PeriodMode> | PeriodLink[];
 
 export interface BulkEditDraft {
   tagAdds: number[];
   tagRemoves: number[];
-  periodAdds: Record<number, PeriodMode>;
-  periodRemoves: Record<number, PeriodMode>;
+  periodAdds: BulkPeriodSelection;
+  periodRemoves: BulkPeriodSelection;
   contentStatus: ContentStatus | "unchanged";
   contentKind: ContentKind | "unchanged";
   cooldownMode: "unchanged" | "default" | "custom";
@@ -15,8 +17,8 @@ export interface BulkEditPayload {
   post_ids: number[];
   tags?: { add: number[]; remove: number[] };
   periods?: {
-    add: { periodId: number; mode: PeriodMode }[];
-    remove: { periodId: number; mode: PeriodMode }[];
+    add: PeriodLink[];
+    remove: PeriodLink[];
   };
   content_status?: ContentStatus;
   content_kind?: ContentKind;
@@ -28,14 +30,8 @@ export function buildBulkEditPayload(postIds: number[], draft: BulkEditDraft): B
   if (draft.tagAdds.length > 0 || draft.tagRemoves.length > 0) {
     payload.tags = { add: draft.tagAdds, remove: draft.tagRemoves };
   }
-  const periodAdds = Object.entries(draft.periodAdds).map(([periodId, mode]) => ({
-    periodId: Number(periodId),
-    mode,
-  }));
-  const periodRemoves = Object.entries(draft.periodRemoves).map(([periodId, mode]) => ({
-    periodId: Number(periodId),
-    mode,
-  }));
+  const periodAdds = selectedPeriodLinks(draft.periodAdds);
+  const periodRemoves = selectedPeriodLinks(draft.periodRemoves);
   if (periodAdds.length > 0 || periodRemoves.length > 0) {
     payload.periods = { add: periodAdds, remove: periodRemoves };
   }
@@ -44,6 +40,14 @@ export function buildBulkEditPayload(postIds: number[], draft: BulkEditDraft): B
   if (draft.cooldownMode === "default") payload.cooldown_days = null;
   if (draft.cooldownMode === "custom") payload.cooldown_days = draft.cooldownDays;
   return payload;
+}
+
+function selectedPeriodLinks(selection: BulkPeriodSelection): PeriodLink[] {
+  if (Array.isArray(selection)) return selection;
+  return Object.entries(selection).map(([periodId, mode]) => ({
+    periodId: Number(periodId),
+    mode,
+  }));
 }
 
 export function bulkEditChangeLabels(
@@ -68,8 +72,8 @@ export function bulkEditChangeLabels(
     ["attach", draft.periodAdds],
     ["detach", draft.periodRemoves],
   ] as const) {
-    for (const [periodId, mode] of Object.entries(links)) {
-      const name = periods.find((period) => period.id === Number(periodId))?.name;
+    for (const { periodId, mode } of selectedPeriodLinks(links)) {
+      const name = periods.find((period) => period.id === periodId)?.name;
       if (name) labels.push(`${verb} ${name} as ${mode}`);
     }
   }
