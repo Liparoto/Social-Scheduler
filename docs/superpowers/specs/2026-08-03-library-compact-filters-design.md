@@ -1,7 +1,7 @@
 # Library compact checkbox filters — design
 
 **Date:** 2026-08-03
-**Status:** approved in conversation; awaiting written-spec review
+**Status:** implemented and verified on `library-combined-preview`
 **Builds on:** the combined Library preview containing period visibility and bulk editing
 
 ## Problem
