@@ -19,6 +19,7 @@ export function coverageLabel(count: number, total: number): string {
   const state = coverageState(safeCount, safeTotal);
 
   if (state === "none") return "None";
+  if (safeTotal === 0) return "Some";
   if (state === "all") return `All ${safeTotal}`;
   return `${safeCount} of ${safeTotal}`;
 }
