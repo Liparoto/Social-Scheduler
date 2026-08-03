@@ -43,3 +43,6 @@ worker/venv/
 
 # Playwright MCP debug artifacts (snapshots, console logs, screenshots)
 .playwright-mcp/
+
+# Local isolated feature worktrees
+.worktrees/
