@@ -103,13 +103,17 @@ def test_failure_retries_then_terminal_and_is_independent(conn, config, make_pub
 
 
 def test_invalid_post_type_fails_terminally_without_retry(conn, config, fake_client, make_publication):
-    pub = make_publication(post_type="story", n_assets=1)  # not supported yet (Stories)
+    # posts.post_type='story' is VESTIGIAL (see migration 0014's header): Stories are a
+    # target SURFACE, not a content shape. The old enum value must stay dead rather than
+    # quietly start working — publishing a real Story is covered in
+    # test_stories_publisher.py, driven by publications.surface.
+    pub = make_publication(post_type="story", n_assets=1)
     out = publish_one(conn, pub, config, fake_client, dry_run=False, now=NOW)
     assert out.result == "failed"
     row = _reload(conn, pub["id"])
     assert row["status"] == "failed"
     assert row["attempt_count"] == 1  # terminal on first try, no backoff loop
-    assert "not supported" in row["last_error"]
+    assert "not a publishable content shape" in row["last_error"]
 
 
 # ---- Rate-limit gate ------------------------------------------------------------
