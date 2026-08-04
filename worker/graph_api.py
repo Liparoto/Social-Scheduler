@@ -120,6 +120,32 @@ class GraphClient:
             data["thumb_offset"] = thumb_offset
         return self._post(f"{ig_user_id}/media", data)["id"]
 
+    def create_story_container(
+        self,
+        ig_user_id: str,
+        token: str,
+        image_url: str | None = None,
+        video_url: str | None = None,
+    ) -> str:
+        """Create a STORIES container from exactly ONE image or video.
+
+        There is no such thing as a carousel Story in the API. A multi-slide post becomes
+        SEVERAL Stories, fanned out into one publication per slide before we ever get here
+        (see publisher._load_targets), so this call is always single-media.
+
+        Stories take NO caption: the field does not exist on this surface. There is
+        deliberately no caption parameter to pass, rather than one that gets dropped —
+        the caller cannot accidentally believe a caption went out.
+        """
+        if bool(image_url) == bool(video_url):
+            raise ValueError("a story needs exactly one of image_url or video_url")
+        data = {"media_type": "STORIES", "access_token": token}
+        if video_url:
+            data["video_url"] = video_url
+        else:
+            data["image_url"] = image_url
+        return self._post(f"{ig_user_id}/media", data)["id"]
+
     def get_container_status(self, container_id: str, token: str) -> str:
         return self._get(
             container_id, {"fields": "status_code", "access_token": token}
