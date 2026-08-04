@@ -456,10 +456,26 @@ therefore take a zero-processing path.
    `DATABASE_PATH` but not `ASSET_STORAGE_DIR`, harmless until a test wrote a FILE — then
    fixture JPEGs landed among real uploads. Isolated at the harness level.
 
-### Not verified live
+### Verified: four Stories from one carousel (2026-08-04)
 
-Four Stories from one carousel, back to back. The fan-out is unit-tested and the dry run
-showed all four plans correct, but only ONE slide was published for real.
+Scheduling post 5 for Stories through the normal path produced four publications — one per
+slide, in sort_order — and all four published as genuine Stories, **in slide order**:
+
+| slide | asset | media id | published |
+|---|---|---|---|
+| 1 | 13 | `18075669446696846` | 22:40:51 |
+| 2 | 14 | `18110379457800975` | 22:41:03 |
+| 3 | 15 | `18143522173480034` | 22:41:15 |
+| 4 | 16 | `17987922704846817` | 22:41:29 |
+
+All four `media_product_type: STORY`, read back from the API. Zero retries, no errors, ~12s
+apart, and each sent its OWN 1080×1920 canvas.
+
+**The ordering is the part worth noting.** All four slides share one `scheduled_at`, so slide
+order depends entirely on `fetch_due_publications`' `ORDER BY scheduled_at ASC, id ASC` — the
+tie-break added with the story surface. Before it, ordering came out right only because SQLite
+happened to scan in rowid order. Timestamps ascending across slides 1→4 is that guard proven
+against the live API rather than by luck.
 
 ## Verified: first real Story published (2026-08-04)
 

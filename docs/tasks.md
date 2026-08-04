@@ -618,7 +618,8 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       from the real dimensions, and never stops offering the controls. Deferred: manual
       crop framing (sharp's `attention` picks the region — whether that is good enough is
       only answerable from real use) and video story canvases (needs a transcode, not a
-      composite). NOT verified live: four Stories from one carousel back to back.
+      composite). Four Stories from one carousel verified live the same day —
+      in slide order, which is the `ORDER BY scheduled_at, id` tie-break proven.
 - [x] **Story insights** — `REQUESTED_STORY_METRICS` + a 24h auto-refresh cutoff, verified
       against the live API on the first real Story (no 400, `views: 6` recorded). The
       supported names were established by probing, not guessing: `taps_forward`/`taps_back`/
