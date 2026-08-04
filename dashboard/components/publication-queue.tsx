@@ -35,11 +35,15 @@ export function PublicationQueue({
   const [account, setAccount] = useState<"all" | number>("all");
   const [platform, setPlatform] = useState<"all" | Platform>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
+  // DESTINATION, not platform: an Instagram channel has both surfaces, so this is a
+  // separate axis from the platform filter above. Matches the Library's filter.
+  const [destination, setDestination] = useState<"all" | "story" | "feed">("all");
 
   const shown = pubs.filter((p) => {
     if (account !== "all" && p.channel_id !== account) return false;
     if (platform !== "all" && p.channel_platform !== platform) return false;
     if (status !== "all" && p.status !== status) return false;
+    if (destination !== "all" && p.surface !== destination) return false;
     return true;
   });
 
@@ -80,6 +84,16 @@ export function PublicationQueue({
               {o.label}
             </option>
           ))}
+        </select>
+        <select
+          className={selectCls}
+          aria-label="Filter by destination"
+          value={destination}
+          onChange={(e) => setDestination(e.target.value as typeof destination)}
+        >
+          <option value="all">All destinations</option>
+          <option value="story">Stories</option>
+          <option value="feed">Feed only</option>
         </select>
         <span className="data ml-auto text-[11px] text-muted">
           showing {shown.length} of {pubs.length}
