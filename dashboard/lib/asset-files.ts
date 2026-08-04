@@ -42,3 +42,36 @@ export async function unlinkInsideStore(rel: string | null): Promise<string | nu
     return rel;
   }
 }
+
+/** The minimum an asset must expose for its files to be enumerated. */
+export interface AssetFilePaths {
+  content_hash: string;
+  storage_path: string;
+  publish_path: string | null;
+  thumbnail_path: string | null;
+}
+
+/**
+ * Every file on disk this asset owns.
+ *
+ * Exists because "which files does an asset have" was previously implicit in the delete
+ * route's argument list — and when the 9:16 story canvas became a FOURTH derivative
+ * (migration 0015), that list wasn't updated, so deleting a story-framed asset stranded its
+ * canvases forever. Enumerating in one place means the next derivative is added once.
+ *
+ * The story canvases are listed by CONTENT HASH rather than from assets.story_path, and
+ * that difference matters: story_path records only the mode currently in use, while the
+ * media route caches BOTH modes so switching between them is instant. Deleting only
+ * story_path would leave the other mode's render behind.
+ */
+export function assetFilePaths(asset: AssetFilePaths): (string | null)[] {
+  return [
+    asset.storage_path,
+    asset.publish_path,
+    asset.thumbnail_path,
+    // Both cached modes — see above. Harmless when absent: unlinkInsideStore treats an
+    // already-missing file as success.
+    `story/${asset.content_hash}-blurred.jpg`,
+    `story/${asset.content_hash}-crop.jpg`,
+  ];
+}
