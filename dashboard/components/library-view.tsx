@@ -39,6 +39,7 @@ interface PostLite {
   asset_count: number;
   asset_ids: number[];
   scheduled_count: number;
+  queued_publication_count: number;
   posted_count: number;
   last_posted_at: string | null;
   content_kind: "one_time" | "evergreen";
@@ -924,7 +925,10 @@ export function LibraryView({
             periods: quickEditPost.periods,
             target_platforms: splitTags(quickEditPost.target_platforms),
             asset_count: quickEditPost.asset_count,
-            scheduled_count: quickEditPost.scheduled_count,
+            // queued_publication_count, not scheduled_count: the post detail page's own
+            // reorder notice already excludes 'publishing' (it can't be reordered — it's
+            // mid-publish), and quick edit's notice needs to promise the same thing.
+            queued_publication_count: quickEditPost.queued_publication_count,
           }}
           periods={periods}
           timeOfDayTags={timeOfDayTags}

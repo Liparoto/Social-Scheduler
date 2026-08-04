@@ -70,8 +70,13 @@ export interface QuickEditPost {
   target_platforms: string[];
   /** How many slides — the dialog only offers reordering for a real carousel. */
   asset_count: number;
-  /** Queued sends, so the reorder block can say they'll go out in the new order. */
-  scheduled_count: number;
+  /**
+   * Sends genuinely still queued (scheduled + pending_approval), so the reorder block can
+   * say they'll go out in the new order. Deliberately NOT scheduled_count, which also
+   * counts 'publishing' — a send already mid-publish can't be reordered at all, so
+   * promising it will "go out in this order" would be wrong.
+   */
+  queued_publication_count: number;
 }
 
 export function QuickEditModal({
@@ -314,7 +319,7 @@ export function QuickEditModal({
               assets={orderAssets}
               order={slideOrder.order}
               onOrderChange={slideOrder.setOrder}
-              queuedSendCount={post.scheduled_count}
+              queuedSendCount={post.queued_publication_count}
             />
           </div>
         ) : null}

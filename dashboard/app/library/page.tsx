@@ -25,6 +25,10 @@ export default function LibraryPage() {
     // extra per-post fetch. A post with zero assets (a text post) has a null csv.
     asset_ids: p.asset_ids_csv ? p.asset_ids_csv.split(",").map(Number) : [],
     scheduled_count: p.scheduled_count,
+    // Distinct from scheduled_count: excludes 'publishing', which can't be reordered or
+    // rescheduled at all. Quick edit's reorder notice needs the narrower number — see
+    // its use in library-view.tsx / quick-edit-modal.tsx.
+    queued_publication_count: p.queued_publication_count,
     posted_count: p.posted_count,
     last_posted_at: p.last_posted_at,
     content_kind: p.content_kind,
