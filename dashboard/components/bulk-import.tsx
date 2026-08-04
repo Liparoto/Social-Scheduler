@@ -2,11 +2,11 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import type { Channel, ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
+import type { Asset, Channel, ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
 import type { ConformMode } from "@/lib/conform";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
-import { ConformControl } from "./conform-control";
+import { FramingButton } from "./framing-button";
 import { channelColor, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 
@@ -18,8 +18,10 @@ type Item = {
   name: string;
   caption: string;
   deduped: boolean;
-  conformMode: ConformMode;
-  needsReview: number;
+  // The whole asset, so the framing dialog can read dimensions and story fields.
+  // The upload response already returns it; keeping loose copies of three of its
+  // fields only invited them to drift.
+  asset: Asset;
   mediaKind: "image" | "video";
   coverFrameMs: number | null;
 };
@@ -80,8 +82,7 @@ export function BulkImport({
           name: file.name,
           caption: "",
           deduped: body.deduped,
-          conformMode: body.asset.conform_mode,
-          needsReview: body.asset.needs_review,
+          asset: body.asset,
           mediaKind: body.asset.media_kind,
           // Already on the upload response — a fresh upload's is always null, but a
           // deduped re-upload of a video that already has a chosen cover reuses it, so
@@ -186,13 +187,9 @@ export function BulkImport({
                       className="h-20 w-20 rounded-lg object-cover"
                     />
                   )}
-                  {it.mediaKind !== "video" && it.needsReview ? (
-                    <ConformControl
-                      assetId={it.assetId}
-                      conformMode={it.conformMode}
-                      needsReview={it.needsReview}
-                    />
-                  ) : null}
+                  {/* Unconditional: gating on needsReview hid the control once a choice
+                      was made. A just-imported image has no sends, so the count is 0. */}
+                  <FramingButton asset={it.asset} />
                 </div>
                 <div className="flex-1">
                   <textarea

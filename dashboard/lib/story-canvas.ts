@@ -1,56 +1,27 @@
 import sharp from "sharp";
+import { STORY_WIDTH, STORY_HEIGHT, type StoryMode } from "./story-geometry";
 
 /*
-  The 9:16 canvas an Instagram Story is published on.
+  Rendering the 9:16 canvas an Instagram Story is published on. SERVER ONLY — this imports
+  sharp, a native Node module that cannot be bundled for the browser. Client components must
+  import from ./story-geometry instead, which is why the pure maths lives there.
 
-  This is a SEPARATE pipeline from lib/conform.ts on purpose. conform.ts forces an image
-  into the FEED's 4:5..1.91:1 range; a story canvas is deliberately 0.5625, which is outside
-  that range. Running a canvas through conformImage() would undo it entirely — never do that.
+  This is a SEPARATE pipeline from lib/conform.ts on purpose: conform.ts forces an image into
+  the FEED's 4:5..1.91:1 range, while a story canvas is deliberately 0.5625. Running a canvas
+  through conformImage() would undo it entirely.
 */
 
-export const STORY_WIDTH = 1080;
-export const STORY_HEIGHT = 1920;
-export const STORY_RATIO = STORY_WIDTH / STORY_HEIGHT; // 0.5625
+// Re-exported so server-side callers (the routes) have one import rather than two.
+export {
+  STORY_WIDTH,
+  STORY_HEIGHT,
+  STORY_RATIO,
+  STORY_RATIO_TOLERANCE,
+  needsStoryCanvas,
+  cropLossFraction,
+  type StoryMode,
+} from "./story-geometry";
 
-// A source this close to 9:16 is already the right shape: a canvas would add nothing and
-// cost a re-encode, so the untouched original is published instead. 2% is wide enough to
-// cover real phone photos (a 1320x2346 shot is 0.5627) and narrow enough that anything
-// Instagram would visibly letterbox still gets a deliberate frame.
-export const STORY_RATIO_TOLERANCE = 0.02;
-
-export type StoryMode = "blurred" | "crop";
-
-/** True when the source is NOT already story-shaped and deserves a canvas. */
-export function needsStoryCanvas(width: number, height: number): boolean {
-  if (!width || !height) return false;
-  const ratio = width / height;
-  return Math.abs(ratio - STORY_RATIO) > STORY_RATIO * STORY_RATIO_TOLERANCE;
-}
-
-/**
- * How much of the source is thrown away by crop-to-fill, as a fraction of its longer axis.
- *
- * Drives the framing dialog's honest label ("loses 58% of the width"). A generic "some
- * cropping may occur" is exactly the vagueness that made the old 40px preview useless —
- * the owner should be told what a choice costs, in numbers, before making it.
- */
-export function cropLossFraction(width: number, height: number): number {
-  if (!width || !height) return 0;
-  const ratio = width / height;
-  // Cover scales by whichever axis falls short, then crops the other. A wider-than-9:16
-  // source loses width; a narrower (very tall) one loses height.
-  const kept = ratio > STORY_RATIO ? STORY_RATIO / ratio : ratio / STORY_RATIO;
-  return Math.max(0, 1 - kept);
-}
-
-/**
- * Render a 1080x1920 story canvas.
- *
- *  * blurred — the photo is fitted whole, and an enlarged, blurred, slightly darkened copy
- *    of the SAME photo fills the space behind it. Nothing is lost.
- *  * crop    — scaled to cover and cropped. sharp's `attention` strategy picks the region,
- *    which is a guess; cropLossFraction() is how the owner is told what it costs.
- */
 export async function renderStoryCanvas(input: Buffer, mode: StoryMode): Promise<Buffer> {
   // Honor EXIF rotation and normalize colour before measuring or compositing. This MUST be
   // materialized into a real buffer first — same reasoning as conform.ts: sharp's

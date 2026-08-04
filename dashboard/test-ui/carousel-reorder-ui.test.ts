@@ -65,7 +65,8 @@ test("an unknown id in the order is skipped rather than thrown on", () => {
   assert.ok(!html.includes("/api/media/999?variant=thumb"));
 });
 
-// Regression for the post detail page silently losing ConformControl when the carousel
+// Regression for the post detail page silently losing the framing control (now
+// FramingButton) when the carousel
 // branch switched to CarouselReorder — renderExtra is how that control gets back under
 // each slide (see post-editor.tsx). Assert only that whatever a caller returns from
 // renderExtra actually reaches the markup, once per slide, keyed by asset id.

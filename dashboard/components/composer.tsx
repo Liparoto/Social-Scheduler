@@ -11,7 +11,7 @@ import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
-import { ConformControl } from "@/components/conform-control";
+import { FramingButton } from "@/components/framing-button";
 import { CoverFramePicker } from "@/components/cover-frame-picker";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { SlideReorder, type Slide } from "@/components/slide-reorder";
@@ -445,11 +445,12 @@ export function Composer({
                   // composer-side rather than being baked into the shared component.
                   renderExtra={(slide) => {
                     const a = assets.find((x) => x.asset.id === slide.assetId);
-                    return a?.asset.needs_review ? (
-                      <ConformControl
-                        assetId={a.asset.id}
-                        conformMode={a.asset.conform_mode}
-                        needsReview={a.asset.needs_review}
+                    // Unconditional: gating on needs_review hid the control once a choice
+                    // was made, which is half of the one-way bug. A just-uploaded image has
+                    // no sends yet, so the count defaults to 0.
+                    return a ? (
+                      <FramingButton
+                        asset={a.asset}
                       />
                     ) : null;
                   }}

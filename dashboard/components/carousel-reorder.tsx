@@ -94,7 +94,7 @@ export function CarouselReorder({
   // Mirrors SlideReorder's own renderExtra, keyed by asset id rather than by Slide so
   // callers don't need to know this component's internal Slide shape. OrderableAsset
   // deliberately doesn't carry conform fields (see above) — a caller with the full
-  // Asset[] server-side (the post detail page, for ConformControl) supplies this;
+  // Asset[] server-side (the post detail page, for FramingButton) supplies this;
   // quick edit, whose assets come from GET /api/posts/[id]/assets, simply doesn't.
   renderExtra?: (assetId: number, index: number) => ReactNode;
 }) {

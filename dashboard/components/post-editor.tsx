@@ -22,7 +22,7 @@ import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
-import { ConformControl } from "./conform-control";
+import { FramingButton } from "./framing-button";
 import { CoverFramePicker } from "./cover-frame-picker";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "./media-lightbox";
 import { PostSendsPanel } from "./post-sends-panel";
@@ -42,6 +42,7 @@ function targetKeys(targets: PostTarget[]): string[] {
 export function PostEditor({
   post,
   assets,
+  scheduledSendCounts,
   channels,
   sends,
   sendableChannels,
@@ -56,6 +57,8 @@ export function PostEditor({
 }: {
   post: Post;
   assets: Asset[];
+  /** assetId -> scheduled-but-unsent sends, for the framing dialog's warning. */
+  scheduledSendCounts: Record<number, number>;
   channels: Channel[];
   sends: PostPublicationRow[];
   sendableChannels: Channel[];
@@ -226,11 +229,12 @@ export function PostEditor({
                 // control directly rather than widening OrderableAsset for it.
                 renderExtra={(assetId) => {
                   const a = assets.find((x) => x.id === assetId);
-                  return a?.needs_review ? (
-                    <ConformControl
-                      assetId={a.id}
-                      conformMode={a.conform_mode}
-                      needsReview={a.needs_review}
+                  // Rendered unconditionally: gating on needs_review is the second half of
+                  // the one-way bug — the control vanished once a choice was made.
+                  return a ? (
+                    <FramingButton
+                      asset={a}
+                      scheduledSendCount={scheduledSendCounts[a.id] ?? 0}
                     />
                   ) : null;
                 }}
@@ -296,13 +300,10 @@ export function PostEditor({
                           }
                         />
                       </div>
-                      {a.needs_review ? (
-                        <ConformControl
-                          assetId={a.id}
-                          conformMode={a.conform_mode}
-                          needsReview={a.needs_review}
-                        />
-                      ) : null}
+                      <FramingButton
+                        asset={a}
+                        scheduledSendCount={scheduledSendCounts[a.id] ?? 0}
+                      />
                     </div>
                   )
                 )

@@ -18,6 +18,11 @@ registerHooks({
     if (spec === "next/link") {
       return next(new URL("./react-link-stub.mjs", import.meta.url).href, ctx);
     }
+    // Same reason as next/link: a static render never navigates, and without this any
+    // component calling useRouter() can't be UI-tested at all.
+    if (spec === "next/navigation") {
+      return next(new URL("./next-navigation-stub.mjs", import.meta.url).href, ctx);
+    }
     if (spec.startsWith("@/")) {
       const bare = new URL(spec.slice(2), dashboardRoot);
       const ts = new URL(spec.slice(2) + ".ts", dashboardRoot);

@@ -8,6 +8,9 @@ import {
   renderStoryCanvas,
   cropLossFraction,
 } from "./story-canvas.ts";
+// needsStoryCanvas/cropLossFraction now live in story-geometry (no sharp, so a
+// client component can use them); story-canvas re-exports them for server callers.
+// Importing via story-canvas here keeps BOTH paths under test.
 
 /** A solid-colour JPEG of the given size — enough to assert geometry. */
 async function image(width: number, height: number): Promise<Buffer> {
