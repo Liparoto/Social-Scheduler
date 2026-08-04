@@ -116,3 +116,33 @@ test("toggling a surface never touches another channel", () => {
     { channel_id: 1, surface: "story" },
   ]);
 });
+
+// ---- Reframing notice (story canvas) ---------------------------------------------
+test("a non-9:16 photo says it will be reframed, before scheduling", () => {
+  const html = render({
+    value: [{ channel_id: 1, surface: "story" }],
+    assets: [{ width: 4032, height: 3024 }],
+  });
+  assert.match(html, /will be reframed to fit a Story/);
+});
+
+test("an already-9:16 photo needs no reframing notice", () => {
+  const html = render({
+    value: [{ channel_id: 1, surface: "story" }],
+    assets: [{ width: 1320, height: 2346 }],
+  });
+  assert.doesNotMatch(html, /will be reframed/);
+});
+
+test("the reframing notice is absent when no Story is selected", () => {
+  const html = render({
+    value: [{ channel_id: 1, surface: "feed" }],
+    assets: [{ width: 4032, height: 3024 }],
+  });
+  assert.doesNotMatch(html, /will be reframed/);
+});
+
+test("callers with no dimensions to hand simply get no notice", () => {
+  const html = render({ value: [{ channel_id: 1, surface: "story" }] });
+  assert.doesNotMatch(html, /will be reframed/);
+});

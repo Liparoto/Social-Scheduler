@@ -531,6 +531,7 @@ export function Composer({
             textOnly={textOnly}
             hasVideo={hasVideo}
             slideCount={assets.length}
+            assets={assets.map((a) => ({ width: a.asset.width, height: a.asset.height }))}
             postNow={postNow}
           />
         </section>

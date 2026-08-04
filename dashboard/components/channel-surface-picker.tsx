@@ -3,6 +3,7 @@
 import { channelColor } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsStory, supportsText, supportsVideo } from "@/lib/platforms";
+import { needsStoryCanvas } from "@/lib/story-geometry";
 import type { PostTarget, Surface } from "@/lib/types";
 
 export interface PickerChannel {
@@ -48,6 +49,7 @@ export function ChannelSurfacePicker({
   textOnly = false,
   hasVideo = false,
   slideCount = 0,
+  assets,
   postNow = false,
 }: {
   channels: PickerChannel[];
@@ -59,10 +61,20 @@ export function ChannelSurfacePicker({
   hasVideo?: boolean;
   /** How many slides the post has — a story target fans out to one Story per slide. */
   slideCount?: number;
+  /** The post's assets, so a non-9:16 source can be flagged as "will be reframed" BEFORE
+   *  scheduling rather than discovered afterwards. Optional: callers without dimensions to
+   *  hand (the sends panel) simply don't get the note. */
+  assets?: { width: number | null; height: number | null }[];
   postNow?: boolean;
 }) {
   const storyCount = Math.max(slideCount, 1);
   const anyStorySelected = value.some((t) => t.surface === "story");
+  // Reframing is stated up front, in the same spirit as the slide-count note below:
+  // a landscape photo becomes a 9:16 canvas, and finding that out after publishing
+  // is exactly the surprise this picker exists to prevent.
+  const anyNeedsReframing = (assets ?? []).some((a) =>
+    needsStoryCanvas(a.width ?? 0, a.height ?? 0)
+  );
 
   return (
     <div>
@@ -197,6 +209,11 @@ export function ChannelSurfacePicker({
 
       {/* Say the fan-out BEFORE scheduling. There is no carousel Story in the API, so a
           multi-slide post becomes one Story per slide — a surprise if discovered later. */}
+      {anyStorySelected && anyNeedsReframing ? (
+        <p className="mt-2 text-xs text-muted">
+          Not 9:16 — will be reframed to fit a Story. Change how in Framing.
+        </p>
+      ) : null}
       {anyStorySelected && storyCount > 1 ? (
         <p className="mt-2 text-xs text-muted">
           {storyCount} slides → {storyCount} Stories, posted back to back in slide order.
