@@ -20,6 +20,24 @@ from .config import Config
 # missing ones are simply null. (Available metrics vary by media type / API version.)
 REQUESTED_METRICS = ["reach", "likes", "comments", "saved", "shares"]
 
+# Story media supports a DIFFERENT set, and rejects the feed list outright (HTTP 400,
+# not partial results) — asking for likes/comments/saved/impressions on a story fails
+# the whole call. Established by probing a real published Story against the live API
+# on 2026-08-04, not from docs: the names that read as obvious (taps_forward,
+# taps_back, exits) are all REJECTED; `navigation` is their modern replacement, and
+# `views` replaces `impressions`. See reference.md, "first real Story".
+#
+# Only reach/views/replies/shares map to columns (via COLUMN_MAP); navigation,
+# profile_visits, follows and total_interactions have no column and live in raw_json,
+# which is what it exists for. They cost nothing extra — it is all one request.
+REQUESTED_STORY_METRICS = [
+    "reach", "views", "replies", "shares",
+    "navigation", "profile_visits", "follows", "total_interactions",
+]
+
+# A Story is gone 24h after publishing, so there is nothing left to refresh.
+STORY_LIFETIME_HOURS = 24
+
 # Map insight names -> our post_metrics columns.
 COLUMN_MAP = {
     # Instagram media insights
@@ -50,6 +68,7 @@ COLUMN_MAP = {
 def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hours: int):
     max_age_cutoff = (now - timedelta(days=max_age_days)).isoformat()
     interval_cutoff = (now - timedelta(hours=min_interval_hours)).isoformat()
+    story_cutoff = (now - timedelta(hours=STORY_LIFETIME_HOURS)).isoformat()
     # Platforms _FETCHERS registers as None have no metrics endpoint at all (Discord,
     # Telegram) — excluding them here means they are never reselected, cycle after
     # cycle, only for run_metrics to skip them again every time.
@@ -75,6 +94,12 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
             -- be picked up once so run_metrics' finally block can clear the flag).
             (
               {exclude_clause}pub.published_at >= ?
+              -- A Story is gone 24h after publishing. Refreshing it past that only
+              -- produces a 400 every cycle, forever. This sits INSIDE the automatic
+              -- branch, beside the platform exclusion above and for the same reason: a
+              -- manually-flagged row must still be selectable once below, or
+              -- run_metrics' finally block never clears metrics_refresh_requested_at.
+              AND (pub.surface != 'story' OR pub.published_at >= ?)
               AND NOT EXISTS (
                 SELECT 1 FROM post_metrics pm
                 WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
@@ -87,7 +112,7 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
             OR pub.metrics_refresh_requested_at IS NOT NULL
           )
         """,
-        (*no_metrics_platforms, max_age_cutoff, interval_cutoff),
+        (*no_metrics_platforms, max_age_cutoff, story_cutoff, interval_cutoff),
     ).fetchall()
 
 
@@ -120,11 +145,16 @@ def _record(conn, publication_id: int, fetched_at: str, insights: dict) -> None:
     conn.commit()
 
 
-def _fetch_instagram(client, remote_post_id: str, token: str, config, logger, pub_id) -> dict:
-    return client.get_media_insights(remote_post_id, token, REQUESTED_METRICS)
+def _fetch_instagram(client, remote_post_id: str, token: str, config, logger, pub_id,
+                     surface: str = "feed") -> dict:
+    metrics = REQUESTED_STORY_METRICS if surface == "story" else REQUESTED_METRICS
+    return client.get_media_insights(remote_post_id, token, metrics)
 
 
-def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub_id) -> dict:
+def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub_id,
+                    surface: str = "feed") -> dict:
+    # surface is accepted and ignored: Facebook Page Stories have no adapter yet, and a
+    # uniform signature keeps _FETCHERS callable without special-casing one platform.
     """Stable counts first, then reach/views as best-effort.
 
     Reactions/comments/shares are plain edge summaries and are required — if they fail,
@@ -159,7 +189,9 @@ def _fetch_facebook(client, remote_post_id: str, token: str, config, logger, pub
     return {**summary, **insights}
 
 
-def _fetch_threads(client, remote_post_id: str, token: str, config, logger, pub_id) -> dict:
+def _fetch_threads(client, remote_post_id: str, token: str, config, logger, pub_id,
+                   surface: str = "feed") -> dict:
+    # surface accepted and ignored — Threads has no Stories surface. See _fetch_facebook.
     """Unlike Facebook, Threads has no stable summary endpoint to fall back on — the
     insights call IS the only source. If it fails, let it raise: run_metrics' caller
     logs it and skips this snapshot rather than recording an all-null row."""
@@ -224,6 +256,7 @@ def run_metrics(conn, config: Config, client, now, logger=None, client_for=None)
                 insights = fetch(
                     pick_client(platform), pub["remote_post_id"], token,
                     config, logger, pub["id"],
+                    pub["surface"] if "surface" in pub.keys() else "feed",
                 )
             except Exception as exc:  # noqa: BLE001 — a metrics fetch failure is non-fatal
                 if logger:

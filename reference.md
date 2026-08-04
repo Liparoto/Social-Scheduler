@@ -437,19 +437,37 @@ the rule that a Story is a **destination, not a post type** (`docs/design-instag
   rejects it with `code 190 — Cannot parse access token`. `Config.graph_base` already holds the
   right host; use it rather than hardcoding a host in a one-off script.
 
-### ⚠ Story insights need their own metric set (open — Phase 5)
+### Story insights — the supported metric set (verified 2026-08-04, RESOLVED)
 
-The metrics job fired against the new Story and failed, exactly as the design predicted:
+Story media **rejects the feed metric list outright** — HTTP 400, not partial results:
 
 ```
-GET <media-id>/insights -> 400: The Media Insights API does not support the
-likes, comments, saved metric for this media product type.
+GET <media-id>/insights?metric=likes,comments,saved -> 400:
+The Media Insights API does not support the likes, comments, saved metric for
+this media product type.
 ```
 
-The feed metric list (`reach, likes, comments, saved, shares`) is **rejected outright** for
-story media — it does not degrade to partial results. Until `REQUESTED_STORY_METRICS` lands,
-every story publication produces one of these 400s per refresh cycle. Verify the supported
-story metric names against live docs before writing that list.
+So one wrong name costs the whole snapshot. The supported set was established by probing a
+real published Story metric-by-metric against the live API — **not from docs, and not from
+the plausible-sounding names, which were wrong**:
+
+| Supported for a STORY | Rejected for a STORY |
+|---|---|
+| `reach`, `views`, `replies`, `shares` | `impressions` (use `views`) |
+| `navigation`, `profile_visits`, `follows`, `total_interactions` | `taps_forward`, `taps_back`, `exits` (use `navigation`) |
+| | `likes`, `comments`, `saved` |
+
+`taps_forward` / `taps_back` / `exits` read like the obvious story metrics and are the ones
+an LLM or an old doc will suggest. They are gone; `navigation` is their replacement.
+
+Column mapping needed no change: `reach`→reach and `views`→impressions and `replies`→comments
+already existed in `COLUMN_MAP` (added for Threads). The other four have no column and live in
+`raw_json`. Verified end to end on the first real Story: `views: 6`, everything else 0.
+
+**Stories expire after 24h**, so `publications_needing_metrics` stops auto-refreshing a story
+past `STORY_LIFETIME_HOURS`. That cutoff sits INSIDE the automatic branch, beside the
+platform exclusion — a manually-flagged row must still be selectable once, or `run_metrics`'
+`finally` block never clears `metrics_refresh_requested_at` and the flag sticks forever.
 
 ### The bug this shipped with, and what actually prevented a repeat
 

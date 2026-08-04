@@ -305,3 +305,96 @@ def test_metrics_pick_the_client_for_each_channels_platform(
 
     assert run_metrics(conn, config, fake_client, now, client_for=client_for) == 1
     assert seen == ["facebook"]
+
+
+# ---- Stories -----------------------------------------------------------------------
+# Story media REJECTS the feed metric list outright (400, not partial results), so which
+# names are requested is the behaviour under test. The supported set was established by
+# probing a real published Story — see reference.md, "first real Story".
+
+def _story_pub(conn, channel_id, *, published_at, remote_id="story-1"):
+    pid = conn.execute(
+        "INSERT INTO posts (post_type, content_status) VALUES ('single', 'ready')"
+    ).lastrowid
+    aid = conn.execute(
+        "INSERT INTO assets (content_hash, media_kind, storage_path) "
+        "VALUES (?, 'image', 'a.jpg')", (f"h-{pid}",)
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?,?,0)", (pid, aid)
+    )
+    conn.execute(
+        "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?,?,'story')",
+        (pid, channel_id),
+    )
+    pub = conn.execute(
+        """INSERT INTO publications
+             (post_id, channel_id, scheduled_at, status, published_at, remote_post_id,
+              is_dry_run, surface, asset_id)
+           VALUES (?,?,?, 'posted', ?, ?, 0, 'story', ?)""",
+        (pid, channel_id, published_at, published_at, remote_id, aid),
+    ).lastrowid
+    conn.commit()
+    return pid, pub
+
+
+def test_story_requests_story_metrics_not_feed_metrics(conn, config, fake_client):
+    ch = _channel(conn)
+    _story_pub(conn, ch, published_at=(NOW - timedelta(hours=2)).isoformat())
+
+    assert run_metrics(conn, config, fake_client, NOW) == 1
+    asked = fake_client.requested_metrics[-1]
+    for rejected in ("likes", "comments", "saved", "impressions"):
+        assert rejected not in asked, f"{rejected} is rejected outright for story media"
+    assert "reach" in asked and "views" in asked and "replies" in asked
+
+
+def test_feed_publications_still_request_the_feed_metrics(conn, config, fake_client):
+    ch = _channel(conn)
+    _posted_pub(conn, ch, published_at=(NOW - timedelta(days=1)).isoformat())
+
+    run_metrics(conn, config, fake_client, NOW)
+    asked = fake_client.requested_metrics[-1]
+    assert "saved" in asked and "likes" in asked, "feed behaviour must not change"
+
+
+def test_story_older_than_24h_is_not_auto_refreshed(conn, config, fake_client):
+    """The Story no longer exists after 24h — refreshing only produces 400s forever."""
+    ch = _channel(conn)
+    _story_pub(conn, ch, published_at=(NOW - timedelta(hours=25)).isoformat())
+
+    assert run_metrics(conn, config, fake_client, NOW) == 0
+
+
+def test_story_within_24h_is_refreshed(conn, config, fake_client):
+    ch = _channel(conn)
+    _story_pub(conn, ch, published_at=(NOW - timedelta(hours=23)).isoformat())
+
+    assert run_metrics(conn, config, fake_client, NOW) == 1
+
+
+def test_a_manual_refresh_still_picks_up_an_expired_story_once(conn, config, fake_client):
+    """Excluding it outright would leave metrics_refresh_requested_at set forever, since
+    run_metrics' finally block is what clears the flag — the same reasoning the platform
+    exclusion already documents."""
+    ch = _channel(conn)
+    _, pub = _story_pub(conn, ch, published_at=(NOW - timedelta(hours=48)).isoformat())
+    conn.execute(
+        "UPDATE publications SET metrics_refresh_requested_at = ? WHERE id = ?",
+        (NOW.isoformat(), pub),
+    )
+    conn.commit()
+
+    run_metrics(conn, config, fake_client, NOW)
+    flag = conn.execute(
+        "SELECT metrics_refresh_requested_at FROM publications WHERE id=?", (pub,)
+    ).fetchone()[0]
+    assert flag is None, "a manual refresh flag must always be cleared, never stick"
+
+
+def test_a_feed_post_older_than_24h_is_unaffected_by_the_story_cutoff(conn, config,
+                                                                      fake_client):
+    ch = _channel(conn)
+    _posted_pub(conn, ch, published_at=(NOW - timedelta(days=3)).isoformat())
+
+    assert run_metrics(conn, config, fake_client, NOW) == 1

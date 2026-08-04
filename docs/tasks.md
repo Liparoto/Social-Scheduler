@@ -612,10 +612,10 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       sends panel all pick Feed/Story per Instagram channel; the Library has a Story badge and
       a Destination filter. Deferred: story metrics (below), queue grouping of story slides,
       a 9:16 story canvas, auto-fill story recycling, Facebook Page Stories.
-- [ ] **Story insights (blocking a real gap).** The feed metric list is REJECTED for story
-      media — every story publication currently logs a 400 per metrics cycle. Needs
-      `REQUESTED_STORY_METRICS` + a 24h refresh cutoff (stories expire). See
-      docs/design-instagram-stories.md §5.
+- [x] **Story insights** — `REQUESTED_STORY_METRICS` + a 24h auto-refresh cutoff, verified
+      against the live API on the first real Story (no 400, `views: 6` recorded). The
+      supported names were established by probing, not guessing: `taps_forward`/`taps_back`/
+      `exits` are REJECTED, `navigation` and `views` replace them. See reference.md.
 - [ ] First-comment automation (post-publish comment endpoint).
 - [ ] Approval-workflow UI (activates the `requires_approval` flag).
 

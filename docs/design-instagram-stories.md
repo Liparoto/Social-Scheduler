@@ -201,14 +201,19 @@ behaves correctly. Worth stating precisely because a 10-slide Story is 10 publis
 
 ## 5. Metrics
 
-- `_fetch_instagram` selects its metric list by `surface`: a story set (reach, replies, taps
-  forward, taps back, exits) rather than the feed set. **These metric names are to be verified
-  against live Meta docs before implementation** — `reference.md` carries a standing rule that
-  the Stories adapter gets the same live verification the image/carousel path got.
+- `_fetch_instagram` selects its metric list by `surface`. **Verified by probing a real
+  published Story against the live API (2026-08-04), not from docs — and the guess in the
+  first draft of this spec was wrong.** `taps_forward`, `taps_back` and `exits` are all
+  REJECTED; `navigation` replaces them and `views` replaces `impressions`. The supported
+  set is: `reach, views, replies, shares, navigation, profile_visits, follows,
+  total_interactions`. Story media rejects the feed list outright (HTTP 400, not partial
+  results), so getting this wrong costs every story snapshot, not just some fields.
 - `publications_needing_metrics` **excludes story rows more than 24 hours past
   `published_at`**. The Story no longer exists; refreshing it only produces recurring errors.
   Whatever was captured while it was live is kept.
-- **No new `post_metrics` columns.** `reach` maps to the existing column. `replies` already
+- **No new `post_metrics` columns** — confirmed against real data. `reach` maps to the
+  existing column and `views` maps to `impressions` (both already in `COLUMN_MAP` from
+  Threads). `replies` already
   maps to `comments` via `COLUMN_MAP` (added for Threads) and is left to do so rather than
   special-cased — a story reply is the nearest thing a story has to a comment, and diverging
   per-surface would make the column mean two things. Taps and exits have no column and stay in

@@ -65,6 +65,7 @@ class FakeGraphClient:
                  page_summary=None, page_insights=None, fail_child_index=None,
                  threads_limit=(0, 250, 86400), threads_insights=None):
         self.calls = []
+        self.requested_metrics = []
         self.limit = limit
         self.fail_on = set(fail_on or [])
         # 1-based index of the unpublished carousel child (create_page_photo(published=False)
@@ -88,7 +89,10 @@ class FakeGraphClient:
         self._n = 0
 
     def get_media_insights(self, media_id, token, metrics):
+        # Record the metric LIST too: story media rejects the feed list outright, so which
+        # names were asked for is the thing under test, not just that a call happened.
         self.calls.append(("insights", media_id))
+        self.requested_metrics.append(list(metrics))
         if "insights" in self.fail_on:
             raise RuntimeError("insights boom")
         return dict(self.insights)
