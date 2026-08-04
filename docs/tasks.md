@@ -1137,6 +1137,13 @@ that the worker remains authoritative in each target channel's timezone.
         text posted for real — `PostEditor` had to block Post-now while dirty. A modal makes
         this *easier* to hit (click-outside, Esc, card scroll all dismiss). Decide the
         behaviour explicitly: confirm-on-dismiss, or save-then-close. Never silently drop.
+      - **DECIDED 2026-08-03 — confirm-on-dismiss.** Cancel, the ✕, Esc and click-outside all
+        ask *"Discard changes?"* while the dialog differs from what it opened with; a clean
+        dismissal closes silently, so there's no friction when nothing is at stake. Esc while
+        that prompt is up means *keep editing* — Esc never destroys. Save-then-close was
+        rejected: a stray Esc would write to the DB with no way to back out, and a save that
+        fails once the dialog is gone has nowhere to report itself. The reasoning is repeated
+        in `quick-edit-modal.tsx`'s header so it doesn't have to be re-derived.
       - After saving, refresh the card in place — a modal that forces a full reload defeats the
         point. Pairs naturally with the bulk-edit item: same fields, one post vs. many.
 - [ ] **Media page → the post, properly** (owner-requested 2026-08-02). A link *does* already

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
 import type { ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
@@ -18,6 +18,18 @@ import type { ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/
  *
  * Every value it opens with is passed in from the Library list — no fetch on open, because
  * the list query already carries all of it.
+ *
+ * DIRTY-STATE BEHAVIOUR: **confirm-on-dismiss** (decided 2026-08-03, recorded in
+ * docs/tasks.md). Every dismissal path — Cancel, the ✕, Esc and click-outside — asks
+ * "Discard changes?" while anything differs from what the dialog opened with. Dismissing
+ * with no changes closes silently, so there is no friction when nothing is at stake.
+ *
+ * Why it matters: this project has already been bitten once by an unsaved edit looking
+ * saved (Post-now published the stale saved caption, so PostEditor now blocks the submit
+ * while dirty). A modal makes that easier to hit, not harder — Esc and a stray click both
+ * dismiss it. Save-then-close was rejected: an accidental Esc would write to the DB with
+ * no way to back out, and a save that fails after the dialog is gone has nowhere to report
+ * itself. An edit is never silently dropped and never silently committed.
  */
 
 export interface QuickEditPost {
@@ -57,9 +69,55 @@ export function QuickEditModal({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
+
+  // Compared against the values this dialog opened with, field by field, so re-picking a
+  // tag you just removed reads as clean rather than as a change. Ids are sorted because
+  // TagEditor appends in click order; periods are keyed by id for the same reason.
+  const sortedIds = (ids: number[]) => JSON.stringify([...ids].sort((a, b) => a - b));
+  const normalizedPeriods = (entries: [number, PeriodMode][]) =>
+    JSON.stringify([...entries].sort((a, b) => a[0] - b[0]));
+  const cooldownValue = cooldown.trim() === "" ? null : Number(cooldown);
+  const isDirty =
+    status !== post.content_status ||
+    kind !== post.content_kind ||
+    cooldownValue !== post.cooldown_days ||
+    sortedIds(tagIds) !== sortedIds(post.tag_ids) ||
+    normalizedPeriods(
+      Object.entries(periodModes).map(([pid, mode]) => [Number(pid), mode])
+    ) !== normalizedPeriods(post.periods.map((p) => [p.id, p.mode]));
+
+  /** The single funnel every dismissal path goes through. Nothing calls onClose directly. */
+  function requestClose() {
+    if (saving) return;
+    if (isDirty) {
+      setConfirmingDiscard(true);
+      return;
+    }
+    onClose();
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      // Esc never destroys: while the discard prompt is up it backs out of the prompt
+      // (= keep editing) rather than confirming the discard it just asked about.
+      if (confirmingDiscard) {
+        setConfirmingDiscard(false);
+        return;
+      }
+      requestClose();
+    }
+    // Capture phase so this runs before anything else listening for Esc on the page.
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+    // No dependency array on purpose: the handler closes over isDirty, which changes with
+    // every keystroke. A stale closure here would be exactly the silent-discard bug.
+  });
 
   async function save() {
     if (saving) return;
@@ -101,6 +159,12 @@ export function QuickEditModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="quick-edit-title"
+      // mousedown, not click: a text selection that starts inside the panel and ends on
+      // the backdrop would otherwise read as a click-outside and try to dismiss the
+      // dialog mid-edit. currentTarget check keeps it to the backdrop itself.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) requestClose();
+      }}
     >
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-card border border-border bg-surface p-6 shadow-xl">
         <div className="flex items-start justify-between gap-4">
@@ -114,7 +178,7 @@ export function QuickEditModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             className="rounded-lg px-2 py-1 text-sm text-muted hover:bg-surface-sunken hover:text-ink"
             aria-label="Close quick edit"
           >
@@ -182,6 +246,38 @@ export function QuickEditModal({
           </p>
         ) : null}
 
+        {confirmingDiscard ? (
+          <div
+            className="mt-4 rounded-lg border border-status-failed/40 bg-status-failed/5 p-4"
+            role="alertdialog"
+            aria-labelledby="quick-edit-discard-title"
+          >
+            <p id="quick-edit-discard-title" className="text-sm font-semibold text-ink">
+              Discard changes?
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Your edits to this post have not been saved yet.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmingDiscard(false)}
+                autoFocus
+                className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-ink hover:bg-surface-sunken"
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-status-failed/50 px-3 py-1.5 text-sm font-medium text-status-failed hover:bg-status-failed/10"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="mt-6 flex items-center justify-between gap-4">
           <p className="text-[11px] text-faint">
             Captions, images, targets and sends stay in the full editor.
@@ -189,7 +285,7 @@ export function QuickEditModal({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               disabled={saving}
               className="rounded-lg border border-border px-4 py-2 text-sm text-ink hover:bg-surface-sunken disabled:opacity-50"
             >
