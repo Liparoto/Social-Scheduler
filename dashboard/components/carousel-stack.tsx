@@ -21,7 +21,13 @@ export function CarouselStack({ count, children }: { count: number; children?: R
   if (count <= 1) return <>{children}</>;
 
   return (
-    <div className="relative shrink-0">
+    // self-start: the Library card row is a flex container, and without this the wrapper
+    // (which, unlike the thumbnail it wraps, has no intrinsic h-16/w-16 of its own) stretches
+    // to the row's full cross-axis height under the default align-items: stretch — the two
+    // "paper" layers below then inherit that stretched height via h-full and hang far past
+    // the thumbnail instead of sitting close behind it. self-start makes this item shrink-wrap
+    // its child instead, without CarouselStack having to know the thumbnail's actual size.
+    <div className="relative shrink-0 self-start">
       <span
         aria-hidden
         className="absolute left-1.5 top-1.5 h-full w-full rounded-md border border-border bg-surface-sunken"
