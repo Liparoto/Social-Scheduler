@@ -18,6 +18,7 @@ import {
 } from "@/lib/library-season-status";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
+import { CarouselStack } from "@/components/carousel-stack";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
 import { BulkEditModal } from "@/components/bulk-edit-modal";
 import { QuickEditModal } from "@/components/quick-edit-modal";
@@ -38,6 +39,7 @@ interface PostLite {
   asset_count: number;
   asset_ids: number[];
   scheduled_count: number;
+  queued_publication_count: number;
   posted_count: number;
   last_posted_at: string | null;
   content_kind: "one_time" | "evergreen";
@@ -133,9 +135,13 @@ export function LibraryView({
   const [formatFilter, setFormatFilter] = useState<"all" | PostFormat>("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
-  const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(
-    null
-  );
+  const [openMedia, setOpenMedia] = useState<{
+    postId: number;
+    label: string;
+    assets: LightboxAsset[];
+    /** What the card says the post has, so the fetch below knows to bother. */
+    expectedCount: number;
+  } | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   // Which card's quick-edit dialog is open, if any. Held as an id rather than the post
@@ -263,6 +269,37 @@ export function LibraryView({
       available: availableCheckboxFilters,
     });
   }, [availableCheckboxFilters]);
+
+  // The Library list deliberately doesn't carry every slide's metadata (see the GET's
+  // header comment), so the remaining slides are fetched when the lightbox opens. If this
+  // fails, the lightbox simply stays the single-asset viewer it already was.
+  const openMediaPostId = openMedia?.postId;
+  const openMediaLoaded = (openMedia?.assets.length ?? 0) > 1;
+  const openMediaExpected = openMedia?.expectedCount ?? 0;
+  useEffect(() => {
+    if (openMediaPostId === undefined || openMediaExpected < 2 || openMediaLoaded) return;
+    const controller = new AbortController();
+    async function loadSlides() {
+      try {
+        const res = await fetch(`/api/posts/${openMediaPostId}/assets`, {
+          signal: controller.signal,
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !Array.isArray(body.assets) || body.assets.length < 2) return;
+        // Guarded on the id: by the time this lands the viewer may have closed the
+        // lightbox and opened a different post's.
+        setOpenMedia((current) =>
+          current && current.postId === openMediaPostId
+            ? { ...current, assets: body.assets }
+            : current
+        );
+      } catch {
+        // Aborted, or offline. Either way the lightbox keeps working.
+      }
+    }
+    loadSlides();
+    return () => controller.abort();
+  }, [openMediaPostId, openMediaExpected, openMediaLoaded]);
 
   // Counted over the whole library, not the filtered view, so the numbers stay put while
   // you click between formats instead of collapsing to "N Carousel" the moment one is on.
@@ -535,6 +572,7 @@ export function LibraryView({
                 on ? "border-brand" : "border-border hover:bg-surface-sunken"
               }`}
             >
+              <CarouselStack count={p.asset_count}>
               <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
                 <Link
                   href={`/library/${p.id}`}
@@ -582,19 +620,24 @@ export function LibraryView({
                     label={p.caption ?? undefined}
                     onOpen={() =>
                       setOpenMedia({
+                        postId: p.id,
                         label: p.caption || `Post ${p.id}`,
-                        asset: {
-                          id: p.first_asset_id as number,
-                          media_kind: p.first_asset_media_kind as "image" | "video",
-                          cover_frame_ms: p.first_asset_cover_frame_ms,
-                          width: p.first_asset_width,
-                          height: p.first_asset_height,
-                        },
+                        assets: [
+                          {
+                            id: p.first_asset_id as number,
+                            media_kind: p.first_asset_media_kind as "image" | "video",
+                            cover_frame_ms: p.first_asset_cover_frame_ms,
+                            width: p.first_asset_width,
+                            height: p.first_asset_height,
+                          },
+                        ],
+                        expectedCount: p.asset_count,
                       })
                     }
                   />
                 ) : null}
               </div>
+              </CarouselStack>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start gap-2">
                   <p className="line-clamp-2 min-w-0 flex-1 text-sm text-ink">
@@ -626,7 +669,6 @@ export function LibraryView({
                 </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.post_type}</span>
-                  {p.asset_count > 1 ? <span>{p.asset_count} imgs</span> : null}
                   {p.posted_count > 0 ? (
                     <span className="text-status-posted">posted×{p.posted_count}</span>
                   ) : (
@@ -854,7 +896,7 @@ export function LibraryView({
 
       {openMedia ? (
         <MediaLightbox
-          asset={openMedia.asset}
+          assets={openMedia.assets}
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
         />
@@ -882,6 +924,11 @@ export function LibraryView({
             tag_ids: quickEditPost.tag_ids,
             periods: quickEditPost.periods,
             target_platforms: splitTags(quickEditPost.target_platforms),
+            asset_count: quickEditPost.asset_count,
+            // queued_publication_count, not scheduled_count: the post detail page's own
+            // reorder notice already excludes 'publishing' (it can't be reordered — it's
+            // mid-publish), and quick edit's notice needs to promise the same thing.
+            queued_publication_count: quickEditPost.queued_publication_count,
           }}
           periods={periods}
           timeOfDayTags={timeOfDayTags}

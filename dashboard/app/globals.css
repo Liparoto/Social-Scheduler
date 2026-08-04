@@ -65,6 +65,11 @@ body {
   letter-spacing: -0.01em;
 }
 
+/* sr-only is a Tailwind v4 core utility (already relied on by theme-controls.tsx and
+   the carousel stack's "N slides" label) — don't redefine it here. A same-specificity
+   rule after `@import "tailwindcss"` would win over Tailwind's and, being a weaker
+   rule (no padding/margin/border reset), silently regress every existing call site. */
+
 /* Consistent visible focus for keyboard users (quality floor). */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--color-accent);

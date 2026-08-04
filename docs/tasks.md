@@ -1163,3 +1163,84 @@ that the worker remains authoritative in each target channel's timezone.
         than one `MIN()` id, and render each as a link (a small popover if the list is long).
         Watch for N+1 across the whole asset store — batch it, the way the period-names query
         above will need to.
+
+---
+
+## Carousel reorder + lightbox swipe (2026-08-03)  `[x] done`
+
+**Design:** `docs/design-carousel-reorder-and-swipe.md` · **Plan:**
+`docs/superpowers/plans/2026-08-03-carousel-reorder-and-swipe.md`
+
+The merge-into-carousel item above explicitly left "reordering an existing carousel outside a
+merge" out of scope. This closes that gap and adds a matching read side: an owner can now
+**reorder an existing carousel's slides** from the post detail page *and* from the Library
+quick-edit dialog, and the Library shows carousels as a **stack with a count chip** instead of
+just the cover image. A new **lightbox** browses every slide of a post — arrows, on-screen
+prev/next buttons, touch/trackpad swipe, and a `N / total` counter — from both the post detail
+page and the Library.
+
+**No schema migration and no worker change.** `post_assets.sort_order` already existed and
+`worker/db.py::get_ordered_assets` already reads it at publish time — this branch is dashboard-only.
+
+**One write path.** `GET` / `PATCH /api/posts/[id]/assets`. The `PATCH` accepts **only a
+permutation** of the post's current slide ids — it can reorder, never add, remove, or swap in a
+different asset. That constraint is what keeps the frozen `posts.post_type` invariant (see the
+merge-feature traps above) correct *by construction*: since the slide count can't change, the
+post type the write path was frozen at can't go stale.
+
+**Guard:** a `PATCH` is refused with `409` only while a target's publication is actually
+`publishing` — queued (`scheduled`/`pending_approval`) and already-`posted` sends are allowed,
+with the UI warning the owner about queued ones before they save.
+
+- [x] Post detail page: all slides shown (removed the old `slice(0, 4)` truncation that hid
+      carousels past 4 images), drag/keyboard reorder, Save/Reset disabled until dirty, Reset
+      reverts and re-disables.
+- [x] Library quick-edit dialog: same reorder UI, resynced after its async asset fetch so it
+      doesn't render a stale slide order (the `useAssetOrder` fix).
+- [x] Library card: carousels render as a stack (layered thumbnails) with a count chip; adds
+      **zero** extra image requests — the stack layers reuse the cover image.
+- [x] Lightbox: opens on the full-size image (not the thumbnail variant), arrows/buttons/swipe
+      move between slides, clamps at both ends (does not wrap), Escape closes and restores body
+      scroll and focus, single-image posts get a bare Close button with no counter or arrows.
+
+**Verification.** `npm test` (26 test-ui + 197 lib/test), `tsc --noEmit`, and `npm run build`
+all green; `npm run lint` sits at the same 15 pre-existing problems the branch started with
+(12 errors, 3 warnings), none added. Full interaction path re-verified live against the :3939
+dev server with Playwright: lightbox counter and clamping, focus return, single-image posts,
+detail-page truncation fix, a save-then-hard-reload-then-restore round trip that left the
+owner's real data exactly as it started, and an exact count of 36 stack chips for 36 carousels
+with 110 `<img>` tags across 109 cards (confirming the stack adds no image requests). A
+stack-sizing bug (layers stretching to full card height) was caught in this pass and fixed in
+commit `a927704`; re-measured afterward at exactly 64×64 with the layers offset +6/+6 and +2/+2.
+
+**Two verification gaps, left open deliberately:**
+- **The worker's `DRY_RUN` publish-order check was not run live.** The owner's install publishes
+  for real (`DRY_RUN=0`) and is asleep; flipping `DRY_RUN` in the live `.env` and restoring it
+  unattended risks leaving the install silently stuck in dry-run. Publish-order-after-reorder is
+  instead covered by `lib/queries.reorder.test.ts` ("getPostAssets reads back in the new order")
+  and by the fact that `worker/db.py::get_ordered_assets` — unmodified by this branch — already
+  sorts by `sort_order` at publish time.
+- **The dashboard's rendering of a live `409` was not exercised in the browser.**
+  `test/assets-order-route.test.ts` proves the guard itself against a real migrated SQLite
+  database (a `publishing` publication → `409`, order left untouched), but nobody watched the
+  Save button actually surface the "being published right now" message on screen.
+
+**Deferred (spec §9), not lost:**
+- [ ] **Adding or removing slides on an existing post.** This branch only reorders a fixed set
+      of slides — it deliberately never changes which assets belong to the post. Add/remove
+      moves `posts.post_type`, has to re-run platform compatibility, and needs the conform
+      pipeline for any newly uploaded asset. Merge-into-carousel covers the "assemble a carousel
+      from scratch" case today; there is still no way to add one more photo to an existing
+      carousel or drop one slide from it without rebuilding the post.
+- [ ] **Reordering from inside the lightbox.** Considered and rejected during design: the
+      lightbox is a read-only viewer shared by three screens, and giving it a save state would
+      turn it into a write surface with its own dirty/discard handling duplicated across all
+      three. Recorded here so it isn't re-proposed without re-litigating that trade-off.
+
+**Also noted during review, not fixed here:**
+- `npm run lint` carries 15 pre-existing problems (mostly `react-hooks/set-state-in-effect`)
+  that predate this branch — worth a dedicated cleanup pass sometime.
+- The dashboard's UI test suite renders with `renderToStaticMarkup`, which strips event handlers
+  and can't measure layout. Both the stack-sizing bug and the entire lightbox interaction path
+  were only catchable in a real browser because of this. If this area of the UI keeps growing, a
+  jsdom-based suite would start paying for itself.

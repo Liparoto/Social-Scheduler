@@ -470,6 +470,50 @@ export function getPostAssets(postId: number): Asset[] {
     .all(postId) as Asset[];
 }
 
+/**
+ * True while any of this post's sends is mid-flight in the worker.
+ *
+ * The guard on reordering. Unlike merge — which refuses posted and publishing posts
+ * because it DELETES posts and their queued sends — a reorder destroys nothing, so the
+ * only genuinely dangerous moment is the one where the worker is reading post_assets for
+ * this post right now to build a container. Reordering a 'posted' post is the whole point
+ * for evergreen content, and reordering a 'scheduled' one is expected (the UI says so).
+ */
+export function postHasPublishingPublication(postId: number): boolean {
+  const row = getDb()
+    .prepare("SELECT 1 FROM publications WHERE post_id = ? AND status = 'publishing' LIMIT 1")
+    .get(postId);
+  return row !== undefined;
+}
+
+/**
+ * Rewrite a post's slide order.
+ *
+ * `assetIds` MUST already have been checked against this post's current assets by
+ * lib/asset-order.ts — this function trusts it completely and will happily write whatever
+ * it is handed. Validation lives at the route because that is where the 400 is returned.
+ *
+ * DELETE-then-INSERT rather than a loop of UPDATEs, for the reason mergePostsIntoCarousel
+ * documents: UNIQUE (post_id, sort_order) is checked per-row and immediately, so any
+ * in-place shuffle collides at the first move. post_assets is (id, post_id, asset_id,
+ * sort_order) and nothing references its id, so rebuilding the rows loses nothing. The
+ * assets themselves are ON DELETE RESTRICT and are not reachable from here.
+ */
+export function reorderPostAssets(postId: number, assetIds: number[]): void {
+  const db = getDb();
+  const clear = db.prepare("DELETE FROM post_assets WHERE post_id = ?");
+  const link = db.prepare(
+    "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, ?)"
+  );
+  const touch = db.prepare("UPDATE posts SET updated_at = ? WHERE id = ?");
+  const tx = db.transaction(() => {
+    clear.run(postId);
+    assetIds.forEach((assetId, index) => link.run(postId, assetId, index));
+    touch.run(nowIso(), postId);
+  });
+  tx();
+}
+
 // ---- Posts + publications (the scheduling write) --------------------------------
 
 /** Shared shape for the content-model side-tables a post can optionally arrive with. */
