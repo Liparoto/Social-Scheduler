@@ -65,6 +65,17 @@ body {
   letter-spacing: -0.01em;
 }
 
+/* Utility: visually hidden but still announced by screen readers (e.g. the carousel
+   stack's "N slides" label, which has a numerals-only visible sibling). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Consistent visible focus for keyboard users (quality floor). */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--color-accent);
