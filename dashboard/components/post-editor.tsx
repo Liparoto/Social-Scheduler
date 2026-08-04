@@ -69,6 +69,10 @@ export function PostEditor({
   const slideOrder = useAssetOrder(post.id, assets);
   const [savingOrder, setSavingOrder] = useState(false);
   const isCarousel = post.post_type === "carousel" && assets.length > 1;
+  // Deliberately excludes 'publishing': a send already mid-publish can't be reordered at
+  // all, so counting it here would make the "will go out in this order" notice promise
+  // something for a send it doesn't apply to. Quick edit's own reorder notice must agree
+  // with this — see queued_publication_count in queries.ts / quick-edit-modal.tsx.
   const queuedSendCount = sends.filter(
     (s) => s.status === "scheduled" || s.status === "pending_approval"
   ).length;
@@ -218,6 +222,19 @@ export function PostEditor({
                 order={slideOrder.order}
                 onOrderChange={slideOrder.setOrder}
                 queuedSendCount={queuedSendCount}
+                // Same per-image framing review the non-carousel branch below renders —
+                // this component has the full Asset[] server-side, so it can supply the
+                // control directly rather than widening OrderableAsset for it.
+                renderExtra={(assetId) => {
+                  const a = assets.find((x) => x.id === assetId);
+                  return a?.needs_review ? (
+                    <ConformControl
+                      assetId={a.id}
+                      conformMode={a.conform_mode}
+                      needsReview={a.needs_review}
+                    />
+                  ) : null;
+                }}
               />
               {slideOrder.error ? (
                 <p className="text-xs text-status-failed">{slideOrder.error}</p>

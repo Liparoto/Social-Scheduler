@@ -64,3 +64,28 @@ test("an unknown id in the order is skipped rather than thrown on", () => {
   assert.ok(html.includes("/api/media/11?variant=thumb"));
   assert.ok(!html.includes("/api/media/999?variant=thumb"));
 });
+
+// Regression for the post detail page silently losing ConformControl when the carousel
+// branch switched to CarouselReorder — renderExtra is how that control gets back under
+// each slide (see post-editor.tsx). Assert only that whatever a caller returns from
+// renderExtra actually reaches the markup, once per slide, keyed by asset id.
+test("renderExtra renders per-slide, keyed by asset id", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(CarouselReorder, {
+      assets,
+      order: [11, 22, 33],
+      onOrderChange: noop,
+      queuedSendCount: 0,
+      renderExtra: (assetId: number) =>
+        React.createElement("span", { "data-testid": `extra-${assetId}` }, "needs review"),
+    })
+  );
+  for (const id of [11, 22, 33]) {
+    assert.ok(html.includes(`data-testid="extra-${id}"`), `renderExtra output missing for ${id}`);
+  }
+});
+
+test("with no renderExtra prop, nothing extra is rendered", () => {
+  const html = render([11, 22, 33]);
+  assert.ok(!html.includes("data-testid"));
+});

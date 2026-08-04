@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { SlideReorder, type Slide } from "@/components/slide-reorder";
 
 /** The least a slide needs to be reordered and drawn. Matches what GET /assets returns. */
@@ -85,11 +85,18 @@ export function CarouselReorder({
   order,
   onOrderChange,
   queuedSendCount,
+  renderExtra,
 }: {
   assets: OrderableAsset[];
   order: number[];
   onOrderChange: (next: number[]) => void;
   queuedSendCount: number;
+  // Mirrors SlideReorder's own renderExtra, keyed by asset id rather than by Slide so
+  // callers don't need to know this component's internal Slide shape. OrderableAsset
+  // deliberately doesn't carry conform fields (see above) — a caller with the full
+  // Asset[] server-side (the post detail page, for ConformControl) supplies this;
+  // quick edit, whose assets come from GET /api/posts/[id]/assets, simply doesn't.
+  renderExtra?: (assetId: number, index: number) => ReactNode;
 }) {
   const byId = new Map(assets.map((a) => [a.id, a]));
   // An id in `order` that no longer exists on the post is dropped rather than rendered as
@@ -104,6 +111,7 @@ export function CarouselReorder({
       <SlideReorder
         slides={slides}
         onReorder={(next) => onOrderChange(next.map((s) => s.assetId))}
+        renderExtra={renderExtra ? (slide, index) => renderExtra(slide.assetId, index) : undefined}
       />
       {queuedSendCount > 0 ? (
         <p className="data text-[11px] text-muted">
