@@ -41,7 +41,7 @@ implements it and does not restate its reasoning.
 **Test commands** (from the repo root):
 
 ```bash
-python3 -m pytest worker/tests -q
+.venv/bin/python -m pytest worker/tests -q
 ```
 
 ```bash
@@ -215,7 +215,7 @@ def test_cascade_from_posts_still_works_after_the_rebuild(conn):
 
 - [ ] **Step 2: Run it and confirm it fails**
 
-Run: `python3 -m pytest worker/tests/test_migration_0014.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_migration_0014.py -q`
 Expected: FAIL — `no such column: surface`.
 
 - [ ] **Step 3: Write the migration**
@@ -281,20 +281,21 @@ ALTER TABLE publications ADD COLUMN asset_id INTEGER REFERENCES assets(id) ON DE
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `python3 -m pytest worker/tests/test_migration_0014.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_migration_0014.py -q`
 Expected: PASS (9 tests).
 
 - [ ] **Step 5: Run the whole worker suite**
 
-Run: `python3 -m pytest worker/tests -q`
+Run: `.venv/bin/python -m pytest worker/tests -q`
 Expected: PASS. Nothing should regress — every existing row backfills to `feed`.
 
 - [ ] **Step 6: Dry-run the migration against a scratch copy of the live DB**
 
-Never point `migrate.py` at `/data`. Copy first:
+Never point `migrate.py` at `/data`. Copy first — and use `.backup`, not `cp`: the DB is
+in WAL mode and may be open, so a plain file copy can capture a torn read.
 
 ```bash
-cp data/socialscheduler.db /tmp/scratch.db && DATABASE_PATH=/tmp/scratch.db python3 migrate.py && sqlite3 /tmp/scratch.db "PRAGMA integrity_check; PRAGMA foreign_key_check; SELECT surface, COUNT(*) FROM post_targets GROUP BY surface;"
+sqlite3 data/socialscheduler.db ".backup '/tmp/scratch.db'" && DATABASE_PATH=/tmp/scratch.db .venv/bin/python migrate.py && sqlite3 /tmp/scratch.db "PRAGMA integrity_check; PRAGMA foreign_key_check; SELECT surface, COUNT(*) FROM post_targets GROUP BY surface;"
 ```
 
 Expected: `ok`, no foreign-key violations, and every existing target reported as `feed`.
@@ -348,7 +349,7 @@ def test_due_publications_break_ties_by_id(conn):
 
 - [ ] **Step 2: Run it**
 
-Run: `python3 -m pytest worker/tests/test_db.py::test_due_publications_break_ties_by_id -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_db.py::test_due_publications_break_ties_by_id -q`
 Expected: may pass by luck. Treat this as a **regression guard**, not a red-green cycle — the
 current query has no tie-break, so passing is incidental. Proceed to Step 3 regardless.
 
@@ -372,7 +373,7 @@ And extend the docstring:
 
 - [ ] **Step 4: Run the suite**
 
-Run: `python3 -m pytest worker/tests -q`
+Run: `.venv/bin/python -m pytest worker/tests -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -434,7 +435,7 @@ add `create_story_container` to the fake alongside `create_video_container`.
 
 - [ ] **Step 2: Run it and confirm it fails**
 
-Run: `python3 -m pytest worker/tests/test_stories_publish.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_stories_publish.py -q`
 Expected: FAIL — `create_story_container` does not exist.
 
 - [ ] **Step 3: Implement it**
@@ -470,7 +471,7 @@ In `worker/graph_api.py`, after `create_video_container`:
 
 - [ ] **Step 4: Run it**
 
-Run: `python3 -m pytest worker/tests/test_stories_publish.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_stories_publish.py -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -588,7 +589,7 @@ def test_one_time_post_is_not_retired_until_every_surface_has_posted(conn, make_
 
 - [ ] **Step 2: Run and confirm they fail**
 
-Run: `python3 -m pytest worker/tests/test_stories_publish.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_stories_publish.py -q`
 Expected: FAIL — `make_publication() got an unexpected keyword argument 'surface'`.
 
 - [ ] **Step 3: Extend the `make_publication` factory**
@@ -778,12 +779,12 @@ and pass it into every `_resolve_url` call.
 
 - [ ] **Step 5: Run the tests**
 
-Run: `python3 -m pytest worker/tests/test_stories_publish.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_stories_publish.py -q`
 Expected: PASS.
 
 - [ ] **Step 6: Run the whole worker suite**
 
-Run: `python3 -m pytest worker/tests -q`
+Run: `.venv/bin/python -m pytest worker/tests -q`
 Expected: PASS, including `test_platform_dispatch.py` and the existing
 `test_publisher.py::test_story_not_supported` — **that test asserts the old refusal and must
 be updated, not deleted.** Rewrite it to assert that `post_type='story'` is still refused
@@ -834,7 +835,7 @@ fixtures in `test_autofill.py` — adapt this test to them rather than changing 
 
 - [ ] **Step 2: Run it**
 
-Run: `python3 -m pytest worker/tests/test_autofill.py -q`
+Run: `.venv/bin/python -m pytest worker/tests/test_autofill.py -q`
 Expected: FAIL — the story-only post is selected.
 
 - [ ] **Step 3: Restrict the candidate query**
@@ -857,7 +858,7 @@ With a comment above the query:
 
 - [ ] **Step 4: Run the suite**
 
-Run: `python3 -m pytest worker/tests -q`
+Run: `.venv/bin/python -m pytest worker/tests -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1396,7 +1397,7 @@ that way; taps and exits have no column and live in `raw_json`.
 
 - [ ] **Step 4: Run the suite**
 
-Run: `python3 -m pytest worker/tests -q`
+Run: `.venv/bin/python -m pytest worker/tests -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1419,7 +1420,7 @@ git add worker/metrics.py worker/tests/test_metrics.py reference.md && git commi
 Back up first, then migrate:
 
 ```bash
-cp data/socialscheduler.db data/socialscheduler.db.bak-pre-0014 && python3 migrate.py
+sqlite3 data/socialscheduler.db ".backup 'data/socialscheduler.db.bak-pre-0014'" && .venv/bin/python migrate.py
 ```
 
 - [ ] **Step 2: Restart the worker**
