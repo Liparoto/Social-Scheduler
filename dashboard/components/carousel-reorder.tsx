@@ -20,7 +20,20 @@ export interface OrderableAsset {
  */
 export function useAssetOrder(postId: number, assets: OrderableAsset[]) {
   const savedOrder = assets.map((a) => a.id);
+  // useState's initializer only runs on mount, but the quick-edit dialog mounts before its
+  // assets fetch lands — `assets` starts as [] and becomes the real list a tick later. An
+  // effect could re-seed `order` then, but that's a render-then-immediately-re-render for
+  // something derivable during render itself, which is exactly what React's "adjusting
+  // state during render" pattern exists for: compare against a key that changes identity
+  // whenever the saved order does (the fetch landing, or a parent refresh after save) and
+  // reset synchronously, in the same render, with no extra pass and no effect.
+  const savedKey = savedOrder.join(",");
+  const [syncedKey, setSyncedKey] = useState(savedKey);
   const [order, setOrder] = useState<number[]>(savedOrder);
+  if (syncedKey !== savedKey) {
+    setSyncedKey(savedKey);
+    setOrder(savedOrder);
+  }
   const [error, setError] = useState<string | null>(null);
 
   // String compare rather than element-wise: order is a small array of numbers, and this

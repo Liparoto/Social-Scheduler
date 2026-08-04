@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
+import { CarouselReorder, useAssetOrder, type OrderableAsset } from "@/components/carousel-reorder";
 import {
   CaptionVariantsEditor,
   overLimitCaptionVariants,
@@ -67,6 +68,10 @@ export interface QuickEditPost {
   periods: { id: number; mode: PeriodMode }[];
   /** Distinct platforms this post targets — what a generic caption is held to. */
   target_platforms: string[];
+  /** How many slides — the dialog only offers reordering for a real carousel. */
+  asset_count: number;
+  /** Queued sends, so the reorder block can say they'll go out in the new order. */
+  scheduled_count: number;
 }
 
 export function QuickEditModal({
@@ -132,6 +137,31 @@ export function QuickEditModal({
     return () => controller.abort();
   }, [post.id, captionAttempt]);
 
+  const isCarousel = post.post_type === "carousel" && post.asset_count > 1;
+  // null until the fetch lands. While it is null there is nothing to reorder and nothing
+  // to save — exactly like openedCaptions above.
+  const [orderAssets, setOrderAssets] = useState<OrderableAsset[] | null>(null);
+
+  useEffect(() => {
+    if (!isCarousel) return;
+    const controller = new AbortController();
+    async function loadAssets() {
+      try {
+        const res = await fetch(`/api/posts/${post.id}/assets`, { signal: controller.signal });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !Array.isArray(body.assets)) return;
+        setOrderAssets(body.assets);
+      } catch {
+        // A failed load leaves the dialog exactly as it is today: captions and scheduling
+        // still work, there is simply no reorder block. Not worth an error banner.
+      }
+    }
+    loadAssets();
+    return () => controller.abort();
+  }, [post.id, isCarousel]);
+
+  const slideOrder = useAssetOrder(post.id, orderAssets ?? []);
+
   const field =
     "rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand";
 
@@ -150,7 +180,8 @@ export function QuickEditModal({
     sortedIds(tagIds) !== sortedIds(post.tag_ids) ||
     periodModesKey(periodModes) !== periodModesKey(openedPeriodModes) ||
     // Captions can't be dirty before they've arrived — there is nothing to have changed.
-    (openedCaptions !== null && captionsKey(captions) !== captionsKey(openedCaptions));
+    (openedCaptions !== null && captionsKey(captions) !== captionsKey(openedCaptions)) ||
+    slideOrder.isDirty;
 
   // What a generic ("Any") caption is really held to. <CaptionVariantsEditor> shows no
   // counter for it, because captionLimit("") is null — but that row is what publishes for
@@ -205,6 +236,12 @@ export function QuickEditModal({
     setSaving(true);
     setError(null);
     try {
+      // First, and abort on failure. This is the request that can 409 (the post is being
+      // published right now), so failing here leaves nothing at all written.
+      if (!(await slideOrder.save())) {
+        setError(slideOrder.error ?? "Could not save the slide order.");
+        return;
+      }
       const res = await fetch(`/api/posts/${post.id}/content`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -269,6 +306,18 @@ export function QuickEditModal({
             ✕
           </button>
         </div>
+
+        {isCarousel && orderAssets ? (
+          <div className="space-y-2">
+            <h3 className="text-xs font-medium text-muted">Slide order</h3>
+            <CarouselReorder
+              assets={orderAssets}
+              order={slideOrder.order}
+              onOrderChange={slideOrder.setOrder}
+              queuedSendCount={post.scheduled_count}
+            />
+          </div>
+        ) : null}
 
         <section className="mt-5 border-t border-border pt-5">
           {openedCaptions === null ? (

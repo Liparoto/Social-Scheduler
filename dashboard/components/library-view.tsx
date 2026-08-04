@@ -882,6 +882,8 @@ export function LibraryView({
             tag_ids: quickEditPost.tag_ids,
             periods: quickEditPost.periods,
             target_platforms: splitTags(quickEditPost.target_platforms),
+            asset_count: quickEditPost.asset_count,
+            scheduled_count: quickEditPost.scheduled_count,
           }}
           periods={periods}
           timeOfDayTags={timeOfDayTags}
