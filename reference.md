@@ -417,6 +417,52 @@ existing Reels warnings so the owner is told plainly what happened — see
 - When building the Facebook, video, or Stories adapters, re-run the same live-docs
   verification we did for IG image/carousel — don't extrapolate from this doc alone.
 
+## Verified: first real Story published (2026-08-04)
+
+Stories were proven end to end against the live Instagram API — and, more usefully, so was
+the rule that a Story is a **destination, not a post type** (`docs/design-instagram-stories.md`).
+
+- **Media id** `18124888342757913` · **permalink**
+  https://www.instagram.com/stories/liparoto/3956438103947229557
+- **`media_product_type: STORY`** and `media_type: IMAGE`, read back from the API rather than
+  trusted from our own DB — a genuine Story, not a feed post.
+- **`media_type=STORIES` container, no caption field sent at all.** Container create → poll →
+  publish took ~13s for an image after a ~8s cloudflared tunnel start.
+- **The ORIGINAL image was sent, not the conformed derivative.** The source was 1320×2346
+  (9:16); `publish_path` held a 1320×1650 (4:5) *crop* made for the feed. Sending that crop
+  would have silently discarded ~30% of the image. `_resolve_url` prefers `storage_path` when
+  `surface='story'` for exactly this reason.
+- **Reading the media back needs `graph.instagram.com`, not `graph.facebook.com`** on this
+  install: the channel token is an Instagram-Login token (`IGA…` prefix), and the Facebook host
+  rejects it with `code 190 — Cannot parse access token`. `Config.graph_base` already holds the
+  right host; use it rather than hardcoding a host in a one-off script.
+
+### ⚠ Story insights need their own metric set (open — Phase 5)
+
+The metrics job fired against the new Story and failed, exactly as the design predicted:
+
+```
+GET <media-id>/insights -> 400: The Media Insights API does not support the
+likes, comments, saved metric for this media product type.
+```
+
+The feed metric list (`reach, likes, comments, saved, shares`) is **rejected outright** for
+story media — it does not degrade to partial results. Until `REQUESTED_STORY_METRICS` lands,
+every story publication produces one of these 400s per refresh cycle. Verify the supported
+story metric names against live docs before writing that list.
+
+### The bug this shipped with, and what actually prevented a repeat
+
+The **first** attempt published a Story-designated post to the public **feed**. The row was
+written `surface='feed'` because the post editor's sends panel still sent bare `channel_ids`,
+which the request parser read as feed targets. The worker was never at fault — it published
+exactly what the row said.
+
+The durable fix was not converting that one component. It was making
+`POST /api/posts/[id]/schedule` **refuse** bare `channel_ids` (400), so a caller that forgets
+the surface fails loudly instead of guessing a destination and publishing somewhere the
+operator never chose. **On a route that publishes, a convenient default is a liability.**
+
 ## Verified: first real Reel published (2026-07-29)
 
 The full video pipeline was proven end to end against the live Instagram API.
