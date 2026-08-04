@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
+import {
+  collapsePeriodLinks,
+  periodLinksToSave,
+  periodModesKey,
+} from "@/lib/quick-edit-periods";
 import type { ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
 
 /**
@@ -39,7 +44,7 @@ export interface QuickEditPost {
   content_kind: ContentKind;
   cooldown_days: number | null;
   tag_ids: number[];
-  /** Same collapse the full editor does: one mode per period. */
+  /** Every link as stored — a period may appear twice, once per mode. */
   periods: { id: number; mode: PeriodMode }[];
 }
 
@@ -64,9 +69,12 @@ export function QuickEditModal({
     post.cooldown_days === null ? "" : String(post.cooldown_days)
   );
   const [tagIds, setTagIds] = useState<number[]>(post.tag_ids);
-  const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>(() =>
-    Object.fromEntries(post.periods.map((p) => [p.id, p.mode]))
-  );
+  // What the dialog opened with, collapsed to the one-mode-per-period shape PeriodAttach
+  // edits. The uncollapsed post.periods stays the reference for both the dirty check and
+  // the save payload — see lib/quick-edit-periods.ts.
+  const openedPeriodModes = collapsePeriodLinks(post.periods);
+  const [periodModes, setPeriodModes] =
+    useState<Record<number, PeriodMode>>(openedPeriodModes);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -76,19 +84,18 @@ export function QuickEditModal({
 
   // Compared against the values this dialog opened with, field by field, so re-picking a
   // tag you just removed reads as clean rather than as a change. Ids are sorted because
-  // TagEditor appends in click order; periods are keyed by id for the same reason.
+  // TagEditor appends in click order; periods go through periodModesKey for the same
+  // reason. Both sides of the period comparison are collapsed — comparing the edited
+  // collapse against the raw links would report a two-mode post dirty before it was ever
+  // touched, which is precisely the false friction confirm-on-dismiss must not create.
   const sortedIds = (ids: number[]) => JSON.stringify([...ids].sort((a, b) => a - b));
-  const normalizedPeriods = (entries: [number, PeriodMode][]) =>
-    JSON.stringify([...entries].sort((a, b) => a[0] - b[0]));
   const cooldownValue = cooldown.trim() === "" ? null : Number(cooldown);
   const isDirty =
     status !== post.content_status ||
     kind !== post.content_kind ||
     cooldownValue !== post.cooldown_days ||
     sortedIds(tagIds) !== sortedIds(post.tag_ids) ||
-    normalizedPeriods(
-      Object.entries(periodModes).map(([pid, mode]) => [Number(pid), mode])
-    ) !== normalizedPeriods(post.periods.map((p) => [p.id, p.mode]));
+    periodModesKey(periodModes) !== periodModesKey(openedPeriodModes);
 
   /** The single funnel every dismissal path goes through. Nothing calls onClose directly. */
   function requestClose() {
@@ -132,10 +139,10 @@ export function QuickEditModal({
           content_kind: kind,
           cooldown_days: cooldown.trim() === "" ? null : Number(cooldown),
           tag_ids: tagIds,
-          period_links: Object.entries(periodModes).map(([pid, mode]) => ({
-            periodId: Number(pid),
-            mode,
-          })),
+          // Not the raw collapse: a period the user never touched keeps every link it
+          // arrived with, so flipping a status can't quietly delete a blackout this
+          // control was never able to display.
+          period_links: periodLinksToSave(post.periods, periodModes),
         }),
       });
       const body = await res.json().catch(() => ({}));
