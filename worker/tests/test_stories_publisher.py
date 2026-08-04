@@ -308,3 +308,23 @@ def test_an_explicit_public_url_still_wins_over_the_canvas(conn, config, fake_cl
                       asset_base_url="https://assets.test")
 
     assert "assets.test/a.jpg" in out.plan["asset_urls"][0]
+
+
+def test_the_dry_run_marker_names_the_canvas_it_would_actually_send(conn, config,
+                                                                    fake_client,
+                                                                    make_publication):
+    """A dry run that shows the wrong file is worse than no dry run: it invites the
+    operator to sign off on something other than what would be published."""
+    pub = make_publication(post_type="single", n_assets=1, surface="story",
+                           public_url=None, now=NOW)
+    conn.execute(
+        "UPDATE assets SET storage_path='orig.jpg', publish_path='pub/orig.jpg', "
+        "story_path='story/orig-blurred.jpg'"
+    )
+    conn.commit()
+
+    # No asset_base_url: exactly the dry-run case, where there is no tunnel and the plan
+    # falls back to a local marker.
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW)
+
+    assert "story/orig-blurred.jpg" in out.plan["asset_urls"][0]
