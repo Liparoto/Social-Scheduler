@@ -12,7 +12,6 @@ export interface LibraryCheckboxSelections {
 }
 
 export interface LibraryCheckboxFilterState {
-  draft: LibraryCheckboxSelections;
   applied: LibraryCheckboxSelections;
 }
 
@@ -20,28 +19,19 @@ export type LibraryCheckboxGroup = keyof LibraryCheckboxSelections;
 
 export type LibraryCheckboxFilterAction =
   | {
-      type: "set-draft";
+      type: "apply-group";
       group: "periods";
       values: Set<number>;
     }
   | {
-      type: "set-draft";
+      type: "apply-group";
       group: "tags" | "platforms";
       values: Set<string>;
     }
-  | { type: "reconcile-available"; available: LibraryCheckboxSelections }
-  | { type: "apply" };
+  | { type: "reconcile-available"; available: LibraryCheckboxSelections };
 
 function emptySelections(): LibraryCheckboxSelections {
   return { periods: new Set(), tags: new Set(), platforms: new Set() };
-}
-
-function copySelections(source: LibraryCheckboxSelections): LibraryCheckboxSelections {
-  return {
-    periods: new Set(source.periods),
-    tags: new Set(source.tags),
-    platforms: new Set(source.platforms),
-  };
 }
 
 function intersectSelections(
@@ -69,7 +59,7 @@ function selectionsEqual(
 }
 
 export function createLibraryCheckboxFilterState(): LibraryCheckboxFilterState {
-  return { draft: emptySelections(), applied: emptySelections() };
+  return { applied: emptySelections() };
 }
 
 export function libraryCheckboxFilterReducer(
@@ -77,28 +67,19 @@ export function libraryCheckboxFilterReducer(
   action: LibraryCheckboxFilterAction,
 ): LibraryCheckboxFilterState {
   if (action.type === "reconcile-available") {
-    const draft = intersectSelections(state.draft, action.available);
     const applied = intersectSelections(state.applied, action.available);
-    if (selectionsEqual(draft, state.draft) && selectionsEqual(applied, state.applied)) {
-      return state;
-    }
-    return { draft, applied };
-  }
-
-  if (action.type === "apply") {
-    return { draft: copySelections(state.draft), applied: copySelections(state.draft) };
+    if (selectionsEqual(applied, state.applied)) return state;
+    return { applied };
   }
 
   if (action.group === "periods") {
     return {
-      ...state,
-      draft: { ...state.draft, periods: new Set(action.values) },
+      applied: { ...state.applied, periods: new Set(action.values) },
     };
   }
 
   return {
-    ...state,
-    draft: { ...state.draft, [action.group]: new Set(action.values) },
+    applied: { ...state.applied, [action.group]: new Set(action.values) },
   };
 }
 

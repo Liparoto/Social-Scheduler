@@ -12,11 +12,12 @@ interface CheckboxFilterInputs<T extends CheckboxFilterValue> {
   label: string;
   options: CheckboxFilterOption<T>[];
   selected: Set<T>;
-  onChange: (next: Set<T>) => void;
 }
 
 interface CheckboxFilterPanelProps<T extends CheckboxFilterValue>
   extends CheckboxFilterInputs<T> {
+  onChange: (next: Set<T>) => void;
+  onApply: () => void;
   query: string;
   onQueryChange: (query: string) => void;
   autoFocus?: boolean;
@@ -28,6 +29,7 @@ export function CheckboxFilterPanel<T extends CheckboxFilterValue>({
   options,
   selected,
   onChange,
+  onApply,
   query,
   onQueryChange,
   autoFocus = false,
@@ -94,43 +96,61 @@ export function CheckboxFilterPanel<T extends CheckboxFilterValue>({
           ))
         )}
       </div>
+      <button
+        type="button"
+        onClick={onApply}
+        className="mt-3 w-full rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink"
+      >
+        Apply
+      </button>
     </div>
   );
 }
 
 interface CheckboxFilterDropdownProps<T extends CheckboxFilterValue>
   extends CheckboxFilterInputs<T> {
-  closeSignal: number;
+  onApply: (next: Set<T>) => void;
 }
 
 export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
   label,
   options,
   selected,
-  onChange,
-  closeSignal,
+  onApply,
 }: CheckboxFilterDropdownProps<T>) {
-  const [openSignal, setOpenSignal] = useState<number | null>(null);
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [draft, setDraft] = useState<Set<T>>(() => new Set(selected));
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const open = openSignal === closeSignal;
   const disabled = options.length === 0;
+
+  function discardAndClose() {
+    setDraft(new Set(selected));
+    setQuery("");
+    setOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
 
     searchInputRef.current?.focus();
 
+    function discardLatestAndClose() {
+      setDraft(new Set(selected));
+      setQuery("");
+      setOpen(false);
+    }
+
     function closeOnOutsideMouseDown(event: MouseEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) setOpenSignal(null);
+      if (!containerRef.current?.contains(event.target as Node)) discardLatestAndClose();
     }
 
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setOpenSignal(null);
+      discardLatestAndClose();
       triggerRef.current?.focus();
     }
 
@@ -140,7 +160,27 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
       document.removeEventListener("mousedown", closeOnOutsideMouseDown);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [open]);
+  }, [open, selected]);
+
+  function toggleOpen() {
+    if (open) {
+      discardAndClose();
+      return;
+    }
+    setDraft(new Set(selected));
+    setQuery("");
+    setOpen(true);
+  }
+
+  function applyDraft() {
+    const available = allOptionValues(options);
+    const sanitized = new Set([...draft].filter((value) => available.has(value)));
+    onApply(sanitized);
+    setDraft(sanitized);
+    setQuery("");
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
 
   const triggerText = disabled
     ? `${label} — none available`
@@ -156,7 +196,7 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
         aria-expanded={open}
         aria-haspopup="dialog"
         disabled={disabled}
-        onClick={() => setOpenSignal(open ? null : closeSignal)}
+        onClick={toggleOpen}
         className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink hover:bg-surface-sunken disabled:cursor-not-allowed disabled:text-faint disabled:opacity-60"
       >
         {triggerText}
@@ -166,8 +206,9 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
           <CheckboxFilterPanel
             label={label}
             options={options}
-            selected={selected}
-            onChange={onChange}
+            selected={draft}
+            onChange={setDraft}
+            onApply={applyDraft}
             query={query}
             onQueryChange={setQuery}
             autoFocus

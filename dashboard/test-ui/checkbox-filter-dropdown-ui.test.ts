@@ -20,8 +20,7 @@ test("closed trigger reports its selection count", () => {
       label: "Periods",
       options: periodOptions,
       selected: new Set([1]),
-      onChange: noop,
-      closeSignal: 0,
+      onApply: noop,
     }),
   );
 
@@ -36,6 +35,7 @@ test("panel renders search, group actions, options, and checked state", () => {
       options: periodOptions,
       selected: new Set([1]),
       onChange: noop,
+      onApply: noop,
       query: "",
       onQueryChange: noop,
     }),
@@ -47,6 +47,7 @@ test("panel renders search, group actions, options, and checked state", () => {
   assert.match(html, /Morning/);
   assert.match(html, /Evening/);
   assert.match(html, /type="checkbox"[^>]*checked=""/);
+  assert.match(html, /Evening[\s\S]*<button[^>]*>Apply<\/button>/);
 });
 
 test("opening panel marks its search field for focus", () => {
@@ -56,6 +57,7 @@ test("opening panel marks its search field for focus", () => {
       options: periodOptions,
       selected: new Set<number>(),
       onChange: noop,
+      onApply: noop,
       query: "",
       onQueryChange: noop,
       autoFocus: true,
@@ -72,6 +74,7 @@ test("panel reports no matches without rendering checkboxes", () => {
       options: periodOptions,
       selected: new Set([1]),
       onChange: noop,
+      onApply: noop,
       query: "missing",
       onQueryChange: noop,
     }),
@@ -87,8 +90,7 @@ test("empty group renders a disabled none-available trigger", () => {
       label: "Tags",
       options: [],
       selected: new Set<string>(),
-      onChange: noop,
-      closeSignal: 0,
+      onApply: noop,
     }),
   );
 

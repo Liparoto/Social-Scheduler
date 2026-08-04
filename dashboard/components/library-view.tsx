@@ -109,7 +109,6 @@ export function LibraryView({
     undefined,
     createLibraryCheckboxFilterState,
   );
-  const [filterApplySignal, setFilterApplySignal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
   // Deliberately separate from statusFilter: content_status is the lifecycle (is this piece
   // usable), sendFilter is publication history (has it actually gone out). Folding them into
@@ -437,46 +436,32 @@ export function LibraryView({
         ) : null}
       </div>
 
-      {/* Staged checkbox filters update cards together only when Apply is clicked. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-ink-soft">Filter:</span>
         <CheckboxFilterDropdown
           label="Periods"
           options={periodOptions}
-          selected={checkboxFilters.draft.periods}
-          onChange={(values) =>
-            dispatchCheckboxFilters({ type: "set-draft", group: "periods", values })
+          selected={checkboxFilters.applied.periods}
+          onApply={(values) =>
+            dispatchCheckboxFilters({ type: "apply-group", group: "periods", values })
           }
-          closeSignal={filterApplySignal}
         />
         <CheckboxFilterDropdown
           label="Tags"
           options={tagOptions}
-          selected={checkboxFilters.draft.tags}
-          onChange={(values) =>
-            dispatchCheckboxFilters({ type: "set-draft", group: "tags", values })
+          selected={checkboxFilters.applied.tags}
+          onApply={(values) =>
+            dispatchCheckboxFilters({ type: "apply-group", group: "tags", values })
           }
-          closeSignal={filterApplySignal}
         />
         <CheckboxFilterDropdown
           label="Platforms"
           options={platformOptions}
-          selected={checkboxFilters.draft.platforms}
-          onChange={(values) =>
-            dispatchCheckboxFilters({ type: "set-draft", group: "platforms", values })
+          selected={checkboxFilters.applied.platforms}
+          onApply={(values) =>
+            dispatchCheckboxFilters({ type: "apply-group", group: "platforms", values })
           }
-          closeSignal={filterApplySignal}
         />
-        <button
-          type="button"
-          onClick={() => {
-            dispatchCheckboxFilters({ type: "apply" });
-            setFilterApplySignal((signal) => signal + 1);
-          }}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-ink"
-        >
-          Apply
-        </button>
       </div>
 
       {/* Post grid */}

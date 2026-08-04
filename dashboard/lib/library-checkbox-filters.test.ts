@@ -25,44 +25,49 @@ test("Select all uses the complete option group even when search is narrowed", (
   assert.deepEqual([...allOptionValues([])], []);
 });
 
-test("draft changes do not become applied until Apply", () => {
-  const initial = createLibraryCheckboxFilterState();
-  const drafted = libraryCheckboxFilterReducer(initial, {
-    type: "set-draft",
-    group: "tags",
-    values: new Set(["tips", "promo"]),
-  });
-
-  assert.deepEqual([...drafted.draft.tags], ["tips", "promo"]);
-  assert.equal(drafted.applied.tags.size, 0);
-
-  const applied = libraryCheckboxFilterReducer(drafted, { type: "apply" });
-  assert.deepEqual([...applied.applied.tags], ["tips", "promo"]);
-  assert.notEqual(applied.applied.tags, applied.draft.tags, "Apply copies the Set");
-});
-
-test("Apply updates periods, tags, and platforms together", () => {
+test("applying each group preserves the previously applied groups", () => {
   let state = createLibraryCheckboxFilterState();
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "periods",
     values: new Set([10, 20]),
   });
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
-    group: "tags",
-    values: new Set(["tips"]),
-  });
-  state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "platforms",
     values: new Set(["instagram", "facebook"]),
   });
-  state = libraryCheckboxFilterReducer(state, { type: "apply" });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "apply-group",
+    group: "tags",
+    values: new Set(["tips"]),
+  });
 
   assert.deepEqual([...state.applied.periods], [10, 20]);
   assert.deepEqual([...state.applied.tags], ["tips"]);
   assert.deepEqual([...state.applied.platforms], ["instagram", "facebook"]);
+});
+
+test("applying an empty Tags group clears only Tags", () => {
+  let state = createLibraryCheckboxFilterState();
+  state = libraryCheckboxFilterReducer(state, {
+    type: "apply-group",
+    group: "periods",
+    values: new Set([10]),
+  });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "apply-group",
+    group: "tags",
+    values: new Set(["tips"]),
+  });
+  state = libraryCheckboxFilterReducer(state, {
+    type: "apply-group",
+    group: "tags",
+    values: new Set(),
+  });
+
+  assert.deepEqual([...state.applied.periods], [10]);
+  assert.deepEqual([...state.applied.tags], []);
 });
 
 test("matching is OR within a group and AND between groups", () => {
@@ -103,14 +108,13 @@ test("empty applied groups impose no restriction", () => {
   );
 });
 
-test("clearing every draft group and applying restores checkbox-filtered posts while caption search remains active", () => {
+test("clearing applied groups restores checkbox-filtered posts while caption search remains active", () => {
   let state = createLibraryCheckboxFilterState();
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "tags",
     values: new Set(["tips"]),
   });
-  state = libraryCheckboxFilterReducer(state, { type: "apply" });
 
   assert.equal(
     matchesLibraryCheckboxFilters(
@@ -121,21 +125,20 @@ test("clearing every draft group and applying restores checkbox-filtered posts w
   );
 
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "periods",
     values: new Set(),
   });
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "tags",
     values: new Set(),
   });
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "platforms",
     values: new Set(),
   });
-  state = libraryCheckboxFilterReducer(state, { type: "apply" });
 
   const posts = [
     {
@@ -161,21 +164,20 @@ test("clearing every draft group and applying restores checkbox-filtered posts w
 test("reconciling availability clears stale filters without dropping valid selections", () => {
   let state = createLibraryCheckboxFilterState();
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "periods",
     values: new Set([10]),
   });
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "tags",
     values: new Set(["tips"]),
   });
   state = libraryCheckboxFilterReducer(state, {
-    type: "set-draft",
+    type: "apply-group",
     group: "platforms",
     values: new Set(["instagram"]),
   });
-  state = libraryCheckboxFilterReducer(state, { type: "apply" });
 
   state = libraryCheckboxFilterReducer(state, {
     type: "reconcile-available",
@@ -186,9 +188,6 @@ test("reconciling availability clears stale filters without dropping valid selec
     },
   });
 
-  assert.deepEqual([...state.draft.periods], []);
-  assert.deepEqual([...state.draft.tags], []);
-  assert.deepEqual([...state.draft.platforms], ["instagram"]);
   assert.deepEqual([...state.applied.periods], []);
   assert.deepEqual([...state.applied.tags], []);
   assert.deepEqual([...state.applied.platforms], ["instagram"]);
