@@ -136,6 +136,10 @@ export function CheckboxFilterDropdown<T extends CheckboxFilterValue>({
     if (!open) return;
 
     searchInputRef.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
 
     function discardLatestAndClose() {
       setDraft(new Set(selected));
