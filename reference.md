@@ -417,6 +417,70 @@ existing Reels warnings so the owner is told plainly what happened — see
 - When building the Facebook, video, or Stories adapters, re-run the same live-docs
   verification we did for IG image/carousel — don't extrapolate from this doc alone.
 
+## Verified: first real Story published (2026-08-04)
+
+Stories were proven end to end against the live Instagram API — and, more usefully, so was
+the rule that a Story is a **destination, not a post type** (`docs/design-instagram-stories.md`).
+
+- **Media id** `18124888342757913` · **permalink**
+  https://www.instagram.com/stories/liparoto/3956438103947229557
+- **`media_product_type: STORY`** and `media_type: IMAGE`, read back from the API rather than
+  trusted from our own DB — a genuine Story, not a feed post.
+- **`media_type=STORIES` container, no caption field sent at all.** Container create → poll →
+  publish took ~13s for an image after a ~8s cloudflared tunnel start.
+- **The ORIGINAL image was sent, not the conformed derivative.** The source was 1320×2346
+  (9:16); `publish_path` held a 1320×1650 (4:5) *crop* made for the feed. Sending that crop
+  would have silently discarded ~30% of the image. `_resolve_url` prefers `storage_path` when
+  `surface='story'` for exactly this reason.
+- **Reading the media back needs `graph.instagram.com`, not `graph.facebook.com`** on this
+  install: the channel token is an Instagram-Login token (`IGA…` prefix), and the Facebook host
+  rejects it with `code 190 — Cannot parse access token`. `Config.graph_base` already holds the
+  right host; use it rather than hardcoding a host in a one-off script.
+
+### Story insights — the supported metric set (verified 2026-08-04, RESOLVED)
+
+Story media **rejects the feed metric list outright** — HTTP 400, not partial results:
+
+```
+GET <media-id>/insights?metric=likes,comments,saved -> 400:
+The Media Insights API does not support the likes, comments, saved metric for
+this media product type.
+```
+
+So one wrong name costs the whole snapshot. The supported set was established by probing a
+real published Story metric-by-metric against the live API — **not from docs, and not from
+the plausible-sounding names, which were wrong**:
+
+| Supported for a STORY | Rejected for a STORY |
+|---|---|
+| `reach`, `views`, `replies`, `shares` | `impressions` (use `views`) |
+| `navigation`, `profile_visits`, `follows`, `total_interactions` | `taps_forward`, `taps_back`, `exits` (use `navigation`) |
+| | `likes`, `comments`, `saved` |
+
+`taps_forward` / `taps_back` / `exits` read like the obvious story metrics and are the ones
+an LLM or an old doc will suggest. They are gone; `navigation` is their replacement.
+
+Column mapping needed no change: `reach`→reach and `views`→impressions and `replies`→comments
+already existed in `COLUMN_MAP` (added for Threads). The other four have no column and live in
+`raw_json`. Verified end to end on the first real Story: `views: 6`, everything else 0.
+
+**Stories expire after 24h**, so `publications_needing_metrics` stops auto-refreshing a story
+past `STORY_LIFETIME_HOURS`. That cutoff sits INSIDE the automatic branch, beside the
+platform exclusion — a manually-flagged row must still be selectable once, or `run_metrics`'
+`finally` block never clears `metrics_refresh_requested_at` and the flag sticks forever.
+
+### The bug this shipped with, and what actually prevented a repeat
+
+The **first** attempt published a Story-designated post to the public **feed**. The row was
+written `surface='feed'` because the post editor's sends panel still sent bare `channel_ids`,
+which the request parser read as feed targets. The worker was never at fault — it published
+exactly what the row said.
+
+The durable fix was not converting that one component. It was making
+`POST /api/posts/[id]/schedule` **refuse** bare `channel_ids` (400), so a caller that forgets
+the surface fails loudly instead of guessing a destination and publishing somewhere the
+operator never chose. **On a route that publishes, a convenient default is a liability.**
+
 ## Verified: first real Reel published (2026-07-29)
 
 The full video pipeline was proven end to end against the live Instagram API.

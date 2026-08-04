@@ -47,6 +47,7 @@ interface PostLite {
   cooldown_days: number | null;
   tag_ids: number[];
   target_count: number;
+  story_target_count: number;
   periods: LibrarySeasonPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
@@ -133,6 +134,9 @@ export function LibraryView({
   const [sendFilter, setSendFilter] = useState<"all" | "posted" | "never">("all");
   const [kindFilter, setKindFilter] = useState<"all" | "evergreen" | "one_time">("all");
   const [formatFilter, setFormatFilter] = useState<"all" | PostFormat>("all");
+  // DESTINATION, not format: a Story is where a post lands, so it is a separate axis
+  // from post_type and cannot live in the format filter above.
+  const [destFilter, setDestFilter] = useState<"all" | "story" | "feed">("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"newest" | "recent" | "stale">("newest");
   const [openMedia, setOpenMedia] = useState<{
@@ -328,6 +332,10 @@ export function LibraryView({
     if (sendFilter === "never" && p.posted_count > 0) return false;
     if (kindFilter !== "all" && p.content_kind !== kindFilter) return false;
     if (formatFilter !== "all" && p.post_type !== formatFilter) return false;
+    // 'story' = designated for Stories anywhere; 'feed' = everything else, so the
+    // two options partition the library rather than overlapping.
+    if (destFilter === "story" && p.story_target_count === 0) return false;
+    if (destFilter === "feed" && p.story_target_count > 0) return false;
     if (q && !(p.caption ?? "").toLowerCase().includes(q)) return false;
     return true;
   });
@@ -475,6 +483,16 @@ export function LibraryView({
               {f.label}
             </option>
           ))}
+        </select>
+        <select
+          className={field}
+          aria-label="Filter by destination"
+          value={destFilter}
+          onChange={(e) => setDestFilter(e.target.value as typeof destFilter)}
+        >
+          <option value="all">All destinations</option>
+          <option value="story">Stories</option>
+          <option value="feed">Feed only</option>
         </select>
         <input
           className={`${field} min-w-48 flex-1`}
@@ -703,6 +721,14 @@ export function LibraryView({
                   )}
                   <span>
                     {p.target_count > 0 ? `→ ${p.target_count} account(s)` : "no targets"}
+                    {p.story_target_count > 0 ? (
+                      <span
+                        className="ml-1.5 rounded-full border border-border-strong px-1.5 py-px text-[10px] font-medium text-ink-soft"
+                        title="Designated for an Instagram Story"
+                      >
+                        Story
+                      </span>
+                    ) : null}
                   </span>
                 </div>
                 {p.periods.length > 0 ? (

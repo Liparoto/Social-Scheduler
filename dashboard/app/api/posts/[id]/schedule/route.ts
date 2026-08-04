@@ -11,6 +11,7 @@ import {
 import { intervalSlots } from "@/lib/scheduling";
 import { incompatiblePostError } from "@/lib/platforms";
 import { captionLimitError } from "@/lib/caption-limits";
+import { parseTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -27,7 +28,30 @@ export async function POST(
   }
 
   const body = await req.json().catch(() => ({}));
-  const channelIds: number[] = Array.isArray(body.channel_ids) ? body.channel_ids : [];
+  // `targets` (channel + surface) is REQUIRED here — bare channel_ids are refused.
+  //
+  // This route publishes, so a wrong destination is not recoverable: it already sent a
+  // Story-designated post to the public feed once, because channel_ids was silently read
+  // as "feed". Every caller now sends explicit targets, so channel_ids can only mean a
+  // caller that was missed — and that must fail loudly rather than guess a surface and
+  // publish somewhere the operator never chose. Other routes still accept the bare form
+  // (bulk import genuinely has no surface concept); none of them publish.
+  if (body.channel_ids !== undefined) {
+    return NextResponse.json(
+      {
+        error:
+          "This endpoint needs explicit targets ({channel_id, surface}), not channel_ids " +
+          "— a missing surface must not be guessed on a route that publishes.",
+      },
+      { status: 400 }
+    );
+  }
+  const parsedTargets = parseTargets(body.targets, undefined);
+  if (parsedTargets === "invalid") {
+    return NextResponse.json({ error: "Invalid targets." }, { status: 400 });
+  }
+  // Compatibility and caption checks are per ACCOUNT, so dedupe.
+  const channelIds: number[] = [...new Set(parsedTargets.map((t) => t.channel_id))];
   const date: string = body.date || "";
   const time: string = body.time || "";
   // "Post now": publish on the worker's next poll instead of a chosen date/time.
@@ -79,7 +103,9 @@ export async function POST(
   const nowIso = new Date().toISOString();
 
   const entries: BulkEntry[] = [];
-  for (const channel of targetChannels) {
+  for (const target of parsedTargets) {
+    const channel = targetChannels.find((c) => c.id === target.channel_id);
+    if (!channel) continue;
     const scheduledAt = postNow ? nowIso : intervalSlots(date, time, 1, 1, channel.timezone)[0];
     // "Post now" (skip_approval) means the person scheduling this send right now IS the
     // approver — see the same decision in lib/queries.ts's createPostWithPublications.
@@ -89,6 +115,7 @@ export async function POST(
       channel_id: channel.id,
       scheduled_at: scheduledAt,
       status,
+      surface: target.surface,
     });
   }
 

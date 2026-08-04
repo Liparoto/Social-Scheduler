@@ -65,6 +65,7 @@ class FakeGraphClient:
                  page_summary=None, page_insights=None, fail_child_index=None,
                  threads_limit=(0, 250, 86400), threads_insights=None):
         self.calls = []
+        self.requested_metrics = []
         self.limit = limit
         self.fail_on = set(fail_on or [])
         # 1-based index of the unpublished carousel child (create_page_photo(published=False)
@@ -88,7 +89,10 @@ class FakeGraphClient:
         self._n = 0
 
     def get_media_insights(self, media_id, token, metrics):
+        # Record the metric LIST too: story media rejects the feed list outright, so which
+        # names were asked for is the thing under test, not just that a call happened.
         self.calls.append(("insights", media_id))
+        self.requested_metrics.append(list(metrics))
         if "insights" in self.fail_on:
             raise RuntimeError("insights boom")
         return dict(self.insights)
@@ -112,6 +116,17 @@ class FakeGraphClient:
         self.calls.append(("carousel", tuple(children_ids)))
         self._n += 1
         return f"carousel-{self._n}"
+
+    def create_story_container(self, ig_user_id, token, image_url=None, video_url=None):
+        # Records which MEDIA FIELD was used, so a test can prove a video story didn't
+        # get sent as image_url. Note there is no caption parameter at all — Stories
+        # have no caption field (see GraphClient.create_story_container).
+        kind = "story_video" if video_url else "story_image"
+        self.calls.append((kind, video_url or image_url))
+        if "create" in self.fail_on:
+            raise RuntimeError("create container boom")
+        self._n += 1
+        return f"story-cont-{self._n}"
 
     def get_container_status(self, container_id, token):
         self.calls.append(("status", container_id))
@@ -332,7 +347,8 @@ def make_publication(conn):
 
     def _make(post_type="single", n_assets=1, public_url="https://assets.test/a.jpg",
               scheduled_offset_min=-1, with_token=True, now=None,
-              platform="instagram", remote_account_id=None, media_kind="image"):
+              platform="instagram", remote_account_id=None, media_kind="image",
+              surface="feed", story_slide=0):
         # Discord has no account id at all (the webhook URL is both address and secret),
         # so its remote_account_id stays None even when the caller doesn't pass one —
         # every other platform gets a sensible per-platform default.
@@ -372,6 +388,7 @@ def make_publication(conn):
             "INSERT INTO posts (caption, post_type) VALUES ('hello world', ?)", (post_type,)
         )
         post_id = cur.lastrowid
+        asset_ids = []
         for i in range(n_assets):
             cur = conn.execute(
                 """INSERT INTO assets (content_hash, media_kind, storage_path, public_url)
@@ -379,15 +396,23 @@ def make_publication(conn):
                 (f"hash-{post_id}-{i}", media_kind, f"assets/{post_id}-{i}.jpg",
                  (f"{public_url}?i={i}" if public_url else None)),
             )
+            asset_ids.append(cur.lastrowid)
             conn.execute(
                 "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?,?,?)",
                 (post_id, cur.lastrowid, i),
             )
         base = now or datetime.now(timezone.utc)
         scheduled = (base + timedelta(minutes=scheduled_offset_min)).isoformat()
+        # A story publication targets exactly ONE slide (the fan-out into one row per slide
+        # happens at scheduling time), so it carries that slide's asset_id. A feed
+        # publication leaves asset_id NULL, meaning "all of the post's assets, in order".
+        story_asset_id = (
+            asset_ids[story_slide] if surface == "story" and asset_ids else None
+        )
         cur = conn.execute(
-            "INSERT INTO publications (post_id, channel_id, scheduled_at) VALUES (?,?,?)",
-            (post_id, channel_id, scheduled),
+            "INSERT INTO publications (post_id, channel_id, scheduled_at, surface, asset_id) "
+            "VALUES (?,?,?,?,?)",
+            (post_id, channel_id, scheduled, surface, story_asset_id),
         )
         conn.commit()
         return conn.execute(

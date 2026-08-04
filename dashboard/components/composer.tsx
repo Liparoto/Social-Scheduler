@@ -6,7 +6,7 @@ import { channelColor, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
-import type { Asset, Period, PeriodMode, Tag } from "@/lib/types";
+import type { Asset, Period, PeriodMode, PostTarget, Tag } from "@/lib/types";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
 import { PeriodAttach } from "@/components/period-attach";
@@ -15,6 +15,7 @@ import { ConformControl } from "@/components/conform-control";
 import { CoverFramePicker } from "@/components/cover-frame-picker";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { SlideReorder, type Slide } from "@/components/slide-reorder";
+import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { TimezonePicker } from "@/components/timezone-picker";
 
 interface ChannelLite {
@@ -60,7 +61,10 @@ export function Composer({
   const [assets, setAssets] = useState<UploadedAsset[]>([]);
   const [variants, setVariants] = useState<CaptionVariantDraft[]>([{ platform: "", body: "" }]);
   const [firstComment, setFirstComment] = useState("");
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Targets, not channel ids: an Instagram channel can be picked for its Feed, its
+  // Story, or both, and each is an independent send. See channel-surface-picker.
+  const [targets, setTargets] = useState<PostTarget[]>([]);
+  const selectedChannelIds = new Set(targets.map((t) => t.channel_id));
   const [textOnly, setTextOnly] = useState(false);
   const [timezone, setTimezone] = useState(defaultTimezone);
   // Reported up by TimezonePicker; gates scheduling on a valid zone. Irrelevant
@@ -123,7 +127,7 @@ export function Composer({
     return Math.max(0, ...candidates.map((c) => c.length));
   }
 
-  const selectedChannels = channels.filter((c) => selected.has(c.id));
+  const selectedChannels = channels.filter((c) => selectedChannelIds.has(c.id));
 
   // One check per selected channel that actually declares a caption limit — each using
   // the worst-case caption that could actually get published to THAT platform, not the
@@ -157,14 +161,12 @@ export function Composer({
   // rather than leaving it selected-but-disabled (which would submit a target that can't
   // work).
   function deselectIncompatible(isCompatible: (platform: string) => boolean) {
-    setSelected((prev) => {
-      const filtered = new Set<number>();
-      prev.forEach((id) => {
-        const channel = channels.find((c) => c.id === id);
-        if (channel && isCompatible(channel.platform)) filtered.add(id);
-      });
-      return filtered;
-    });
+    setTargets((prev) =>
+      prev.filter((t) => {
+        const channel = channels.find((c) => c.id === t.channel_id);
+        return channel ? isCompatible(channel.platform) : false;
+      })
+    );
   }
 
   async function onFiles(files: FileList | null) {
@@ -230,27 +232,21 @@ export function Composer({
     setAssets((prev) => prev.filter((a) => a.asset.id !== id));
   }
 
-  function toggleChannel(id: number) {
-    const channel = channels.find((c) => c.id === id);
-    if (textOnly && channel && !supportsText(channel.platform)) return;
-    if (hasVideo && channel && !supportsVideo(channel.platform)) return;
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
   function toggleTextOnly(next: boolean) {
     setTextOnly(next);
     // Deselect any already-selected channel that can't take a text-only post — leaving
     // it selected-but-disabled would submit a target that cannot work.
-    if (next) deselectIncompatible(supportsText);
+    if (next) {
+      deselectIncompatible(supportsText);
+      // A text post has no media, so it has nothing a Story could show. The picker hides
+      // the chip, but an ALREADY-picked story target would otherwise survive the switch
+      // and be submitted invisibly.
+      setTargets((prev) => prev.filter((t) => t.surface !== "story"));
+    }
   }
 
   const anyApprovalNeeded = channels.some(
-    (c) => selected.has(c.id) && c.requires_approval
+    (c) => selectedChannelIds.has(c.id) && c.requires_approval
   );
 
   async function submit() {
@@ -267,7 +263,7 @@ export function Composer({
         .join(", ");
       return setError(`Caption is over the limit for: ${names}.`);
     }
-    if (selected.size === 0) return setError("Select at least one channel.");
+    if (targets.length === 0) return setError("Select at least one channel.");
     if (!postNow && !scheduledLocal) return setError("Pick a date and time.");
 
     const res = await fetch("/api/posts", {
@@ -278,7 +274,7 @@ export function Composer({
         first_comment: firstComment,
         post_type: textOnly ? "text" : undefined,
         asset_ids: textOnly ? [] : assets.map((a) => a.asset.id),
-        channel_ids: Array.from(selected),
+        targets,
         ...(postNow ? { post_now: true } : { scheduled_local: scheduledLocal }),
         timezone,
         content_kind: contentKind,
@@ -312,7 +308,7 @@ export function Composer({
         asset_ids: textOnly ? [] : assets.map((a) => a.asset.id),
         content_kind: contentKind,
         content_status: libraryStatus,
-        target_channel_ids: Array.from(selected),
+        targets,
         caption_variants: captionVariantsPayload,
         period_links: periodLinksPayload,
         tag_ids: tagIds,
@@ -524,79 +520,18 @@ export function Composer({
             Where does this go?
           </h3>
           <p className="mb-3 text-xs text-muted">
-            Pick the accounts. Each gets its own scheduled send.
+            Pick the accounts. Each gets its own scheduled send — and on Instagram,
+            Feed and Story are separate sends you can pick independently.
           </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {channels.map((c) => {
-              const on = selected.has(c.id);
-              const textDisabled = textOnly && !supportsText(c.platform);
-              const videoDisabled = hasVideo && !supportsVideo(c.platform);
-              const disabled = textDisabled || videoDisabled;
-              const color = channelColor(c.id, c.color_hue);
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => toggleChannel(c.id)}
-                  disabled={disabled}
-                  className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                    disabled
-                      ? "cursor-not-allowed border-border opacity-50"
-                      : on
-                      ? "border-transparent"
-                      : "border-border hover:bg-surface-sunken"
-                  }`}
-                  style={
-                    on && !disabled
-                      ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` }
-                      : undefined
-                  }
-                >
-                  <span
-                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded"
-                    style={{
-                      backgroundColor: on && !disabled ? color.dot : "transparent",
-                      border: on && !disabled ? "none" : "1.5px solid var(--color-border-strong)",
-                    }}
-                  >
-                    {on && !disabled ? <span className="text-[10px] text-white">✓</span> : null}
-                  </span>
-                  <ChannelAvatar
-                    id={c.id}
-                    name={c.account_name}
-                    colorHue={c.color_hue}
-                    avatarPath={c.avatar_path}
-                    size={20}
-                  />
-                  {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
-                      chip must take its paired dark `fg` — on `text-ink` alone the name is
-                      near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
-                  <span className="min-w-0">
-                    <span
-                      className="block truncate text-sm font-medium text-ink"
-                      style={on && !disabled ? { color: color.fg } : undefined}
-                    >
-                      {c.account_name}
-                    </span>
-                    <span
-                      className="data block text-[11px] text-muted"
-                      style={on && !disabled ? { color: color.fg, opacity: 0.75 } : undefined}
-                    >
-                      {textDisabled
-                        ? `${platformLabel(c.platform)} can't post text-only`
-                        : videoDisabled
-                          ? `${platformLabel(c.platform)} can't post video`
-                          : platformLabel(c.platform)}
-                      {!disabled && c.requires_approval
-                        ? postNow
-                          ? " · approval skipped (Post now)"
-                          : " · needs approval"
-                        : ""}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <ChannelSurfacePicker
+            channels={channels}
+            value={targets}
+            onChange={setTargets}
+            textOnly={textOnly}
+            hasVideo={hasVideo}
+            slideCount={assets.length}
+            postNow={postNow}
+          />
         </section>
 
         {/* Schedule */}
@@ -728,12 +663,12 @@ export function Composer({
 
         <div className="rounded-card border border-border bg-surface p-4">
           <p className="mb-2 text-xs font-medium text-ink-soft">Headed to</p>
-          {selected.size === 0 ? (
+          {targets.length === 0 ? (
             <p className="text-xs text-faint">No channels selected yet.</p>
           ) : (
             <ul className="space-y-1.5">
               {channels
-                .filter((c) => selected.has(c.id))
+                .filter((c) => selectedChannelIds.has(c.id))
                 .map((c) => {
                   return (
                     <li key={c.id} className="flex items-center gap-2 text-sm">

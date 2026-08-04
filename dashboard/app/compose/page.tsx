@@ -26,6 +26,8 @@ export default function ComposePage() {
     content_kind: p.content_kind,
     content_status: p.content_status,
     post_type: p.post_type,
+    // Drives the picker's '4 slides → 4 Stories' note before scheduling.
+    asset_count: p.asset_count,
   }));
   const defaultDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10); // tomorrow (UTC)
   const defaultTime = "09:00";

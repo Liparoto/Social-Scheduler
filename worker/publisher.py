@@ -45,18 +45,35 @@ class _NonRetryable(Exception):
     """A problem that retrying won't fix (bad config/data) -> terminal failure."""
 
 
+def _surface(pub) -> str:
+    """A publication's destination surface, defaulting to 'feed'.
+
+    The .keys() guard mirrors the existing idiom for publish_path/cover_frame_ms: many
+    tests build publication fixtures as plain dicts without this column, and a bare
+    pub["surface"] would KeyError on every one of them.
+    """
+    return pub["surface"] if "surface" in pub.keys() else "feed"
+
+
 def _maybe_retire_one_time(conn, post_id: int, now: datetime) -> bool:
-    """Retire a one-time post once EVERY targeted channel has posted it. Returns True if retired."""
+    """Retire a one-time post once EVERY targeted (channel, SURFACE) has posted it.
+
+    Surface matters: a post aimed at both a channel's feed AND its story is not spent
+    when only the feed send succeeds. Comparing channels alone would retire the post the
+    moment the feed landed, stranding the Story that had not gone out yet.
+
+    Returns True if retired.
+    """
     targets = conn.execute(
-        "SELECT channel_id FROM post_targets WHERE post_id = ?", (post_id,)
+        "SELECT channel_id, surface FROM post_targets WHERE post_id = ?", (post_id,)
     ).fetchall()
     if not targets:
         return False
     for t in targets:
         done = conn.execute(
             "SELECT 1 FROM publications WHERE post_id = ? AND channel_id = ? "
-            "AND status = 'posted' AND is_dry_run = 0 LIMIT 1",
-            (post_id, t["channel_id"]),
+            "AND surface = ? AND status = 'posted' AND is_dry_run = 0 LIMIT 1",
+            (post_id, t["channel_id"], t["surface"]),
         ).fetchone()
         if not done:
             return False
@@ -72,45 +89,73 @@ def _load_targets(conn, pub):
     if post is None:
         raise _NonRetryable(f"post {pub['post_id']} not found")
     assets = db.get_ordered_assets(conn, pub["post_id"])
+    if _surface(pub) == "story":
+        # A story send is ONE slide. The fan-out into one publication per slide happened
+        # at scheduling time; here we only resolve which slide this row is for. Narrowing
+        # it now means _validate and _build_plan both see exactly one asset, so neither
+        # needs to know about surfaces.
+        asset_id = pub["asset_id"] if "asset_id" in pub.keys() else None
+        if asset_id is None:
+            raise _NonRetryable("story publication has no asset_id (nothing to post)")
+        assets = [a for a in assets if a["id"] == asset_id]
+        if not assets:
+            raise _NonRetryable(
+                f"story asset {asset_id} is not on post {pub['post_id']}"
+            )
     return channel, post, assets
 
 
-def _resolve_url(asset, asset_base_url: str | None) -> str | None:
+def _resolve_url(asset, asset_base_url: str | None, surface: str = "feed") -> str | None:
     """The public URL Meta will download from.
 
-    Precedence: an explicit external public_url (the manual/paste escape hatch) wins;
-    otherwise prefer the Meta-conformed derivative at publish_path if present; otherwise
-    fall back to the original storage_path (content hash). None means the asset can't
-    currently be served publicly.
+    An explicit external public_url (the manual/paste escape hatch) always wins.
+    Otherwise the choice depends on the SURFACE:
+
+      * feed  — prefer the Meta-conformed derivative at publish_path, as before.
+      * story — prefer the UNTOUCHED original at storage_path. Conformance targets the
+                FEED's 4:5..1.91:1 range (dashboard/lib/conform.ts); a Story is 9:16,
+                outside it, so the conformed copy is a deliberately mis-shaped image for
+                this surface. Sending the original lets Instagram fit it instead.
+
+    Either way we fall back to the other candidate, then to None — which means the asset
+    can't currently be served publicly.
     """
     external = asset["public_url"]
     if external:
         return external
     if asset_base_url:
-        rel = None
         # keys() guard: legacy rows / some test fixtures may not carry publish_path.
-        if "publish_path" in asset.keys() and asset["publish_path"]:
-            rel = asset["publish_path"]
-        elif asset["storage_path"]:
-            rel = asset["storage_path"]
+        has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
+        conformed = asset["publish_path"] if has_publish_path else None
+        original = asset["storage_path"]
+        rel = (original or conformed) if surface == "story" else (conformed or original)
         if rel:
             return f"{asset_base_url.rstrip('/')}/{rel}"
     return None
 
 
-def _resolve_local_path(asset, caps: PlatformCaps, config) -> Path | None:
+def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed") -> Path | None:
     """The on-disk file to upload, for platforms that send bytes rather than a URL.
 
-    Precedence depends on the platform's caps: when needs_conformed_media is True (Meta
-    platforms, which constrain aspect ratio), prefer the Meta-conformed derivative at
-    publish_path, falling back to the original — same precedence as _resolve_url. When
-    needs_conformed_media is False (Discord, Telegram — no aspect-ratio rules at all),
-    prefer the untouched original at storage_path, falling back to publish_path only if
-    the original is missing. The fallback is existence-aware — it checks the file is
-    actually on disk, not just that the DB column is non-empty — since storage_path is
-    always populated at upload time and would otherwise make the fallback unreachable.
-    Returns None when neither candidate exists, so validation can fail loudly instead of
-    the publish blowing up mid-request.
+    Precedence depends on the platform's caps AND the surface. A STORY always prefers the
+    untouched original, whatever the platform: conformance targets the FEED's 4:5..1.91:1
+    range and a story is 9:16, outside it, so the conformed derivative is the wrong image
+    for that surface — the same rule _resolve_url applies.
+
+    Otherwise it depends on caps: when needs_conformed_media is True (Meta platforms,
+    which constrain aspect ratio), prefer the Meta-conformed derivative at publish_path,
+    falling back to the original. When needs_conformed_media is False (Discord, Telegram —
+    no aspect-ratio rules at all), prefer the untouched original at storage_path, falling
+    back to publish_path only if the original is missing. The fallback is existence-aware
+    — it checks the file is actually on disk, not just that the DB column is non-empty —
+    since storage_path is always populated at upload time and would otherwise make the
+    fallback unreachable. Returns None when neither candidate exists, so validation can
+    fail loudly instead of the publish blowing up mid-request.
+
+    No byte-upload platform has a Stories surface today, so the story branch changes no
+    real publish. It exists so the DRY-RUN plan doesn't advertise the cropped derivative
+    for a story — the plan's job is to be legible — and so this can't quietly become a
+    real bug if one ever does.
     """
 
     def _candidate(rel) -> Path | None:
@@ -124,13 +169,15 @@ def _resolve_local_path(asset, caps: PlatformCaps, config) -> Path | None:
     has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
     original = _candidate(asset["storage_path"])
     conformed = _candidate(asset["publish_path"] if has_publish_path else None)
+    if surface == "story":
+        return original or conformed
     if caps.needs_conformed_media:
         return conformed or original
     return original or conformed
 
 
 def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,
-              caption: str | None = None, config=None) -> None:
+              caption: str | None = None, config=None, surface: str = "feed") -> None:
     if platform not in _PUBLISHERS:
         raise _NonRetryable(
             f"unsupported platform '{platform}' — this worker has no adapter for it"
@@ -139,8 +186,24 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
-            f"post_type '{post_type}' not supported (Stories are still Phase 6)"
+            f"post_type '{post_type}' is not a publishable content shape "
+            "(note: Stories are a target SURFACE, not a post_type)"
         )
+    if surface == "story":
+        # A Story is one media regardless of the post's content shape, so the post_type
+        # checks below (which describe the SOURCE) don't apply. _load_targets has already
+        # narrowed `assets` to this row's single slide.
+        if platform != "instagram":
+            raise _NonRetryable(f"{platform} has no Stories surface in this worker")
+        if len(assets) != 1:
+            raise _NonRetryable(f"a story needs exactly 1 asset, has {len(assets)}")
+        if assets[0]["media_kind"] not in ("image", "video"):
+            raise _NonRetryable(
+                f"a story needs an image or video, got '{assets[0]['media_kind']}'"
+            )
+        # No caption-limit check: a story sends no caption at all.
+        _validate_media_available(assets, dry_run, asset_base_url, caps, config, surface)
+        return
     if post_type == "single" and len(assets) != 1:
         raise _NonRetryable(f"single post needs exactly 1 asset, has {len(assets)}")
     if post_type == "reel":
@@ -169,17 +232,31 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             f"caption is {len(caption)} characters; {platform} allows {limit} "
             f"for a {post_type} post"
         )
-    if not dry_run:
-        if caps.uploads_media_bytes:
-            missing = [a["id"] for a in assets if _resolve_local_path(a, caps, config) is None]
-            if missing:
-                raise _NonRetryable(f"asset files missing from the local store: {missing}")
-        else:
-            missing = [a["id"] for a in assets if not _resolve_url(a, asset_base_url)]
-            if missing:
-                raise _NonRetryable(
-                    f"assets have no public URL (no tunnel and no stored public_url): {missing}"
-                )
+    _validate_media_available(assets, dry_run, asset_base_url, caps, config, surface)
+
+
+def _validate_media_available(assets, dry_run: bool, asset_base_url: str | None,
+                              caps: PlatformCaps, config, surface: str = "feed") -> None:
+    """Every asset must be reachable the way this platform expects, or fail loudly here
+    rather than mid-publish. Shared by the feed and story paths so the two cannot drift.
+    """
+    if dry_run:
+        return
+    if caps.uploads_media_bytes:
+        missing = [
+            a["id"] for a in assets
+            if _resolve_local_path(a, caps, config, surface) is None
+        ]
+        if missing:
+            raise _NonRetryable(f"asset files missing from the local store: {missing}")
+    else:
+        missing = [
+            a["id"] for a in assets if not _resolve_url(a, asset_base_url, surface)
+        ]
+        if missing:
+            raise _NonRetryable(
+                f"assets have no public URL (no tunnel and no stored public_url): {missing}"
+            )
 
 
 def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str | None:
@@ -200,17 +277,19 @@ def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str |
 
 
 def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None,
-                 config=None) -> dict:
+                 config=None, surface: str = "feed") -> dict:
     # For real publishes every asset resolves (validated above). In dry-run there is no
     # tunnel, so show a readable local marker instead of a live URL.
     asset_urls = [
-        _resolve_url(a, asset_base_url) or f"(local:{a['storage_path']})" for a in assets
+        _resolve_url(a, asset_base_url, surface) or f"(local:{a['storage_path']})"
+        for a in assets
     ]
     # Local on-disk paths, for byte-upload platforms (Discord/Telegram). None entries are
     # expected in dry-run or when the platform doesn't use them.
     caps = PLATFORM_CAPS[channel["platform"]]
     asset_paths = [
-        _resolve_local_path(a, caps, config) if config is not None else None for a in assets
+        _resolve_local_path(a, caps, config, surface) if config is not None else None
+        for a in assets
     ]
     return {
         "platform": channel["platform"],
@@ -229,10 +308,21 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
             if assets and "cover_frame_ms" in assets[0].keys()
             else None
         ),
-        "caption": caption,
+        "surface": surface,
+        # Stories have no caption field. Nulled in the PLAN, not merely skipped at the
+        # call site, so dry-run output shows the truth about what would be sent.
+        "caption": None if surface == "story" else caption,
         "first_comment": post["first_comment"],
         "asset_urls": asset_urls,
         "asset_paths": asset_paths,
+        # Which media field a story container should use. Feed paths branch on post_type
+        # instead, so this is only read by _publish_story. Same `in .keys()` guard as
+        # cover_frame_ms above — plain-dict asset fixtures don't all carry media_kind.
+        "media_kind": (
+            assets[0]["media_kind"]
+            if assets and "media_kind" in assets[0].keys()
+            else None
+        ),
     }
 
 
@@ -327,7 +417,35 @@ def _publish_fb_multi(client, plan, token) -> str:
     )
 
 
+def _publish_story(client, plan, token, config, sleep_fn) -> str:
+    """One media, no caption: container -> poll -> publish.
+
+    We poll even for images, where the container is usually ready immediately. Never
+    skipping the status check is a project rule and the cost is one cheap request. Video
+    gets the longer Reels poll budget, since Meta transcodes it server-side.
+    """
+    ig = plan["account_id"]
+    url = plan["asset_urls"][0]
+    is_video = plan.get("media_kind") == "video"
+    container = client.create_story_container(
+        ig,
+        token,
+        video_url=url if is_video else None,
+        image_url=None if is_video else url,
+    )
+    _poll_until_finished(
+        client, container, token, config, sleep_fn,
+        interval=config.reels_status_poll_interval if is_video else None,
+        max_tries=config.reels_status_poll_max_tries if is_video else None,
+    )
+    return client.publish_container(ig, container, token)
+
+
 def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
+    # Surface first: a Story is ONE media regardless of the post's content shape, so
+    # post_type ('single'/'carousel') describes the SOURCE here, not what gets published.
+    if plan.get("surface") == "story":
+        return _publish_story(client, plan, token, config, sleep_fn)
     post_type = plan["post_type"]
     if post_type == "single":
         return _publish_single(client, plan, token, config, sleep_fn)
@@ -539,8 +657,10 @@ def publish_one(
             (pub["post_id"], pub["channel_id"]),
         ).fetchone()[0]
         caption = _select_caption(conn, post["id"], channel["platform"], used_count)
-        _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption, config)
-        plan = _build_plan(channel, post, assets, asset_base_url, caption, config)
+        surface = _surface(pub)
+        _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption,
+                  config, surface)
+        plan = _build_plan(channel, post, assets, asset_base_url, caption, config, surface)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
         return _mark_failure(conn, pub, config, now, str(exc), terminal=True)

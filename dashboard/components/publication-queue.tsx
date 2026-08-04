@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { PublicationRow } from "@/lib/queries";
 import type { PublicationStatus, Platform } from "@/lib/types";
 import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
+import { groupQueueRows, cancelableIds } from "@/lib/queue-groups";
+import { StoryGroupHeader } from "@/components/story-group-header";
 
 type StatusFilter = "all" | PublicationStatus;
 
@@ -33,11 +35,15 @@ export function PublicationQueue({
   const [account, setAccount] = useState<"all" | number>("all");
   const [platform, setPlatform] = useState<"all" | Platform>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
+  // DESTINATION, not platform: an Instagram channel has both surfaces, so this is a
+  // separate axis from the platform filter above. Matches the Library's filter.
+  const [destination, setDestination] = useState<"all" | "story" | "feed">("all");
 
   const shown = pubs.filter((p) => {
     if (account !== "all" && p.channel_id !== account) return false;
     if (platform !== "all" && p.channel_platform !== platform) return false;
     if (status !== "all" && p.status !== status) return false;
+    if (destination !== "all" && p.surface !== destination) return false;
     return true;
   });
 
@@ -79,6 +85,16 @@ export function PublicationQueue({
             </option>
           ))}
         </select>
+        <select
+          className={selectCls}
+          aria-label="Filter by destination"
+          value={destination}
+          onChange={(e) => setDestination(e.target.value as typeof destination)}
+        >
+          <option value="all">All destinations</option>
+          <option value="story">Stories</option>
+          <option value="feed">Feed only</option>
+        </select>
         <span className="data ml-auto text-[11px] text-muted">
           showing {shown.length} of {pubs.length}
         </span>
@@ -101,8 +117,21 @@ export function PublicationQueue({
               </tr>
             </thead>
             <tbody>
-              {shown.map((p) => (
-                <tr key={p.id} className="border-b border-border last:border-0 align-top">
+              {groupQueueRows(shown).map((group) => (
+                <Fragment key={group.key}>
+                  {group.isStoryGroup ? (
+                    <StoryGroupHeader
+                      slideCount={group.rows.length}
+                      caption={group.rows[0].post_caption}
+                      channelName={group.rows[0].channel_name}
+                      cancelableIds={cancelableIds(group.rows)}
+                      workerOnline={workerOnline}
+                    />
+                  ) : null}
+                  {group.rows.map((p) => (
+                <tr key={p.id} className={`border-b border-border last:border-0 align-top ${
+                  group.isStoryGroup ? "bg-surface-sunken/40" : ""
+                }`}>
                   <td className="px-4 py-3">
                     <div className="flex items-start gap-3">
                       <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
@@ -135,13 +164,29 @@ export function PublicationQueue({
                       </div>
                       <div className="min-w-0">
                         <p className="line-clamp-2 max-w-xs text-ink">
+                          {p.surface === "story" ? (
+                            <span
+                              className="mr-1.5 rounded-full border border-border-strong px-1.5 py-px align-middle text-[10px] font-medium text-ink-soft"
+                              title="Publishes to the Instagram Story, not the feed"
+                            >
+                              Story
+                            </span>
+                          ) : null}
                           {p.post_caption || (
-                            <span className="text-faint italic">No caption</span>
+                            <span className="text-faint italic">
+                              {p.surface === "story" ? "Stories carry no caption" : "No caption"}
+                            </span>
                           )}
                         </p>
                         <p className="data mt-0.5 text-[11px] text-faint">
-                          {p.post_type}
-                          {p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}
+                          {/* post_type describes the SOURCE post. For a story send it would
+                              read "carousel · 4 imgs" while this row publishes exactly one
+                              slide — so say what THIS send actually does instead. */}
+                          {p.surface === "story"
+                            ? p.story_slide_no && p.asset_count > 1
+                              ? `Story · slide ${p.story_slide_no} of ${p.asset_count}`
+                              : "Story"
+                            : `${p.post_type}${p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}`}
                           {p.remote_post_id && p.remote_post_id !== "DRYRUN"
                             ? ` · ${p.remote_post_id}`
                             : ""}
@@ -251,6 +296,8 @@ export function PublicationQueue({
                     />
                   </td>
                 </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
           </table>

@@ -9,7 +9,21 @@ export interface Tag {
   name: string;
   kind: TagKind;
 }
+// NOTE: 'story' here is VESTIGIAL and unused — see migration 0014's header. A Story is a
+// DESTINATION, not a content shape, and lives on Surface below. Nothing creates a post with
+// post_type 'story' and the worker refuses it.
 export type PostType = "single" | "carousel" | "reel" | "story" | "text";
+
+// WHERE a send lands, as opposed to what the content IS (PostType, which is INFERRED from
+// the assets). 'story' is an Instagram Story. Kept as a separate axis so one post can be a
+// Story on Instagram AND an ordinary post on Telegram — see docs/design-instagram-stories.md.
+export type Surface = "feed" | "story";
+
+/** One destination for a post: a channel plus which of its surfaces to publish to. */
+export interface PostTarget {
+  channel_id: number;
+  surface: Surface;
+}
 export type PostStatus = "draft" | "scheduled" | "posted" | "failed";
 export type PublicationStatus =
   | "scheduled"
@@ -146,6 +160,10 @@ export interface Publication {
   first_comment_remote_id: string | null;
   is_dry_run: number;
   is_held: number;
+  /** Which destination this send is for — 'story' rows target ONE slide via asset_id. */
+  surface: Surface;
+  /** NULL for a feed send (all assets, in order); the single slide for a story send. */
+  asset_id: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string | null;
@@ -164,4 +182,6 @@ export interface PostPublicationRow {
   is_held: number;
   is_dry_run: number;
   remote_post_id: string | null;
+  /** Which destination this send is for. 'story' rows also carry an asset_id (one slide). */
+  surface: Surface;
 }

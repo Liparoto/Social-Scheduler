@@ -178,7 +178,13 @@ def select_candidates(conn, channel_id: int, now):
         FROM posts p
         WHERE p.content_status = 'ready'
           AND {_TYPE_CAPABILITY_SQL}
-          AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid)
+          -- surface='feed': auto-fill queues ordinary posts only. A post targeted SOLELY
+          -- at an Instagram Story must never be auto-queued as a feed post — matching on
+          -- channel_id alone would send it to the wrong destination silently. Story
+          -- recycling is a deliberate v1 scope cut (docs/design-instagram-stories.md §4),
+          -- not an oversight.
+          AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid
+                        AND pt.surface = 'feed')
           AND NOT EXISTS (
              SELECT 1 FROM publications q
              WHERE q.post_id = p.id AND q.channel_id = :cid

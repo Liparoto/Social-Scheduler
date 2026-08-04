@@ -396,3 +396,34 @@ def test_autofill_uses_time_of_day_for_slot_time(conn, config):
     assert (times[p_even].hour, times[p_even].minute) == (18, 0)
     assert (times[p_morn].hour, times[p_morn].minute) == (9, 0)
     assert (times[p_any].hour, times[p_any].minute) == (17, 0)  # cadence fallback
+
+
+def test_story_only_post_is_never_autofilled_into_the_feed(conn):
+    """post_targets carries a surface now. Matching on channel_id alone would let a post
+    meant ONLY for Stories be auto-queued as an ordinary feed post — a silent wrong
+    destination, not a visible error. Auto-fill is deliberately feed-only for v1
+    (docs/design-instagram-stories.md §4)."""
+    ch = make_channel(conn)
+    p = make_post(conn)
+    conn.execute(
+        "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?,?,'story')",
+        (p, ch),
+    )
+    conn.commit()
+
+    rows = select_candidates(conn, ch, NOW)
+    assert p not in [r["post_id"] for r in rows]
+    assert p not in picks(conn, ch, 10)
+
+
+def test_a_post_targeted_at_both_surfaces_is_still_autofilled_for_the_feed(conn):
+    """The feed target is real work; only the story-ONLY case is excluded."""
+    ch = make_channel(conn)
+    p = make_post(conn, ch)  # feed target
+    conn.execute(
+        "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?,?,'story')",
+        (p, ch),
+    )
+    conn.commit()
+
+    assert p in [r["post_id"] for r in select_candidates(conn, ch, NOW)]

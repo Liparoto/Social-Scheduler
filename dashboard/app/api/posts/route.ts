@@ -5,13 +5,22 @@ import type { ContentKind, PostType } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 import { incompatiblePostError } from "@/lib/platforms";
 import { captionLimitError } from "@/lib/caption-limits";
+import { parseTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const assetIds: number[] = Array.isArray(body.asset_ids) ? body.asset_ids : [];
-  const channelIds: number[] = Array.isArray(body.channel_ids) ? body.channel_ids : [];
+  // The composer sends `targets` (channel + surface); older callers send channel_ids,
+  // which can only have meant feed targets.
+  const parsedTargets = parseTargets(body.targets, body.channel_ids);
+  if (parsedTargets === "invalid") {
+    return NextResponse.json({ error: "Invalid targets." }, { status: 400 });
+  }
+  // Channel-level checks below are per ACCOUNT, so dedupe: one Instagram account
+  // picked for both Feed and Story is still a single channel to validate.
+  const channelIds: number[] = [...new Set(parsedTargets.map((t) => t.channel_id))];
   const localTime: string = body.scheduled_local; // "YYYY-MM-DDTHH:mm"
   const timeZone: string = body.timezone || "UTC";
   const isText: boolean = body.post_type === "text";
@@ -137,12 +146,11 @@ export async function POST(req: NextRequest) {
     first_comment: (body.first_comment || "").trim(),
     post_type: postType,
     asset_ids: assetIds,
-    channel_ids: channelIds,
+    targets: parsedTargets,
     scheduled_at: scheduledUtc,
     created_by: body.created_by,
     content_kind: contentKind,
     content_status: "ready",
-    target_channel_ids: channelIds,
     skip_approval: postNow,
     caption_variants: captionVariants ?? undefined,
     period_links: periodLinks ?? undefined,

@@ -12,12 +12,15 @@ import type {
   Post,
   Publication,
   PostPublicationRow,
+  PostTarget,
   PostType,
+  Surface,
   Tag,
 } from "./types";
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
+import { expandTarget } from "./story-fanout";
 import type { BulkEditContext } from "./bulk-edit-context";
 import type { PeriodWindow } from "./periods";
 
@@ -518,7 +521,7 @@ export function reorderPostAssets(postId: number, assetIds: number[]): void {
 
 /** Shared shape for the content-model side-tables a post can optionally arrive with. */
 interface ContentModelInput {
-  target_channel_ids?: number[];
+  targets?: PostTarget[];
   content_kind?: ContentKind;
   content_status?: ContentStatus;
   cooldown_days?: number | null;
@@ -529,10 +532,12 @@ interface ContentModelInput {
 
 /** Writes the content-model side-table rows for a freshly-created post, INSIDE the caller's transaction. */
 function insertContentModelRows(db: ReturnType<typeof getDb>, postId: number, data: ContentModelInput): void {
-  if (data.target_channel_ids?.length) {
-    // OR IGNORE: a duplicate channel id in the input is harmless, not a 500.
-    const insert = db.prepare("INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?, ?)");
-    for (const channelId of data.target_channel_ids) insert.run(postId, channelId);
+  if (data.targets?.length) {
+    // OR IGNORE: a duplicate (channel, surface) pair in the input is harmless, not a 500.
+    const insert = db.prepare(
+      "INSERT OR IGNORE INTO post_targets (post_id, channel_id, surface) VALUES (?, ?, ?)"
+    );
+    for (const t of data.targets) insert.run(postId, t.channel_id, t.surface);
   }
   if (data.period_links?.length) {
     const insert = db.prepare(
@@ -557,7 +562,7 @@ export interface CreatePostInput extends ContentModelInput {
   first_comment: string;
   post_type: PostType;
   asset_ids: number[]; // in carousel order
-  channel_ids: number[];
+  targets: PostTarget[]; // channel + surface (feed/story), not just channel
   scheduled_at: string; // ISO UTC
   created_by?: string;
   /** "Post now" from the composer: force every publication straight to 'scheduled',
@@ -567,7 +572,9 @@ export interface CreatePostInput extends ContentModelInput {
 }
 
 /**
- * Create a post with its ordered assets and one publication PER target channel.
+ * Create a post with its ordered assets and its publications: one PER TARGET, and for a
+ * story target one per SLIDE (a 4-slide post aimed at Stories becomes 4 consecutive
+ * Stories — there is no carousel Story in the API). See lib/story-fanout.ts.
  * All in a single transaction — a post either lands fully or not at all.
  * Content-model fields (kind/status/cooldown/targets/periods/caption variants) are all
  * optional so existing callers keep working with today's schema defaults.
@@ -603,26 +610,33 @@ export function createPostWithPublications(
     data.asset_ids.forEach((assetId, i) => linkAsset.run(postId, assetId, i));
 
     const insertPub = db.prepare(
-      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO publications
+         (post_id, channel_id, scheduled_at, status, created_by, surface, asset_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
     const publicationIds: number[] = [];
-    for (const channelId of data.channel_ids) {
-      const ch = getChannel(channelId);
+    for (const target of data.targets) {
+      const ch = getChannel(target.channel_id);
       // Approval gates content nobody reviewed individually (queued/auto-filled sends).
       // "Post now" (skip_approval) means the person composing this post right now IS
       // the approver — clicking publish is the review. Don't "fix" this back to
       // honoring requires_approval for post_now; that would silently swallow the post
       // into pending_approval and it would never go out.
       const status = !data.skip_approval && ch?.requires_approval ? "pending_approval" : "scheduled";
-      const info = insertPub.run(
-        postId,
-        channelId,
-        data.scheduled_at,
-        status,
-        data.created_by || null
-      );
-      publicationIds.push(Number(info.lastInsertRowid));
+      // One row for a feed target; one row PER SLIDE for a story target. Inserted in
+      // slide order, which is what makes ascending publication id the publish order.
+      for (const assetId of expandTarget(db, postId, target.surface)) {
+        const info = insertPub.run(
+          postId,
+          target.channel_id,
+          data.scheduled_at,
+          status,
+          data.created_by || null,
+          target.surface,
+          assetId
+        );
+        publicationIds.push(Number(info.lastInsertRowid));
+      }
     }
 
     insertContentModelRows(db, postId, data);
@@ -686,7 +700,7 @@ export interface BulkDraftItem {
 }
 
 export interface BulkDraftShared {
-  target_channel_ids?: number[];
+  targets?: PostTarget[];
   content_kind?: ContentKind;
   content_status?: ContentStatus;
   tag_ids?: number[];
@@ -710,7 +724,7 @@ export function createDraftPostsBulk(items: BulkDraftItem[], shared: BulkDraftSh
           caption,
           first_comment: "",
           asset_ids: [item.asset_id],
-          target_channel_ids: shared.target_channel_ids,
+          targets: shared.targets,
           content_kind: shared.content_kind,
           content_status: shared.content_status,
           tag_ids: shared.tag_ids,
@@ -993,6 +1007,9 @@ export interface PostLibraryRow extends Post {
   posted_count: number;
   last_posted_at: string | null;
   target_count: number;
+  // How many of those targets are Instagram Stories. >0 means this post is designated
+  // for Stories — a DESTINATION, which is why it can't be read off post_type.
+  story_target_count: number;
   periods: PostLibraryPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
@@ -1040,6 +1057,8 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT MAX(pub.published_at) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status = 'posted') AS last_posted_at,
          (SELECT COUNT(*) FROM post_targets pt WHERE pt.post_id = p.id) AS target_count,
+         (SELECT COUNT(*) FROM post_targets pt WHERE pt.post_id = p.id
+            AND pt.surface = 'story') AS story_target_count,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
             WHERE pt.post_id = p.id AND t.kind = 'time_of_day') AS time_of_day_tags,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
@@ -1090,6 +1109,8 @@ export interface BulkEntry {
   channel_id: number;
   scheduled_at: string; // UTC ISO
   status: "scheduled" | "pending_approval";
+  /** Defaults to 'feed' so callers with no surface concept keep working unchanged. */
+  surface?: Surface;
 }
 
 /** Thrown when a caller (route or otherwise) tries to target a channel that can't publish
@@ -1103,7 +1124,11 @@ export class IncompatiblePostTargetError extends Error {
   }
 }
 
-/** Create many publications atomically and flip their posts out of 'draft'. */
+/** Create many publications atomically and flip their posts out of 'draft'.
+ *
+ * A story entry fans out to one publication PER SLIDE here rather than at the call site,
+ * so every route that schedules through this path gets the rule for free and none of them
+ * can forget it. See lib/story-fanout.ts. */
 export function bulkCreatePublications(entries: BulkEntry[]): number {
   if (entries.length === 0) return 0;
   const db = getDb();
@@ -1120,17 +1145,24 @@ export function bulkCreatePublications(entries: BulkEntry[]): number {
   }
   const tx = db.transaction((rows: BulkEntry[]) => {
     const insert = db.prepare(
-      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by)
-       VALUES (?, ?, ?, ?, 'bulk')`
+      `INSERT INTO publications
+         (post_id, channel_id, scheduled_at, status, created_by, surface, asset_id)
+       VALUES (?, ?, ?, ?, 'bulk', ?, ?)`
     );
     const undraft = db.prepare(
       "UPDATE posts SET status = 'scheduled' WHERE id = ? AND status = 'draft'"
     );
+    let created = 0;
     for (const r of rows) {
-      insert.run(r.post_id, r.channel_id, r.scheduled_at, r.status);
+      const surface = r.surface ?? "feed";
+      for (const assetId of expandTarget(db, r.post_id, surface)) {
+        insert.run(r.post_id, r.channel_id, r.scheduled_at, r.status, surface, assetId);
+        created += 1;
+      }
       undraft.run(r.post_id);
     }
-    return rows.length;
+    // The COUNT of publications, not of entries: one story entry becomes several sends.
+    return created;
   });
   return tx(entries);
 }
@@ -1146,6 +1178,9 @@ export interface PublicationRow extends Publication {
   channel_avatar_path: string | null;
   asset_count: number;
   first_asset_id: number | null;
+  /** 1-based slide number for a story send, NULL for a feed send. Lets the queue say
+   *  "Story 2 of 4" instead of the post's type, which describes the SOURCE not this send. */
+  story_slide_no: number | null;
   m_reach: number | null;
   m_saves: number | null;
   m_likes: number | null;
@@ -1168,8 +1203,13 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          c.color_hue    AS channel_color_hue,
          c.avatar_path  AS channel_avatar_path,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
-         (SELECT pa.asset_id FROM post_assets pa
-            WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,
+         -- A story send shows ITS OWN slide, not the post's first asset — otherwise
+         -- slide 3 of a carousel would show slide 1's thumbnail.
+         COALESCE(pub.asset_id,
+           (SELECT pa.asset_id FROM post_assets pa
+              WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1)) AS first_asset_id,
+         (SELECT pa.sort_order + 1 FROM post_assets pa
+            WHERE pa.post_id = p.id AND pa.asset_id = pub.asset_id) AS story_slide_no,
          lm.reach       AS m_reach,
          lm.saves       AS m_saves,
          lm.likes       AS m_likes,
@@ -1392,22 +1432,26 @@ export function deletePeriod(id: number): boolean {
 }
 
 // ---- Post targeting (explicit per-account "who is this for") ---------------------
-export function getPostTargets(postId: number): number[] {
-  const rows = getDb()
-    .prepare("SELECT channel_id FROM post_targets WHERE post_id = ? ORDER BY channel_id ASC")
-    .all(postId) as { channel_id: number }[];
-  return rows.map((r) => r.channel_id);
+export function getPostTargets(postId: number): PostTarget[] {
+  return getDb()
+    .prepare(
+      "SELECT channel_id, surface FROM post_targets WHERE post_id = ? " +
+        "ORDER BY channel_id ASC, surface ASC"
+    )
+    .all(postId) as PostTarget[];
 }
 
 /** Replace a post's target set atomically (delete-all then insert — the "all" snapshot). */
-export function setPostTargets(postId: number, channelIds: number[]): void {
+export function setPostTargets(postId: number, targets: PostTarget[]): void {
   const db = getDb();
-  const tx = db.transaction((ids: number[]) => {
+  const tx = db.transaction((rows: PostTarget[]) => {
     db.prepare("DELETE FROM post_targets WHERE post_id = ?").run(postId);
-    const insert = db.prepare("INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?, ?)");
-    for (const id of ids) insert.run(postId, id);
+    const insert = db.prepare(
+      "INSERT OR IGNORE INTO post_targets (post_id, channel_id, surface) VALUES (?, ?, ?)"
+    );
+    for (const t of rows) insert.run(postId, t.channel_id, t.surface);
   });
-  tx(channelIds);
+  tx(targets);
 }
 
 // ---- Tags (taxonomy: topic + time_of_day) -------------------------------------

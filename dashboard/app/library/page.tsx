@@ -38,6 +38,7 @@ export default function LibraryPage() {
     cooldown_days: p.cooldown_days,
     tag_ids: p.tag_ids_csv ? p.tag_ids_csv.split(",").map(Number) : [],
     target_count: p.target_count,
+    story_target_count: p.story_target_count,
     periods: p.periods,
     time_of_day_tags: p.time_of_day_tags,
     topic_tags: p.topic_tags,

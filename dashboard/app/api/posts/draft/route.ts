@@ -4,6 +4,7 @@ import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 import { PLATFORMS, incompatiblePostError } from "@/lib/platforms";
 import { captionLimitError } from "@/lib/caption-limits";
+import { parseTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -43,17 +44,22 @@ export async function POST(req: NextRequest) {
     contentStatus = body.content_status;
   }
 
+  // The composer sends `targets` (channel + surface); older callers send
+  // target_channel_ids, which can only have meant feed targets.
+  const parsedTargets = parseTargets(body.targets, body.target_channel_ids);
+  if (parsedTargets === "invalid") {
+    return NextResponse.json({ error: "Invalid targets." }, { status: 400 });
+  }
   let targetChannelIds: number[] | undefined;
-  if (body.target_channel_ids !== undefined) {
-    if (!Array.isArray(body.target_channel_ids)) {
-      return NextResponse.json({ error: "Invalid target_channel_ids." }, { status: 400 });
-    }
-    for (const cid of body.target_channel_ids) {
-      if (typeof cid !== "number" || !getChannel(cid)) {
+  if (body.targets !== undefined || body.target_channel_ids !== undefined) {
+    // Deduped: one Instagram account picked for both Feed and Story is still one channel
+    // to validate and to describe.
+    targetChannelIds = [...new Set(parsedTargets.map((t) => t.channel_id))];
+    for (const cid of targetChannelIds) {
+      if (!getChannel(cid)) {
         return NextResponse.json({ error: `Unknown channel ${cid}.` }, { status: 400 });
       }
     }
-    targetChannelIds = body.target_channel_ids;
   }
 
   // Load the assets so post_type can reflect what they ACTUALLY are, not just how many
@@ -144,7 +150,7 @@ export async function POST(req: NextRequest) {
     created_by: body.created_by,
     content_kind: contentKind,
     content_status: contentStatus,
-    target_channel_ids: targetChannelIds,
+    targets: targetChannelIds ? parsedTargets : undefined,
     caption_variants: captionVariants ?? undefined,
     period_links: periodLinks ?? undefined,
     tag_ids: tagIds ?? undefined,

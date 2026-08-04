@@ -108,13 +108,16 @@ test("targets are unioned from every merged post", async () => {
   const c1 = ch("a"), c2 = ch("b");
   const ids = [mkAsset(1), mkAsset(2)];
   const posts = ids.map((a) => mkDraft([a]));
-  q.setPostTargets(posts[0], [c1]);
-  q.setPostTargets(posts[1], [c2]);
+  q.setPostTargets(posts[0], [{ channel_id: c1, surface: "feed" }]);
+  q.setPostTargets(posts[1], [{ channel_id: c2, surface: "feed" }]);
 
   const res = q.mergePostsIntoCarousel(posts, ids, null);
   assert.equal(res.ok, true);
   if (!res.ok) return;
-  assert.deepEqual(q.getPostTargets(res.post_id).sort(), [c1, c2].sort());
+  assert.deepEqual(
+    q.getPostTargets(res.post_id).map((t) => t.channel_id).sort(),
+    [c1, c2].sort(),
+  );
 });
 
 test("a rejected merge writes nothing at all", async () => {
@@ -232,7 +235,7 @@ test("the cap is read from the merged posts' own target channels", async () => {
   const threads = ch("threads", "threads-only");
   const ids = Array.from({ length: 11 }, (_, i) => mkAsset(i + 1));
   const posts = ids.map((a) => mkDraft([a]));
-  for (const p of posts) q.setPostTargets(p, [threads]);
+  for (const p of posts) q.setPostTargets(p, [{ channel_id: threads, surface: "feed" }]);
 
   const res = q.mergePostsIntoCarousel(posts, ids, null);
   assert.equal(res.ok, true, "11 slides is within Threads' cap of 20");
@@ -252,8 +255,8 @@ test("one strict target channel caps the whole merge", async () => {
   const insta = ch("instagram", "ig");
   const ids = Array.from({ length: 11 }, (_, i) => mkAsset(i + 1));
   const posts = ids.map((a) => mkDraft([a]));
-  for (const p of posts) q.setPostTargets(p, [threads]);
-  q.setPostTargets(posts[3], [insta]);
+  for (const p of posts) q.setPostTargets(p, [{ channel_id: threads, surface: "feed" }]);
+  q.setPostTargets(posts[3], [{ channel_id: insta, surface: "feed" }]);
 
   const res = q.mergePostsIntoCarousel(posts, ids, null);
   assert.equal(res.ok, false);
