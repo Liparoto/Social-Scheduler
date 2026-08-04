@@ -1118,10 +1118,13 @@ that the worker remains authoritative in each target channel's timezone.
       this math lives and expose the verdict — but note it currently has no API surface (the DB
       is the contract, by design), so a TS port is the likely answer. If ported, port the
       Python unit tests alongside it so the two implementations are pinned to the same cases.
-- [ ] **Quick-edit modal in the Library** (owner-requested 2026-08-02). Editing one field
-      currently means a full navigation to `/library/[id]` and back, which is why routine
-      cleanup feels heavy. Want an edit button on the card opening a small dialog for the
-      common fields, staying on the page.
+- [x] **Quick-edit modal in the Library** (owner-requested 2026-08-02, shipped 2026-08-03).
+      `quick-edit-modal.tsx` + an Edit button on each card; saves through the existing
+      `PATCH /api/posts/[id]/content`, no new endpoint and no migration. Editing one field
+      used to mean a full navigation to `/library/[id]` and back, which is why routine
+      cleanup felt heavy; the dialog now covers the common fields without leaving the page.
+      Scope shipped: `content_status`, `content_kind`, `cooldown_days`, tags, periods —
+      captions, images, targets and sends stayed out, as planned below.
       - **No new API needed.** `PATCH /api/posts/[id]/content` already accepts exactly this
         set, and `<PostEditor>` already composes `<TagEditor>` / `<PeriodAttach>` /
         `<CaptionVariantsEditor>`. This is a repackaging job, not new plumbing.
