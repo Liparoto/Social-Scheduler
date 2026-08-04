@@ -17,6 +17,9 @@ export interface LightboxAsset {
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
 
+/** Minimum horizontal drag, in px, before a touch swipe counts as a slide change. */
+const SWIPE_PX = 50;
+
 function PlayGlyph() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -256,14 +259,8 @@ export function MediaLightbox({
   const asset = assets[safeIndex];
 
   // Kept in a ref so the key handler (installed once, below) always steps from the
-  // current slide rather than from whichever one it closed over on mount. Synced via
-  // useLayoutEffect rather than assigned inline during render — mutating a ref while
-  // rendering is a lint error (react-hooks/refs), and layout timing still guarantees
-  // this is current before the browser paints or the user can press a key.
+  // current slide rather than from whichever one it closed over on mount.
   const stateRef = useRef({ index: safeIndex, length: assets.length });
-  useLayoutEffect(() => {
-    stateRef.current = { index: safeIndex, length: assets.length };
-  });
 
   const step = useCallback((delta: number) => {
     const { index: from, length } = stateRef.current;
@@ -275,12 +272,23 @@ export function MediaLightbox({
     hasPlayed.current = false;
     setIndex(next);
   }, []);
-  // `step` never changes identity (useCallback with no deps), so capturing it once here
-  // is enough — no need to keep it in sync on every render. The ref exists purely to
-  // satisfy exhaustive-deps for the key handler below without adding `step` itself to
-  // that effect's dependency array, which would be safe in practice but is exactly the
-  // "install once" contract the effect promises not to touch.
+  // Exists so the key handler below can call the current `step` without adding it to
+  // that effect's dependency array, which the "install once" contract forbids touching.
+  // `step` happens to be referentially stable today (useCallback with no deps), but this
+  // ref is resynced on every render regardless — if `step` ever grows a dependency and
+  // stops being stable, stepRef stays correct instead of freezing a stale mount-time
+  // closure that exhaustive-deps has no way to flag (refs are exempt from that check).
   const stepRef = useRef(step);
+
+  // Both refs above are read from a DOM event handler (installed once, empty deps, below)
+  // and from touch/wheel handlers that close over render-time values — assigning them
+  // inline during render is a lint error (react-hooks/refs), so they're synced here
+  // instead. useLayoutEffect (not useEffect) guarantees both are current before the
+  // browser paints or the user can press a key, swipe, or scroll.
+  useLayoutEffect(() => {
+    stateRef.current = { index: safeIndex, length: assets.length };
+    stepRef.current = step;
+  });
 
   // Focus in on open, trap Tab while open, restore focus + body scroll on close/unmount.
   useEffect(() => {
@@ -338,21 +346,39 @@ export function MediaLightbox({
     };
   }, []);
 
+  // Depending on `assets` itself would re-run this on every parent render: every caller
+  // passes a fresh array literal, carousel or not, so the effect would fire a new
+  // window.Image() per keystroke once a caller (Task 9) passes a real multi-slide array.
+  // Depending on the neighbour ids instead — plain numbers/null — only re-runs when the
+  // actual neighbouring slide changes.
+  const prevNeighbour = assets[safeIndex - 1];
+  const nextNeighbour = assets[safeIndex + 1];
+  const prevNeighbourId = prevNeighbour?.media_kind === "image" ? prevNeighbour.id : null;
+  const nextNeighbourId = nextNeighbour?.media_kind === "image" ? nextNeighbour.id : null;
+
   useEffect(() => {
-    for (const neighbour of [assets[safeIndex - 1], assets[safeIndex + 1]]) {
-      if (neighbour && neighbour.media_kind === "image") {
+    for (const id of [prevNeighbourId, nextNeighbourId]) {
+      if (id != null) {
         // Warming the browser cache only — the element is deliberately never mounted.
         const preload = new window.Image();
-        preload.src = `/api/media/${neighbour.id}`;
+        preload.src = `/api/media/${id}`;
       }
     }
-  }, [assets, safeIndex]);
+  }, [prevNeighbourId, nextNeighbourId]);
 
   const touchStartX = useRef<number | null>(null);
   const lastWheelStep = useRef(0);
-  const SWIPE_PX = 50;
 
   function onTouchStart(e: React.TouchEvent) {
+    // A touch on a video's own (shadow-DOM) scrub bar is `composed`, so it retargets to
+    // the <video> host and bubbles up to this backdrop handler same as any other touch.
+    // Without this guard, dragging the seek bar more than SWIPE_PX horizontally both
+    // seeks the video AND steps the carousel mid-scrub — the same "controls must keep
+    // working" problem the arrow-key handler guards against, just for touch instead.
+    if ((e.target as HTMLElement | null)?.closest("video")) {
+      touchStartX.current = null;
+      return;
+    }
     touchStartX.current = e.touches[0]?.clientX ?? null;
   }
   function onTouchEnd(e: React.TouchEvent) {
@@ -363,6 +389,11 @@ export function MediaLightbox({
     if (Math.abs(dx) < SWIPE_PX) return;
     step(dx < 0 ? 1 : -1);
   }
+  // No video-target guard here, unlike touch and arrow keys: no major browser binds a
+  // horizontal wheel gesture to video seeking, so there is no native control to fight
+  // over. A vertical wheel over the volume slider is already excluded by the directional
+  // check below (deltaX must dominate deltaY), which is the only wheel interaction any
+  // browser's native video controls actually bind.
   function onWheel(e: React.WheelEvent) {
     // A Mac trackpad's two-finger horizontal swipe arrives as a stream of wheel events,
     // so without the cooldown one flick would run through the whole carousel. Vertical

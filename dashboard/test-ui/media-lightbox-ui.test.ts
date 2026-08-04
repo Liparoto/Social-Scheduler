@@ -66,12 +66,24 @@ function buttonTag(html: string, ariaLabel: string): string {
 
 test("the first slide disables Previous and the last disables Next", () => {
   const first = render([img(1), img(2), img(3)], 0);
-  assert.ok(buttonTag(first, "Previous slide").includes('disabled=""'));
-  assert.ok(!buttonTag(first, "Next slide").includes('disabled=""'));
+  assert.ok(
+    buttonTag(first, "Previous slide").includes('disabled=""'),
+    "Previous should be disabled on the first slide"
+  );
+  assert.ok(
+    !buttonTag(first, "Next slide").includes('disabled=""'),
+    "Next should NOT be disabled on the first slide"
+  );
 
   const last = render([img(1), img(2), img(3)], 2);
-  assert.ok(buttonTag(last, "Next slide").includes('disabled=""'));
-  assert.ok(!buttonTag(last, "Previous slide").includes('disabled=""'));
+  assert.ok(
+    buttonTag(last, "Next slide").includes('disabled=""'),
+    "Next should be disabled on the last slide"
+  );
+  assert.ok(
+    !buttonTag(last, "Previous slide").includes('disabled=""'),
+    "Previous should NOT be disabled on the last slide"
+  );
 });
 
 test("a video slide renders a player with controls, not an img", () => {
