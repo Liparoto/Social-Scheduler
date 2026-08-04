@@ -152,6 +152,20 @@ duplicated rule to a single code path that matters and is a scope cut, not a lim
 model — evergreen story recycling is an extra rule in `select_candidates`, addable later
 without redesign.
 
+### Two existing reads of `post_targets` that must become surface-aware
+
+Both were found by inspection while planning; neither is optional, and both are silent-wrong
+rather than loud-broken if missed:
+
+1. **`worker/autofill.py:181`** — the candidate query matches `post_targets` on `channel_id`
+   alone. Left as-is, a post targeted *only* at an Instagram Story becomes eligible for
+   auto-fill to queue as an ordinary **feed** post. Needs `AND pt.surface = 'feed'`, which is
+   also what actually implements "auto-fill stays feed-only".
+2. **`worker/publisher.py:51`** (`_maybe_retire_one_time`) — decides a one-time post is spent
+   once every targeted channel has posted it, comparing channels only. With two surfaces on
+   one channel, the post would retire the moment the **feed** send succeeded, retiring content
+   whose Story had not gone out. Must compare `(channel_id, surface)` pairs.
+
 ### The publish path
 
 `_publish_instagram` gains a `story` branch:
@@ -194,9 +208,17 @@ behaves correctly. Worth stating precisely because a 10-slide Story is 10 publis
 - `publications_needing_metrics` **excludes story rows more than 24 hours past
   `published_at`**. The Story no longer exists; refreshing it only produces recurring errors.
   Whatever was captured while it was live is kept.
-- **No new `post_metrics` columns.** `reach` maps to the existing column; replies, taps, and
-  exits land in `raw_json`, which exists for precisely this. Four columns serving one surface
-  does not justify a rebuild, and nothing is lost.
+- **No new `post_metrics` columns.** `reach` maps to the existing column. `replies` already
+  maps to `comments` via `COLUMN_MAP` (added for Threads) and is left to do so rather than
+  special-cased — a story reply is the nearest thing a story has to a comment, and diverging
+  per-surface would make the column mean two things. Taps and exits have no column and stay in
+  `raw_json`, which exists for precisely this. Four columns serving one surface does not
+  justify a rebuild, and nothing is lost.
+- **The 24-hour cutoff belongs in the *automatic* branch only**, alongside the existing
+  platform exclusion — not in the outer `WHERE`. `publications_needing_metrics` carries a
+  comment explaining why: a manual refresh (`metrics_refresh_requested_at`) must still be able
+  to select the row once, or `run_metrics`' `finally` block never clears the flag and the row
+  is flagged forever.
 
 ---
 
