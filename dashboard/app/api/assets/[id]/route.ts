@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { unlinkInsideStore } from "@/lib/asset-files";
+import { assetFilePaths, unlinkInsideStore } from "@/lib/asset-files";
 import { deleteAsset, getAsset } from "@/lib/queries";
 
 export const runtime = "nodejs";
@@ -33,12 +33,10 @@ export async function DELETE(
 
   // Row is gone — now the files. Order matters: a failed row delete must never leave
   // files deleted, but a failed file delete only leaves harmless bytes behind.
+  // assetFilePaths() owns the list of what an asset writes to disk. Spelling it out here
+  // instead is how the story canvas came to be missed when it was added.
   const leftover = (
-    await Promise.all([
-      unlinkInsideStore(asset.storage_path),
-      unlinkInsideStore(asset.publish_path),
-      unlinkInsideStore(asset.thumbnail_path),
-    ])
+    await Promise.all(assetFilePaths(asset).map(unlinkInsideStore))
   ).filter((p): p is string => p !== null);
 
   if (leftover.length > 0) {
