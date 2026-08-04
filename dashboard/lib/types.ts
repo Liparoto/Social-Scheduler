@@ -178,4 +178,6 @@ export interface PostPublicationRow {
   is_held: number;
   is_dry_run: number;
   remote_post_id: string | null;
+  /** Which destination this send is for. 'story' rows also carry an asset_id (one slide). */
+  surface: Surface;
 }

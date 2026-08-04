@@ -28,9 +28,25 @@ export async function POST(
   }
 
   const body = await req.json().catch(() => ({}));
-  // The library scheduler sends `targets` (channel + surface); older callers send
-  // channel_ids, which can only have meant feed targets.
-  const parsedTargets = parseTargets(body.targets, body.channel_ids);
+  // `targets` (channel + surface) is REQUIRED here — bare channel_ids are refused.
+  //
+  // This route publishes, so a wrong destination is not recoverable: it already sent a
+  // Story-designated post to the public feed once, because channel_ids was silently read
+  // as "feed". Every caller now sends explicit targets, so channel_ids can only mean a
+  // caller that was missed — and that must fail loudly rather than guess a surface and
+  // publish somewhere the operator never chose. Other routes still accept the bare form
+  // (bulk import genuinely has no surface concept); none of them publish.
+  if (body.channel_ids !== undefined) {
+    return NextResponse.json(
+      {
+        error:
+          "This endpoint needs explicit targets ({channel_id, surface}), not channel_ids " +
+          "— a missing surface must not be guessed on a route that publishes.",
+      },
+      { status: 400 }
+    );
+  }
+  const parsedTargets = parseTargets(body.targets, undefined);
   if (parsedTargets === "invalid") {
     return NextResponse.json({ error: "Invalid targets." }, { status: 400 });
   }

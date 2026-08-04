@@ -366,6 +366,7 @@ export function PostEditor({
       <PostSendsPanel
         postId={post.id}
         postType={post.post_type}
+        slideCount={assets.length}
         sends={sends}
         channels={sendableChannels}
         readiness={readiness}

@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { PostPublicationRow, PostType } from "@/lib/types";
+import type { PostPublicationRow, PostTarget, PostType } from "@/lib/types";
 import type { Channel } from "@/lib/types";
 import { ChannelAvatar, ChannelChip, StatusBadge } from "@/components/ui";
 import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
 import { incompatibleChannelsForPostType } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
+import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { splitInTz } from "@/lib/time";
 
 const READ_ONLY_STATUSES = new Set(["posted", "publishing"]);
@@ -182,6 +183,7 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
 export function PostSendsPanel({
   postId,
   postType,
+  slideCount,
   sends,
   channels,
   readiness,
@@ -189,6 +191,8 @@ export function PostSendsPanel({
 }: {
   postId: number;
   postType: PostType;
+  /** Slide count, so the picker can warn '4 slides -> 4 Stories' before publishing. */
+  slideCount: number;
   sends: PostPublicationRow[];
   channels: Channel[];
   readiness: PublishReadiness;
@@ -198,22 +202,32 @@ export function PostSendsPanel({
   dirty?: boolean;
 }) {
   const router = useRouter();
-  const [targets, setTargets] = useState<Set<number>>(new Set());
+  // Targets, not channel ids: Instagram's Feed and Story are independent sends, and a
+  // bare channel id here is exactly what published a Story to the feed once.
+  const [targets, setTargets] = useState<PostTarget[]>([]);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [postNow, setPostNow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Exclude channels that already have a non-posted (still-live-in-queue) send, when easy.
-  const busyChannelIds = new Set(
+  // Exclude destinations that already have a non-posted (still-live-in-queue) send, when
+  // easy. Keyed by channel AND surface: an account with a live feed send can still take a
+  // Story, so keying on channel alone would wrongly hide the Story option.
+  const busyKeys = new Set(
     sends.filter((s) => !READ_ONLY_STATUSES.has(s.status) && s.status !== "canceled" && s.status !== "failed")
-      .map((s) => s.channel_id)
+      .map((s) => `${s.channel_id}:${s.surface ?? "feed"}`)
   );
   // ...and channels that can't publish this post's type at all — offering them would
   // schedule a send the worker is guaranteed to fail terminally.
   const incompatibleIds = new Set(incompatibleChannelsForPostType(postType, channels).map((c) => c.id));
-  const pickable = channels.filter((c) => !busyChannelIds.has(c.id) && !incompatibleIds.has(c.id));
+  // A channel is offered when it isn't type-incompatible and still has at least one free
+  // surface. Which of its surfaces are free is decided per-chip below via busyKeys.
+  const pickable = channels.filter(
+    (c) =>
+      !incompatibleIds.has(c.id) &&
+      !(busyKeys.has(`${c.id}:feed`) && busyKeys.has(`${c.id}:story`))
+  );
 
   // Adding a send makes that channel un-pickable (it now has a live send), so a previously
   // ticked channel can go stale the moment the list refreshes. Derive the usable set from
@@ -221,22 +235,19 @@ export function PostSendsPanel({
   // as schedule-from-library.tsx's effectiveTargets and library-view.tsx's effectiveChans.
   const pickableIds = useMemo(() => new Set(pickable.map((c) => c.id)), [pickable]);
   const effectiveTargets = useMemo(
-    () => new Set([...targets].filter((id) => pickableIds.has(id))),
-    [targets, pickableIds]
+    () =>
+      targets.filter(
+        (t) => pickableIds.has(t.channel_id) && !busyKeys.has(`${t.channel_id}:${t.surface}`)
+      ),
+    // busyKeys is rebuilt each render from `sends`; keying the memo on its size is enough
+    // to re-derive when a send is added or removed.
+    [targets, pickableIds, busyKeys.size]
   );
-  const toggleTarget = (id: number) => {
-    setTargets((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   // The count is what makes a multi-target send legible before it fires — "Post now to 2
   // accounts" is the last thing read before something is published for real. At zero the
   // button is disabled, so it just names the action rather than saying "0 sends".
-  const n = effectiveTargets.size;
+  const n = effectiveTargets.length;
   const addLabel =
     n === 0
       ? postNow
@@ -248,7 +259,7 @@ export function PostSendsPanel({
 
   async function addSend() {
     setError(null);
-    if (effectiveTargets.size === 0) {
+    if (effectiveTargets.length === 0) {
       setError("Pick at least one account.");
       return;
     }
@@ -265,7 +276,7 @@ export function PostSendsPanel({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        channel_ids: Array.from(effectiveTargets),
+        targets: effectiveTargets,
         ...(postNow ? { post_now: true } : { date, time }),
       }),
     });
@@ -275,7 +286,7 @@ export function PostSendsPanel({
       setError(b.error ?? "Could not add send.");
       return;
     }
-    setTargets(new Set());
+    setTargets([]);
     setDate("");
     setTime("");
     setPostNow(false);
@@ -336,57 +347,14 @@ export function PostSendsPanel({
               Every account that can take this post already has a send queued.
             </p>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              {pickable.map((c) => {
-                const on = effectiveTargets.has(c.id);
-                const color = channelColor(c.id, c.color_hue);
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => toggleTarget(c.id)}
-                    className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                      on ? "border-transparent" : "border-border hover:bg-surface-sunken"
-                    }`}
-                    style={
-                      on
-                        ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` }
-                        : undefined
-                    }
-                  >
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{
-                        backgroundColor: on ? color.dot : "transparent",
-                        border: on ? "none" : "1.5px solid var(--color-border-strong)",
-                      }}
-                      aria-hidden
-                    />
-                    <ChannelAvatar
-                      id={c.id}
-                      name={c.account_name}
-                      colorHue={c.color_hue}
-                      avatarPath={c.avatar_path}
-                      size={20}
-                    />
-                    {/* channelColor's bg is a fixed LIGHT tint in every theme, so the
-                        label has to take its paired dark `fg` when selected — leaving it
-                        on `text-ink` makes it near-invisible in the dark themes (light
-                        text on a light chip). Same pairing ui.tsx's ChannelChip uses. */}
-                    <span className="text-sm text-ink" style={on ? { color: color.fg } : undefined}>
-                      {c.account_name}
-                    </span>
-                    <span
-                      className="ml-auto text-xs text-muted"
-                      style={on ? { color: color.fg, opacity: 0.75 } : undefined}
-                    >
-                      {c.platform}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            <ChannelSurfacePicker
+              channels={pickable}
+              value={effectiveTargets}
+              onChange={setTargets}
+              hasVideo={postType === "reel"}
+              textOnly={postType === "text"}
+              slideCount={slideCount}
+            />
           )}
         </div>
         <div className="flex flex-wrap items-end gap-2">
@@ -414,7 +382,7 @@ export function PostSendsPanel({
           ) : null}
           <button
             onClick={addSend}
-            disabled={busy || effectiveTargets.size === 0 || (postNow && dirty)}
+            disabled={busy || effectiveTargets.length === 0 || (postNow && dirty)}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
             {busy ? (postNow ? "Sending…" : "Adding…") : addLabel}
