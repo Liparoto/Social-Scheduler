@@ -134,19 +134,28 @@ def _resolve_url(asset, asset_base_url: str | None, surface: str = "feed") -> st
     return None
 
 
-def _resolve_local_path(asset, caps: PlatformCaps, config) -> Path | None:
+def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed") -> Path | None:
     """The on-disk file to upload, for platforms that send bytes rather than a URL.
 
-    Precedence depends on the platform's caps: when needs_conformed_media is True (Meta
-    platforms, which constrain aspect ratio), prefer the Meta-conformed derivative at
-    publish_path, falling back to the original — same precedence as _resolve_url. When
-    needs_conformed_media is False (Discord, Telegram — no aspect-ratio rules at all),
-    prefer the untouched original at storage_path, falling back to publish_path only if
-    the original is missing. The fallback is existence-aware — it checks the file is
-    actually on disk, not just that the DB column is non-empty — since storage_path is
-    always populated at upload time and would otherwise make the fallback unreachable.
-    Returns None when neither candidate exists, so validation can fail loudly instead of
-    the publish blowing up mid-request.
+    Precedence depends on the platform's caps AND the surface. A STORY always prefers the
+    untouched original, whatever the platform: conformance targets the FEED's 4:5..1.91:1
+    range and a story is 9:16, outside it, so the conformed derivative is the wrong image
+    for that surface — the same rule _resolve_url applies.
+
+    Otherwise it depends on caps: when needs_conformed_media is True (Meta platforms,
+    which constrain aspect ratio), prefer the Meta-conformed derivative at publish_path,
+    falling back to the original. When needs_conformed_media is False (Discord, Telegram —
+    no aspect-ratio rules at all), prefer the untouched original at storage_path, falling
+    back to publish_path only if the original is missing. The fallback is existence-aware
+    — it checks the file is actually on disk, not just that the DB column is non-empty —
+    since storage_path is always populated at upload time and would otherwise make the
+    fallback unreachable. Returns None when neither candidate exists, so validation can
+    fail loudly instead of the publish blowing up mid-request.
+
+    No byte-upload platform has a Stories surface today, so the story branch changes no
+    real publish. It exists so the DRY-RUN plan doesn't advertise the cropped derivative
+    for a story — the plan's job is to be legible — and so this can't quietly become a
+    real bug if one ever does.
     """
 
     def _candidate(rel) -> Path | None:
@@ -160,6 +169,8 @@ def _resolve_local_path(asset, caps: PlatformCaps, config) -> Path | None:
     has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
     original = _candidate(asset["storage_path"])
     conformed = _candidate(asset["publish_path"] if has_publish_path else None)
+    if surface == "story":
+        return original or conformed
     if caps.needs_conformed_media:
         return conformed or original
     return original or conformed
@@ -232,7 +243,10 @@ def _validate_media_available(assets, dry_run: bool, asset_base_url: str | None,
     if dry_run:
         return
     if caps.uploads_media_bytes:
-        missing = [a["id"] for a in assets if _resolve_local_path(a, caps, config) is None]
+        missing = [
+            a["id"] for a in assets
+            if _resolve_local_path(a, caps, config, surface) is None
+        ]
         if missing:
             raise _NonRetryable(f"asset files missing from the local store: {missing}")
     else:
@@ -274,7 +288,8 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     # expected in dry-run or when the platform doesn't use them.
     caps = PLATFORM_CAPS[channel["platform"]]
     asset_paths = [
-        _resolve_local_path(a, caps, config) if config is not None else None for a in assets
+        _resolve_local_path(a, caps, config, surface) if config is not None else None
+        for a in assets
     ]
     return {
         "platform": channel["platform"],

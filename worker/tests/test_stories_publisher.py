@@ -216,3 +216,26 @@ def test_one_time_post_retires_once_both_surfaces_have_posted(conn, make_publica
     conn.commit()
 
     assert _maybe_retire_one_time(conn, post_id, NOW) is True
+
+
+def test_story_plan_shows_the_original_on_disk_not_the_conformed_copy(conn, config,
+                                                                      fake_client,
+                                                                      make_publication):
+    """The dry-run plan's asset_paths must not advertise the feed-cropped derivative for
+    a story. No byte-upload platform has Stories today so this changes no real publish,
+    but the plan's job is to be legible about what WOULD be sent."""
+    pub = make_publication(post_type="single", n_assets=1, surface="story", now=NOW)
+    (config.asset_storage_dir / "pub").mkdir(parents=True, exist_ok=True)
+    orig = config.asset_storage_dir / "orig.jpg"
+    conformed = config.asset_storage_dir / "pub" / "orig.jpg"
+    orig.write_bytes(b"original")
+    conformed.write_bytes(b"cropped")
+    conn.execute(
+        "UPDATE assets SET storage_path='orig.jpg', publish_path='pub/orig.jpg'"
+    )
+    conn.commit()
+
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW,
+                      asset_base_url="https://assets.test")
+
+    assert out.plan["asset_paths"][0] == orig
