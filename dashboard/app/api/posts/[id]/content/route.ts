@@ -10,13 +10,44 @@ import {
   setPostPeriods,
   setPostTags,
   setPostTargets,
+  updatePostCaption,
   updatePostContentModel,
 } from "@/lib/queries";
 import type { ContentKind, ContentStatus, PeriodMode } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
 import { captionLimitError } from "@/lib/caption-limits";
+import { syncedPostCaption } from "@/lib/quick-edit-captions";
 
 export const runtime = "nodejs";
+
+/**
+ * Read a post's caption variants.
+ *
+ * Exists for the Library's quick-edit dialog, which opens one post at a time. The
+ * alternative was carrying every post's variants in the Library list query, but captions
+ * are the bulk of a post's text and per-platform variants multiply it — a few hundred KB
+ * shipped on every Library load to serve a dialog that needs one post. A read on the
+ * resource that already owns the write is the cheaper shape, and it adds no second write
+ * path, which is the thing that actually had to stay singular.
+ */
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const postId = Number(id);
+  const post = getPost(postId);
+  if (!post) {
+    return NextResponse.json({ error: "Post not found." }, { status: 404 });
+  }
+  return NextResponse.json({
+    caption_variants: getCaptionVariants(postId).map((v) => ({
+      platform: v.platform,
+      body: v.body,
+      sort_order: v.sort_order,
+    })),
+  });
+}
 
 /**
  * Save a post's content-model fields in one call: kind/status/cooldown, target
@@ -195,6 +226,14 @@ export async function PATCH(
   }
   if (captionVariants !== undefined) {
     setCaptionVariants(postId, captionVariants);
+    // Keep posts.caption — what the Library card shows, what the caption search filters
+    // on, and the publish fallback — in step with what was just saved. undefined means
+    // "leave it": a post whose variants are all platform-specific still needs that column
+    // as the fallback for any targeted platform without a variant of its own.
+    const syncedCaption = syncedPostCaption(captionVariants);
+    if (syncedCaption !== undefined) {
+      updatePostCaption(postId, syncedCaption);
+    }
   }
   if (tagIds !== undefined) {
     setPostTags(postId, tagIds);

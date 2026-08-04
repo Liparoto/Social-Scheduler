@@ -1470,6 +1470,21 @@ export function getCaptionVariants(postId: number): CaptionVariant[] {
     .all(postId) as CaptionVariant[];
 }
 
+/**
+ * Set the post's own `caption` column.
+ *
+ * That column is NOT decoration: the Library card renders it, the caption search filters
+ * on it, and `captionsForPlatform()` falls back to it for any platform with no matching
+ * variant. `setCaptionVariants()` never wrote it, so the two drifted apart on real posts —
+ * a caption saved in the editor left the card showing the old text. Callers that replace
+ * caption variants should decide what this becomes; see `syncedPostCaption()`.
+ */
+export function updatePostCaption(postId: number, caption: string | null): void {
+  getDb()
+    .prepare("UPDATE posts SET caption = @caption, updated_at = @updated_at WHERE id = @id")
+    .run({ caption, id: postId, updated_at: nowIso() });
+}
+
 /** Replace a post's caption variants atomically (delete-all then insert). */
 export function setCaptionVariants(
   postId: number,

@@ -875,11 +875,13 @@ export function LibraryView({
           post={{
             id: quickEditPost.id,
             caption: quickEditPost.caption,
+            post_type: quickEditPost.post_type,
             content_status: quickEditPost.content_status,
             content_kind: quickEditPost.content_kind,
             cooldown_days: quickEditPost.cooldown_days,
             tag_ids: quickEditPost.tag_ids,
             periods: quickEditPost.periods,
+            target_platforms: splitTags(quickEditPost.target_platforms),
           }}
           periods={periods}
           timeOfDayTags={timeOfDayTags}
