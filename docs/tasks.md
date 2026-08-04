@@ -610,8 +610,7 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       `publications.surface` (+ `asset_id` for the slide). A multi-slide post fans out to one
       Story per slide at scheduling time. Composer, library scheduler, post editor and its
       sends panel all pick Feed/Story per Instagram channel; the Library has a Story badge and
-      a Destination filter. Deferred: story metrics (below), queue grouping of story slides,
-      a 9:16 story canvas, auto-fill story recycling, Facebook Page Stories.
+      a Destination filter. Deferred: a 9:16 story canvas, auto-fill story recycling, Facebook Page Stories.
 - [x] **Story insights** — `REQUESTED_STORY_METRICS` + a 24h auto-refresh cutoff, verified
       against the live API on the first real Story (no 400, `views: 6` recorded). The
       supported names were established by probing, not guessing: `taps_forward`/`taps_back`/
