@@ -203,7 +203,7 @@ export function PostEditor({
     <div className="space-y-6">
       {openMedia ? (
         <MediaLightbox
-          asset={openMedia.asset}
+          assets={[openMedia.asset]}
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
         />

@@ -168,7 +168,7 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
 
       {openMedia ? (
         <MediaLightbox
-          asset={openMedia.asset}
+          assets={[openMedia.asset]}
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
         />

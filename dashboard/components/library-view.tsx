@@ -854,7 +854,7 @@ export function LibraryView({
 
       {openMedia ? (
         <MediaLightbox
-          asset={openMedia.asset}
+          assets={[openMedia.asset]}
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
         />
