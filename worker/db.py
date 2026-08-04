@@ -20,7 +20,11 @@ def connect(database_path: Path) -> sqlite3.Connection:
 
 def fetch_due_publications(conn: sqlite3.Connection, now_iso: str) -> list[sqlite3.Row]:
     """Publications that are ready to be worked: scheduled, past their time, and either
-    never attempted or past their retry backoff. Ordered oldest-first (fair queueing).
+    never attempted or past their retry backoff. Ordered oldest-first (fair queueing),
+    with id as an EXPLICIT tie-break: the slides of one Instagram Story all share a
+    scheduled_at and must publish in slide order. Slides are inserted in sort_order, so
+    ascending id is slide order. Without the tie-break that ordering is left to the query
+    plan — today it happens to come out right, which is luck, not a guarantee.
     """
     return conn.execute(
         """
@@ -29,7 +33,7 @@ def fetch_due_publications(conn: sqlite3.Connection, now_iso: str) -> list[sqlit
           AND scheduled_at <= ?
           AND is_held = 0
           AND (next_retry_at IS NULL OR next_retry_at <= ?)
-        ORDER BY scheduled_at ASC
+        ORDER BY scheduled_at ASC, id ASC
         """,
         (now_iso, now_iso),
     ).fetchall()
