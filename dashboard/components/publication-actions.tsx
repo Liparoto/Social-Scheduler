@@ -197,7 +197,7 @@ export function PublicationActions({
       </div>
       {isPastInTz(date, time, channelTimezone) ? (
         <span className="text-[10px] text-status-scheduled">
-          That's in the past — will send on the next worker run.
+          That&apos;s in the past — will send on the next worker run.
         </span>
       ) : null}
     </div>

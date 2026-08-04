@@ -35,11 +35,20 @@ export function ThemeControls() {
   const [mode, setMode] = useState<ThemeMode>(DEFAULT_MODE);
 
   // Sync the control to whatever the no-flash script already put on <html>.
+  //
+  // This reads the DOM, so it cannot run during render or on the server — a mount effect
+  // is the only place the attributes exist. The one extra render it costs is the price of
+  // not flashing the default theme before the real one loads, which is the whole reason
+  // the no-flash script writes those attributes in the first place.
   useEffect(() => {
     const d = document.documentElement;
     const t = d.getAttribute("data-theme");
     const m = d.getAttribute("data-mode");
+    // Suppressed per the note above: the value being synced only exists in the DOM
+    // after hydration, so no earlier hook can read it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isThemeId(t)) setTheme(t);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- as above.
     if (isMode(m)) setMode(m);
   }, []);
 

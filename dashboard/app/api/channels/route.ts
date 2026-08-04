@@ -10,10 +10,11 @@ export function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  // A parsed JSON body genuinely has no known shape; every field below is validated
+  // before use. Matches the .catch(() => ...) idiom the other routes use, and avoids an
+  // explicit `any` for a value that is only ever read through those checks.
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
   const account_name = (body.account_name || "").trim();
