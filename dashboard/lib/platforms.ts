@@ -15,6 +15,9 @@
 //
 // usesAccountId is false only for Discord: its credential is a webhook URL, which is both
 // the address and the secret, so there is no separate account id to collect.
+// supportsStory mirrors publisher._validate's story rule: Instagram is the only platform
+// with a Stories surface, so it is the only one that offers the Story chip. A Story is a
+// DESTINATION, not a post type — see docs/design-instagram-stories.md.
 // supportsVideo mirrors the worker's actual publish paths — worker/publisher.py's
 // _publish_instagram is the authority (it has a 'reel' branch; _publish_facebook,
 // _publish_threads, _publish_discord, _publish_telegram do not, and fall through to
@@ -32,6 +35,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: false,
     supportsVideo: true,
+    supportsStory: true,
     maxCarousel: 10,
     captionChars: {},
     supportsMetrics: true,
@@ -45,6 +49,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: false,
     supportsVideo: false,
+    supportsStory: false,
     maxCarousel: 10,
     captionChars: {},
     supportsMetrics: true,
@@ -58,6 +63,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: true,
     supportsVideo: false,
+    supportsStory: false,
     maxCarousel: 20,
     captionChars: { text: 500, single: 500, carousel: 500 },
     supportsMetrics: true,
@@ -72,6 +78,7 @@ export const PLATFORMS = [
     usesAccountId: false,
     supportsText: true,
     supportsVideo: false,
+    supportsStory: false,
     maxCarousel: 10,
     captionChars: { text: 2000, single: 2000, carousel: 2000 },
     // A webhook has no insights/analytics API at all — there is nothing to ever fetch.
@@ -86,6 +93,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: true,
     supportsVideo: false,
+    supportsStory: false,
     maxCarousel: 10,
     captionChars: { text: 4096, single: 1024, carousel: 1024 },
     // The Bot API exposes no metrics/insights endpoint at all.
@@ -136,6 +144,13 @@ export function supportsText(value: string): boolean {
 // (worker/publisher.py's _publish_instagram is the only adapter with a 'reel' branch).
 export function supportsVideo(value: string): boolean {
   return BY_VALUE.get(value)?.supportsVideo ?? false;
+}
+
+// Default FALSE for an unrecognised platform — the safe direction here: worst case the
+// Story chip is hidden for a platform that could take one, rather than offering a
+// destination the worker would refuse terminally.
+export function supportsStory(value: string): boolean {
+  return BY_VALUE.get(value)?.supportsStory ?? false;
 }
 
 // Default true is the safe direction for an unrecognised platform: worst case it shows a

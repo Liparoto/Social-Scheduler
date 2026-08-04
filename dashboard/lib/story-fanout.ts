@@ -13,6 +13,40 @@ export function feedTargets(channelIds: number[]): PostTarget[] {
 }
 
 /**
+ * Read a request's destinations, accepting either shape.
+ *
+ * `targets` is what the surface picker sends. `channel_ids` / `target_channel_ids` is the
+ * older shape, still used by callers that have no surface concept (bulk import, the
+ * library editor) — and correctly read as feed targets, since that is all they could ever
+ * have meant. Returns "invalid" rather than throwing, matching the other parse* helpers
+ * in the route layer.
+ */
+export function parseTargets(
+  targets: unknown,
+  channelIds: unknown,
+): PostTarget[] | "invalid" {
+  if (targets !== undefined) {
+    if (!Array.isArray(targets)) return "invalid";
+    const out: PostTarget[] = [];
+    for (const t of targets) {
+      if (!t || typeof t !== "object") return "invalid";
+      const { channel_id, surface } = t as { channel_id?: unknown; surface?: unknown };
+      if (!Number.isInteger(channel_id)) return "invalid";
+      if (surface !== "feed" && surface !== "story") return "invalid";
+      out.push({ channel_id: channel_id as number, surface });
+    }
+    return out;
+  }
+  if (channelIds !== undefined) {
+    if (!Array.isArray(channelIds) || !channelIds.every((c) => Number.isInteger(c))) {
+      return "invalid";
+    }
+    return feedTargets(channelIds as number[]);
+  }
+  return [];
+}
+
+/**
  * The asset ids of a post, in slide order.
  *
  * Ordering matters beyond tidiness: story slides are inserted in this order, which makes

@@ -8,6 +8,8 @@ import { channelColor, videoPreviewSrc } from "@/lib/format";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelAvatar } from "@/components/ui";
+import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
+import type { PostTarget } from "@/lib/types";
 
 export type LibraryPickItem = {
   id: number;
@@ -16,6 +18,8 @@ export type LibraryPickItem = {
   content_kind: string;
   content_status: string;
   post_type: string;
+  // Needed so the picker can say '4 slides → 4 Stories' BEFORE scheduling.
+  asset_count: number;
 };
 export type ChannelLite = {
   id: number;
@@ -49,7 +53,8 @@ export function ScheduleFromLibrary({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [targets, setTargets] = useState<Set<number>>(new Set());
+  // Targets, not channel ids: Instagram's Feed and Story are independent sends.
+  const [targets, setTargets] = useState<PostTarget[]>([]);
   const [date, setDate] = useState(defaultDate);
   const [time, setTime] = useState(defaultTime);
   const [postNow, setPostNow] = useState(false);
@@ -73,19 +78,12 @@ export function ScheduleFromLibrary({
   // selection carrying over) — derive the effective set instead of writing it back into
   // state, so there's nothing to keep in sync.
   const effectiveTargets = useMemo(
-    () => new Set([...targets].filter((id) => !incompatibleIds.has(id))),
+    () => targets.filter((t) => !incompatibleIds.has(t.channel_id)),
     [targets, incompatibleIds]
   );
-  const toggleTarget = (id: number) => {
-    if (incompatibleIds.has(id)) return;
-    setTargets((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
+  // Per-ACCOUNT count for the button label: one Instagram account picked for both
+  // Feed and Story is two sends but still one account.
+  const targetAccountCount = new Set(effectiveTargets.map((t) => t.channel_id)).size;
   async function schedule() {
     if (!selected) return;
     setError(null);
@@ -95,7 +93,7 @@ export function ScheduleFromLibrary({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        channel_ids: Array.from(effectiveTargets),
+        targets: effectiveTargets,
         ...(postNow ? { post_now: true } : { date, time }),
       }),
     });
@@ -111,7 +109,7 @@ export function ScheduleFromLibrary({
         ? `Posting now to ${b.created} account${b.created === 1 ? "" : "s"}.`
         : `Scheduled to ${b.created} account${b.created === 1 ? "" : "s"}.`
     );
-    setTargets(new Set());
+    setTargets([]);
     // Re-fetch server state so the dry-run / kill-switch / worker readiness banner
     // (PostNowReadinessNotice) can't go stale across repeated sends on this page —
     // same class of bug as the cached-.env readiness fix, just via a stale page.
@@ -257,63 +255,16 @@ export function ScheduleFromLibrary({
             </button>
           </div>
         </div>
-        <div className="mb-3 grid gap-2 sm:grid-cols-2">
-          {channels.map((c) => {
-            const on = effectiveTargets.has(c.id);
-            const disabled = incompatibleIds.has(c.id);
-            const color = channelColor(c.id, c.color_hue);
-            return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => toggleTarget(c.id)}
-                disabled={disabled}
-                className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                  disabled
-                    ? "cursor-not-allowed border-border opacity-50"
-                    : on
-                    ? "border-transparent"
-                    : "border-border hover:bg-surface-sunken"
-                }`}
-                style={
-                  on && !disabled
-                    ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` }
-                    : undefined
-                }
-              >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{
-                    backgroundColor: on && !disabled ? color.dot : "transparent",
-                    border: on && !disabled ? "none" : "1.5px solid var(--color-border-strong)",
-                  }}
-                  aria-hidden
-                />
-                <ChannelAvatar
-                  id={c.id}
-                  name={c.account_name}
-                  colorHue={c.color_hue}
-                  avatarPath={c.avatar_path}
-                  size={20}
-                />
-                {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
-                    chip must take its paired dark `fg` — on `text-ink` alone the name is
-                    near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
-                <span
-                  className="text-sm text-ink"
-                  style={on && !disabled ? { color: color.fg } : undefined}
-                >
-                  {c.account_name}
-                </span>
-                <span
-                  className="ml-auto text-xs text-muted"
-                  style={on && !disabled ? { color: color.fg, opacity: 0.75 } : undefined}
-                >
-                  {disabled ? `${platformLabel(c.platform)} can't post this type` : c.platform}
-                </span>
-              </button>
-            );
-          })}
+        <div className="mb-3">
+          <ChannelSurfacePicker
+            channels={channels}
+            value={effectiveTargets}
+            onChange={setTargets}
+            hasVideo={selected?.post_type === "reel"}
+            textOnly={selected?.post_type === "text"}
+            slideCount={selected?.asset_count ?? 0}
+            postNow={postNow}
+          />
         </div>
         {!postNow ? (
           <div className="flex flex-wrap items-end gap-3">
@@ -340,7 +291,7 @@ export function ScheduleFromLibrary({
         <div className="mt-4 flex justify-end">
           <button
             onClick={schedule}
-            disabled={busy || effectiveTargets.size === 0}
+            disabled={busy || effectiveTargets.length === 0}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
           >
             {busy
@@ -348,8 +299,8 @@ export function ScheduleFromLibrary({
                 ? "Sending…"
                 : "Scheduling…"
               : postNow
-              ? `Post now to ${effectiveTargets.size} account${effectiveTargets.size === 1 ? "" : "s"}`
-              : `Schedule to ${effectiveTargets.size} account${effectiveTargets.size === 1 ? "" : "s"}`}
+              ? `Post now to ${targetAccountCount} account${targetAccountCount === 1 ? "" : "s"}`
+              : `Schedule to ${targetAccountCount} account${targetAccountCount === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>

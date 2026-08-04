@@ -11,9 +11,11 @@ import type {
   PeriodMode,
   Post,
   PostPublicationRow,
+  PostTarget,
   Tag,
 } from "@/lib/types";
 import { channelColor } from "@/lib/format";
+import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
@@ -31,6 +33,11 @@ const segBtn = (active: boolean) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
     active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
+
+/** Stable comparable form of a target set — channel AND surface, order-independent. */
+function targetKeys(targets: PostTarget[]): string[] {
+  return targets.map((t) => `${t.channel_id}:${t.surface}`).sort();
+}
 
 export function PostEditor({
   post,
@@ -55,7 +62,7 @@ export function PostEditor({
   periods: Period[];
   timeOfDayTags: Tag[];
   topicTags: Tag[];
-  initialTargets: number[];
+  initialTargets: PostTarget[];
   initialTagIds: number[];
   initialPeriods: Record<number, PeriodMode>;
   initialCaptions: { platform: string; body: string }[];
@@ -85,7 +92,8 @@ export function PostEditor({
   const [cooldown, setCooldown] = useState(
     post.cooldown_days === null ? "" : String(post.cooldown_days)
   );
-  const [targets, setTargets] = useState<Set<number>>(new Set(initialTargets));
+  // Targets, not channel ids: Instagram's Feed and Story are independent destinations.
+  const [targets, setTargets] = useState<PostTarget[]>(initialTargets);
   const [tagIds, setTagIds] = useState<number[]>(initialTagIds);
   const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>(initialPeriods);
   const [captions, setCaptions] = useState(
@@ -106,18 +114,9 @@ export function PostEditor({
   // Derived, not written back into `targets` state — same reasoning as library-view.tsx's
   // effectiveChans: nothing to keep in sync if the incompatible set ever changes.
   const effectiveTargets = useMemo(
-    () => new Set([...targets].filter((id) => !incompatibleChannelIds.has(id))),
+    () => targets.filter((t) => !incompatibleChannelIds.has(t.channel_id)),
     [targets, incompatibleChannelIds]
   );
-
-  const toggleTarget = (id: number) => {
-    if (incompatibleChannelIds.has(id)) return;
-    setTargets((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
 
   // Post now publishes whatever is currently saved in the database — not whatever is
   // sitting in this component's state. If the editor has unsaved changes, "Post now"
@@ -133,8 +132,8 @@ export function PostEditor({
     );
   const isDirty =
     normalizedCaptions(captions) !== normalizedCaptions(initialCaptions) ||
-    JSON.stringify(Array.from(effectiveTargets).sort((a, b) => a - b)) !==
-      JSON.stringify([...initialTargets].sort((a, b) => a - b)) ||
+    JSON.stringify(targetKeys(effectiveTargets)) !==
+      JSON.stringify(targetKeys(initialTargets)) ||
     JSON.stringify([...tagIds].sort((a, b) => a - b)) !==
       JSON.stringify([...initialTagIds].sort((a, b) => a - b)) ||
     status !== post.content_status;
@@ -155,7 +154,7 @@ export function PostEditor({
       content_kind: kind,
       content_status: status,
       cooldown_days: cooldown.trim() === "" ? null : Number(cooldown),
-      target_channel_ids: Array.from(effectiveTargets),
+      targets: effectiveTargets,
       tag_ids: tagIds,
       period_links: Object.entries(periodModes).map(([pid, mode]) => ({
         periodId: Number(pid),
@@ -344,54 +343,14 @@ export function PostEditor({
       <section className={card}>
         <h3 className="mb-2 font-display text-sm font-semibold text-ink">Target accounts</h3>
         <p className="mb-3 text-xs text-muted">Which accounts auto-fill can post this to.</p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {channels.map((c) => {
-            const on = effectiveTargets.has(c.id);
-            const disabled = incompatibleChannelIds.has(c.id);
-            const color = channelColor(c.id, c.color_hue);
-            return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => toggleTarget(c.id)}
-                disabled={disabled}
-                title={disabled ? `${platformLabel(c.platform)} can't publish this post's type` : undefined}
-                className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                  disabled
-                    ? "cursor-not-allowed border-border opacity-40"
-                    : on
-                      ? "border-transparent"
-                      : "border-border hover:bg-surface-sunken"
-                }`}
-                style={on && !disabled ? { backgroundColor: color.bg, boxShadow: `inset 0 0 0 2px ${color.dot}` } : undefined}
-              >
-                <ChannelAvatar
-                  id={c.id}
-                  name={c.account_name}
-                  colorHue={c.color_hue}
-                  avatarPath={c.avatar_path}
-                  size={20}
-                />
-                {/* channelColor's bg is a fixed LIGHT tint in every theme, so a selected
-                    chip must take its paired dark `fg` — on `text-ink` alone the name is
-                    near-invisible in the dark themes. Same pairing as ui.tsx's ChannelChip. */}
-                <span
-                  className="text-sm text-ink"
-                  style={on && !disabled ? { color: color.fg } : undefined}
-                >
-                  {c.account_name}
-                </span>
-                <span
-                  className="ml-auto text-xs text-muted"
-                  style={on && !disabled ? { color: color.fg, opacity: 0.75 } : undefined}
-                >
-                  {c.platform}
-                  {disabled ? " — can't post this type" : ""}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <ChannelSurfacePicker
+          channels={channels}
+          value={effectiveTargets}
+          onChange={setTargets}
+          hasVideo={post.post_type === "reel"}
+          textOnly={post.post_type === "text"}
+          slideCount={assets.length}
+        />
       </section>
 
       {/* Tags */}

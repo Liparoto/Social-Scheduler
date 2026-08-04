@@ -13,11 +13,11 @@ import {
   updatePostCaption,
   updatePostContentModel,
 } from "@/lib/queries";
-import type { ContentKind, ContentStatus, PeriodMode } from "@/lib/types";
+import type { ContentKind, ContentStatus, PeriodMode, PostTarget } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
 import { captionLimitError } from "@/lib/caption-limits";
 import { syncedPostCaption } from "@/lib/quick-edit-captions";
-import { feedTargets } from "@/lib/story-fanout";
+import { parseTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -110,23 +110,24 @@ export async function PATCH(
     }
   }
 
-  let targetChannelIds: number[] | undefined;
-  if ("target_channel_ids" in body) {
-    if (!Array.isArray(body.target_channel_ids)) {
-      return NextResponse.json(
-        { error: "target_channel_ids must be an array." },
-        { status: 400 }
-      );
+  // The editor sends `targets` (channel + surface); older callers send
+  // target_channel_ids, which can only have meant feed targets.
+  let newTargets: PostTarget[] | undefined;
+  if ("targets" in body || "target_channel_ids" in body) {
+    const parsed = parseTargets(body.targets, body.target_channel_ids);
+    if (parsed === "invalid") {
+      return NextResponse.json({ error: "Invalid targets." }, { status: 400 });
     }
-    const parsed = body.target_channel_ids.map(Number);
-    const badChannelIds = parsed.filter((cid: number) => !getChannel(cid));
+    const badChannelIds = [...new Set(parsed.map((t) => t.channel_id))].filter(
+      (cid) => !getChannel(cid)
+    );
     if (badChannelIds.length > 0) {
       return NextResponse.json(
         { error: `Unknown channel(s): ${badChannelIds.join(", ")}.` },
         { status: 400 }
       );
     }
-    targetChannelIds = parsed;
+    newTargets = parsed;
   }
 
   let periodLinks: { periodId: number; mode: PeriodMode }[] | undefined;
@@ -204,9 +205,7 @@ export async function PATCH(
   // targeted channel's actual caption length fit its platform's limit for this post's
   // type? This route doesn't change post_type/assets, so post.post_type (unaffected by
   // this request) is the right postType to check against.
-  const effectiveTargets = targetChannelIds
-    ? feedTargets(targetChannelIds)
-    : getPostTargets(postId);
+  const effectiveTargets = newTargets ?? getPostTargets(postId);
   const effectiveVariants =
     captionVariants ?? getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
   const effectiveChannels = effectiveTargets
@@ -221,13 +220,8 @@ export async function PATCH(
   if (Object.keys(contentFields).length > 0) {
     updatePostContentModel(postId, contentFields);
   }
-  if (targetChannelIds !== undefined) {
-    // This request speaks in channel ids, which can only mean FEED targets — but
-    // setPostTargets replaces the whole set, so writing only those would silently delete
-    // any Story targets the post has. Carry them across. (Phase 4's picker sends real
-    // targets and makes this shim unnecessary.)
-    const existingStories = getPostTargets(postId).filter((t) => t.surface === "story");
-    setPostTargets(postId, [...feedTargets(targetChannelIds), ...existingStories]);
+  if (newTargets !== undefined) {
+    setPostTargets(postId, newTargets);
   }
   if (periodLinks !== undefined) {
     setPostPeriods(postId, periodLinks);

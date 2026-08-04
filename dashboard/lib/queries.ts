@@ -1104,6 +1104,8 @@ export interface BulkEntry {
   channel_id: number;
   scheduled_at: string; // UTC ISO
   status: "scheduled" | "pending_approval";
+  /** Defaults to 'feed' so callers with no surface concept keep working unchanged. */
+  surface?: Surface;
 }
 
 /** Thrown when a caller (route or otherwise) tries to target a channel that can't publish
@@ -1117,7 +1119,11 @@ export class IncompatiblePostTargetError extends Error {
   }
 }
 
-/** Create many publications atomically and flip their posts out of 'draft'. */
+/** Create many publications atomically and flip their posts out of 'draft'.
+ *
+ * A story entry fans out to one publication PER SLIDE here rather than at the call site,
+ * so every route that schedules through this path gets the rule for free and none of them
+ * can forget it. See lib/story-fanout.ts. */
 export function bulkCreatePublications(entries: BulkEntry[]): number {
   if (entries.length === 0) return 0;
   const db = getDb();
@@ -1134,17 +1140,24 @@ export function bulkCreatePublications(entries: BulkEntry[]): number {
   }
   const tx = db.transaction((rows: BulkEntry[]) => {
     const insert = db.prepare(
-      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, created_by)
-       VALUES (?, ?, ?, ?, 'bulk')`
+      `INSERT INTO publications
+         (post_id, channel_id, scheduled_at, status, created_by, surface, asset_id)
+       VALUES (?, ?, ?, ?, 'bulk', ?, ?)`
     );
     const undraft = db.prepare(
       "UPDATE posts SET status = 'scheduled' WHERE id = ? AND status = 'draft'"
     );
+    let created = 0;
     for (const r of rows) {
-      insert.run(r.post_id, r.channel_id, r.scheduled_at, r.status);
+      const surface = r.surface ?? "feed";
+      for (const assetId of expandTarget(db, r.post_id, surface)) {
+        insert.run(r.post_id, r.channel_id, r.scheduled_at, r.status, surface, assetId);
+        created += 1;
+      }
       undraft.run(r.post_id);
     }
-    return rows.length;
+    // The COUNT of publications, not of entries: one story entry becomes several sends.
+    return created;
   });
   return tx(entries);
 }
