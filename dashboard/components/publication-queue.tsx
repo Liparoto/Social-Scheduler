@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { PublicationRow } from "@/lib/queries";
 import type { PublicationStatus, Platform } from "@/lib/types";
 import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
+import { groupQueueRows, cancelableIds } from "@/lib/queue-groups";
+import { StoryGroupHeader } from "@/components/story-group-header";
 
 type StatusFilter = "all" | PublicationStatus;
 
@@ -101,8 +103,21 @@ export function PublicationQueue({
               </tr>
             </thead>
             <tbody>
-              {shown.map((p) => (
-                <tr key={p.id} className="border-b border-border last:border-0 align-top">
+              {groupQueueRows(shown).map((group) => (
+                <Fragment key={group.key}>
+                  {group.isStoryGroup ? (
+                    <StoryGroupHeader
+                      slideCount={group.rows.length}
+                      caption={group.rows[0].post_caption}
+                      channelName={group.rows[0].channel_name}
+                      cancelableIds={cancelableIds(group.rows)}
+                      workerOnline={workerOnline}
+                    />
+                  ) : null}
+                  {group.rows.map((p) => (
+                <tr key={p.id} className={`border-b border-border last:border-0 align-top ${
+                  group.isStoryGroup ? "bg-surface-sunken/40" : ""
+                }`}>
                   <td className="px-4 py-3">
                     <div className="flex items-start gap-3">
                       <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
@@ -267,6 +282,8 @@ export function PublicationQueue({
                     />
                   </td>
                 </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
           </table>
