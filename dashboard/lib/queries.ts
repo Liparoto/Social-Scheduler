@@ -1178,6 +1178,9 @@ export interface PublicationRow extends Publication {
   channel_avatar_path: string | null;
   asset_count: number;
   first_asset_id: number | null;
+  /** 1-based slide number for a story send, NULL for a feed send. Lets the queue say
+   *  "Story 2 of 4" instead of the post's type, which describes the SOURCE not this send. */
+  story_slide_no: number | null;
   m_reach: number | null;
   m_saves: number | null;
   m_likes: number | null;
@@ -1200,8 +1203,13 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          c.color_hue    AS channel_color_hue,
          c.avatar_path  AS channel_avatar_path,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
-         (SELECT pa.asset_id FROM post_assets pa
-            WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1) AS first_asset_id,
+         -- A story send shows ITS OWN slide, not the post's first asset — otherwise
+         -- slide 3 of a carousel would show slide 1's thumbnail.
+         COALESCE(pub.asset_id,
+           (SELECT pa.asset_id FROM post_assets pa
+              WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1)) AS first_asset_id,
+         (SELECT pa.sort_order + 1 FROM post_assets pa
+            WHERE pa.post_id = p.id AND pa.asset_id = pub.asset_id) AS story_slide_no,
          lm.reach       AS m_reach,
          lm.saves       AS m_saves,
          lm.likes       AS m_likes,

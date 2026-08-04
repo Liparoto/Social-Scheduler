@@ -135,13 +135,29 @@ export function PublicationQueue({
                       </div>
                       <div className="min-w-0">
                         <p className="line-clamp-2 max-w-xs text-ink">
+                          {p.surface === "story" ? (
+                            <span
+                              className="mr-1.5 rounded-full border border-border-strong px-1.5 py-px align-middle text-[10px] font-medium text-ink-soft"
+                              title="Publishes to the Instagram Story, not the feed"
+                            >
+                              Story
+                            </span>
+                          ) : null}
                           {p.post_caption || (
-                            <span className="text-faint italic">No caption</span>
+                            <span className="text-faint italic">
+                              {p.surface === "story" ? "Stories carry no caption" : "No caption"}
+                            </span>
                           )}
                         </p>
                         <p className="data mt-0.5 text-[11px] text-faint">
-                          {p.post_type}
-                          {p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}
+                          {/* post_type describes the SOURCE post. For a story send it would
+                              read "carousel · 4 imgs" while this row publishes exactly one
+                              slide — so say what THIS send actually does instead. */}
+                          {p.surface === "story"
+                            ? p.story_slide_no && p.asset_count > 1
+                              ? `Story · slide ${p.story_slide_no} of ${p.asset_count}`
+                              : "Story"
+                            : `${p.post_type}${p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}`}
                           {p.remote_post_id && p.remote_post_id !== "DRYRUN"
                             ? ` · ${p.remote_post_id}`
                             : ""}

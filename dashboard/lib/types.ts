@@ -160,6 +160,10 @@ export interface Publication {
   first_comment_remote_id: string | null;
   is_dry_run: number;
   is_held: number;
+  /** Which destination this send is for — 'story' rows target ONE slide via asset_id. */
+  surface: Surface;
+  /** NULL for a feed send (all assets, in order); the single slide for a story send. */
+  asset_id: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string | null;
