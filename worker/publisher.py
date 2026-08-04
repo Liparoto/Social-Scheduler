@@ -124,11 +124,16 @@ def _resolve_url(asset, asset_base_url: str | None, surface: str = "feed") -> st
     if external:
         return external
     if asset_base_url:
-        # keys() guard: legacy rows / some test fixtures may not carry publish_path.
+        # keys() guard: legacy rows / some test fixtures may not carry these columns.
         has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
         conformed = asset["publish_path"] if has_publish_path else None
+        has_story_path = "story_path" in asset.keys() and asset["story_path"]
+        canvas = asset["story_path"] if has_story_path else None
         original = asset["storage_path"]
-        rel = (original or conformed) if surface == "story" else (conformed or original)
+        if surface == "story":
+            rel = canvas or original or conformed
+        else:
+            rel = conformed or original
         if rel:
             return f"{asset_base_url.rstrip('/')}/{rel}"
     return None
@@ -167,10 +172,12 @@ def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed"
         return path if path.exists() else None
 
     has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
+    has_story_path = "story_path" in asset.keys() and asset["story_path"]
     original = _candidate(asset["storage_path"])
     conformed = _candidate(asset["publish_path"] if has_publish_path else None)
+    canvas = _candidate(asset["story_path"] if has_story_path else None)
     if surface == "story":
-        return original or conformed
+        return canvas or original or conformed
     if caps.needs_conformed_media:
         return conformed or original
     return original or conformed
