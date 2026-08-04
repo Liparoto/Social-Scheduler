@@ -610,7 +610,15 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       `publications.surface` (+ `asset_id` for the slide). A multi-slide post fans out to one
       Story per slide at scheduling time. Composer, library scheduler, post editor and its
       sends panel all pick Feed/Story per Instagram channel; the Library has a Story badge and
-      a Destination filter. Deferred: a 9:16 story canvas, auto-fill story recycling, Facebook Page Stories.
+      a Destination filter. Deferred: auto-fill story recycling, Facebook Page Stories.
+- [x] **9:16 story canvas + framing you can see and change** — verified live 2026-08-04
+      (`media_product_type: STORY`, a 1080×1920 blurred fill from a 3:4 source; confirmed
+      by eye on the phone). assets gained story_path/story_mode; a Framing dialog shows
+      both surfaces at a size where the options actually differ, states each option's cost
+      from the real dimensions, and never stops offering the controls. Deferred: manual
+      crop framing (sharp's `attention` picks the region — whether that is good enough is
+      only answerable from real use) and video story canvases (needs a transcode, not a
+      composite). NOT verified live: four Stories from one carousel back to back.
 - [x] **Story insights** — `REQUESTED_STORY_METRICS` + a 24h auto-refresh cutoff, verified
       against the live API on the first real Story (no 400, `views: 6` recorded). The
       supported names were established by probing, not guessing: `taps_forward`/`taps_back`/
