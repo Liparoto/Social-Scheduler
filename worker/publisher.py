@@ -105,30 +105,43 @@ def _load_targets(conn, pub):
     return channel, post, assets
 
 
+def _resolve_rel(asset, surface: str = "feed") -> str | None:
+    """Which stored file this SURFACE should publish, relative to the asset store.
+
+      * feed  — the Meta-conformed derivative at publish_path, else the original.
+      * story — the 9:16 canvas at story_path, else the UNTOUCHED original. story_path
+                exists only when the source was not already story-shaped (migration 0015);
+                NULL means the original is already the right shape. The conformed copy is
+                never right here: conformance targets the FEED's 4:5..1.91:1 range
+                (dashboard/lib/conform.ts) and a story is 9:16.
+
+    Split out so _resolve_url and the dry-run marker in _build_plan cannot disagree about
+    what would be sent — they did, and the dry run quietly showed the original for a story
+    that would really have published its canvas.
+    """
+    # keys() guard: legacy rows / some test fixtures may not carry these columns.
+    has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
+    conformed = asset["publish_path"] if has_publish_path else None
+    has_story_path = "story_path" in asset.keys() and asset["story_path"]
+    canvas = asset["story_path"] if has_story_path else None
+    original = asset["storage_path"]
+    if surface == "story":
+        return canvas or original or conformed
+    return conformed or original
+
+
 def _resolve_url(asset, asset_base_url: str | None, surface: str = "feed") -> str | None:
     """The public URL Meta will download from.
 
-    An explicit external public_url (the manual/paste escape hatch) always wins.
-    Otherwise the choice depends on the SURFACE:
-
-      * feed  — prefer the Meta-conformed derivative at publish_path, as before.
-      * story — prefer the UNTOUCHED original at storage_path. Conformance targets the
-                FEED's 4:5..1.91:1 range (dashboard/lib/conform.ts); a Story is 9:16,
-                outside it, so the conformed copy is a deliberately mis-shaped image for
-                this surface. Sending the original lets Instagram fit it instead.
-
-    Either way we fall back to the other candidate, then to None — which means the asset
+    An explicit external public_url (the manual/paste escape hatch) always wins; otherwise
+    the surface decides which stored file to serve (see _resolve_rel). None means the asset
     can't currently be served publicly.
     """
     external = asset["public_url"]
     if external:
         return external
     if asset_base_url:
-        # keys() guard: legacy rows / some test fixtures may not carry publish_path.
-        has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
-        conformed = asset["publish_path"] if has_publish_path else None
-        original = asset["storage_path"]
-        rel = (original or conformed) if surface == "story" else (conformed or original)
+        rel = _resolve_rel(asset, surface)
         if rel:
             return f"{asset_base_url.rstrip('/')}/{rel}"
     return None
@@ -167,10 +180,12 @@ def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed"
         return path if path.exists() else None
 
     has_publish_path = "publish_path" in asset.keys() and asset["publish_path"]
+    has_story_path = "story_path" in asset.keys() and asset["story_path"]
     original = _candidate(asset["storage_path"])
     conformed = _candidate(asset["publish_path"] if has_publish_path else None)
+    canvas = _candidate(asset["story_path"] if has_story_path else None)
     if surface == "story":
-        return original or conformed
+        return canvas or original or conformed
     if caps.needs_conformed_media:
         return conformed or original
     return original or conformed
@@ -281,7 +296,10 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
     # For real publishes every asset resolves (validated above). In dry-run there is no
     # tunnel, so show a readable local marker instead of a live URL.
     asset_urls = [
-        _resolve_url(a, asset_base_url, surface) or f"(local:{a['storage_path']})"
+        # The marker names the file a REAL publish would send, not just the original —
+        # a dry run that shows the wrong file is worse than no dry run.
+        _resolve_url(a, asset_base_url, surface)
+        or f"(local:{_resolve_rel(a, surface) or a['storage_path']})"
         for a in assets
     ]
     # Local on-disk paths, for byte-upload platforms (Discord/Telegram). None entries are

@@ -239,3 +239,92 @@ def test_story_plan_shows_the_original_on_disk_not_the_conformed_copy(conn, conf
                       asset_base_url="https://assets.test")
 
     assert out.plan["asset_paths"][0] == orig
+
+
+# ---- The 9:16 story canvas (migration 0015) ---------------------------------------
+def test_story_prefers_the_story_canvas_over_the_original(conn, config, fake_client,
+                                                          make_publication):
+    """A landscape source gets a deliberate 9:16 frame instead of whatever Instagram
+    would otherwise do with it."""
+    pub = make_publication(post_type="single", n_assets=1, surface="story",
+                           public_url=None, now=NOW)
+    conn.execute(
+        "UPDATE assets SET storage_path='orig.jpg', publish_path='pub/orig.jpg', "
+        "story_path='story/orig-blurred.jpg'"
+    )
+    conn.commit()
+
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW,
+                      asset_base_url="https://assets.test")
+
+    assert "story/orig-blurred.jpg" in out.plan["asset_urls"][0]
+
+
+def test_story_falls_back_to_the_original_when_there_is_no_canvas(conn, config,
+                                                                  fake_client,
+                                                                  make_publication):
+    """NULL story_path means the source is already 9:16 — publish it untouched. This is
+    what the first real Story shipped with and must not regress."""
+    pub = make_publication(post_type="single", n_assets=1, surface="story",
+                           public_url=None, now=NOW)
+    conn.execute(
+        "UPDATE assets SET storage_path='orig.jpg', publish_path='pub/orig.jpg', "
+        "story_path=NULL"
+    )
+    conn.commit()
+
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW,
+                      asset_base_url="https://assets.test")
+
+    assert "orig.jpg" in out.plan["asset_urls"][0]
+    assert "pub/" not in out.plan["asset_urls"][0], "the feed crop is the wrong shape"
+
+
+def test_a_feed_send_never_uses_the_story_canvas(conn, config, fake_client,
+                                                 make_publication):
+    """The two surfaces are independent — a canvas must not leak into the feed."""
+    pub = make_publication(post_type="single", n_assets=1, public_url=None, now=NOW)
+    conn.execute(
+        "UPDATE assets SET storage_path='orig.jpg', publish_path='pub/orig.jpg', "
+        "story_path='story/orig-blurred.jpg'"
+    )
+    conn.commit()
+
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW,
+                      asset_base_url="https://assets.test")
+
+    assert "pub/orig.jpg" in out.plan["asset_urls"][0]
+    assert "story/" not in out.plan["asset_urls"][0]
+
+
+def test_an_explicit_public_url_still_wins_over_the_canvas(conn, config, fake_client,
+                                                           make_publication):
+    """The paste-a-URL escape hatch stays the highest-precedence answer on every surface."""
+    pub = make_publication(post_type="single", n_assets=1, surface="story", now=NOW)
+    conn.execute("UPDATE assets SET story_path='story/orig-blurred.jpg'")
+    conn.commit()
+
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW,
+                      asset_base_url="https://assets.test")
+
+    assert "assets.test/a.jpg" in out.plan["asset_urls"][0]
+
+
+def test_the_dry_run_marker_names_the_canvas_it_would_actually_send(conn, config,
+                                                                    fake_client,
+                                                                    make_publication):
+    """A dry run that shows the wrong file is worse than no dry run: it invites the
+    operator to sign off on something other than what would be published."""
+    pub = make_publication(post_type="single", n_assets=1, surface="story",
+                           public_url=None, now=NOW)
+    conn.execute(
+        "UPDATE assets SET storage_path='orig.jpg', publish_path='pub/orig.jpg', "
+        "story_path='story/orig-blurred.jpg'"
+    )
+    conn.commit()
+
+    # No asset_base_url: exactly the dry-run case, where there is no tunnel and the plan
+    # falls back to a local marker.
+    out = publish_one(conn, pub, config, fake_client, dry_run=True, now=NOW)
+
+    assert "story/orig-blurred.jpg" in out.plan["asset_urls"][0]

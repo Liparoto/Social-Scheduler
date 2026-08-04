@@ -103,6 +103,12 @@ export interface Asset {
   publish_path: string | null;
   conform_mode: "none" | "crop" | "pad" | "downscale";
   needs_review: number;
+  // The 9:16 STORY derivative — a second, differently-shaped copy. NULL means the source is
+  // already story-shaped and the untouched original is published (migration 0015).
+  story_path: string | null;
+  // Deliberately not ConformMode: 'pad' is feed-only, since white bars are a mistake on a
+  // full-bleed surface. See migrations/0015_story_framing.sql.
+  story_mode: "blurred" | "crop";
   duration_ms: number | null;
   cover_frame_ms: number | null;
   has_audio: number;

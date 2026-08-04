@@ -367,6 +367,41 @@ export function upsertAssetByHash(input: InsertAssetInput): { asset: Asset; dedu
 }
 
 /** Dynamic SET, same pattern as updateChannel. Assets have no updated_at column. */
+/**
+ * Persist a story framing choice. Both fields always move together — a mode without its
+ * rendered path (or vice versa) would leave the asset describing a derivative that isn't
+ * there. Always re-runnable: framing is never one-way.
+ */
+export function updateAssetStoryFraming(
+  id: number,
+  fields: { story_path: string | null; story_mode: "blurred" | "crop" }
+): void {
+  getDb()
+    .prepare("UPDATE assets SET story_path = @story_path, story_mode = @story_mode WHERE id = @id")
+    .run({ ...fields, id });
+}
+
+/**
+ * Scheduled-but-unsent publications whose framing this asset governs. Posted sends are
+ * excluded deliberately: changing framing cannot alter what is already on Instagram, and
+ * saying otherwise would be a lie the dialog then tells the owner.
+ */
+export function countScheduledSendsForAsset(assetId: number): number {
+  return (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM publications pub
+           WHERE pub.status IN ('scheduled', 'pending_approval')
+             AND (pub.asset_id = @assetId
+                  OR (pub.asset_id IS NULL
+                      AND EXISTS (SELECT 1 FROM post_assets pa
+                                   WHERE pa.post_id = pub.post_id
+                                     AND pa.asset_id = @assetId)))`
+      )
+      .get({ assetId }) as { n: number }
+  ).n;
+}
+
 export function updateAssetConform(
   id: number,
   fields: Partial<{

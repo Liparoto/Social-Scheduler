@@ -21,7 +21,7 @@ export function SlideReorder({
   slides: Slide[];
   onReorder: (next: Slide[]) => void;
   onRemove?: (assetId: number) => void;
-  // Callers (the composer, for its per-image ConformControl) can hang extra UI off
+  // Callers (the composer, for its per-image FramingButton) can hang extra UI off
   // each slide without this component needing to know what that UI is or import
   // anything video/conform-specific — keeps this reusable for the merge modal,
   // which only ever deals in already-conformed images.

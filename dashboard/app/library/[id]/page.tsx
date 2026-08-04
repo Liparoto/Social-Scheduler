@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   getPost,
   getPostAssets,
+  countScheduledSendsForAsset,
   getPostTargets,
   getPostTags,
   getPostPeriods,
@@ -29,6 +30,10 @@ export default async function EditPostPage({
   const post = getPost(postId);
   if (!post) notFound();
 
+  // Read once: PostEditor needs the list, and the framing dialog needs a per-asset count of
+  // the sends its framing would change.
+  const assets = getPostAssets(postId);
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <Link href="/library" className="inline-block text-sm text-brand underline underline-offset-2">
@@ -36,7 +41,10 @@ export default async function EditPostPage({
       </Link>
       <PostEditor
         post={post}
-        assets={getPostAssets(postId)}
+        assets={assets}
+        scheduledSendCounts={Object.fromEntries(
+          assets.map((a) => [a.id, countScheduledSendsForAsset(a.id)])
+        )}
         channels={getChannels()}
         sends={getPostPublications(postId)}
         sendableChannels={getActiveChannels()}

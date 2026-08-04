@@ -417,6 +417,50 @@ existing Reels warnings so the owner is told plainly what happened — see
 - When building the Facebook, video, or Stories adapters, re-run the same live-docs
   verification we did for IG image/carousel — don't extrapolate from this doc alone.
 
+## Verified: the 9:16 story canvas (2026-08-04)
+
+A non-9:16 photo now gets a deliberate Story frame instead of whatever Instagram decides.
+
+- **Media id** `18082754669308514` · **permalink**
+  https://www.instagram.com/stories/liparoto/3956589157728578564
+- **`media_product_type: STORY`**, read back from the API. Source 3024×4032 (3:4 portrait);
+  what published was the **1080×1920 blurred-fill canvas**, not the original and not the feed
+  derivative. **Confirmed by eye on the phone** — blurred fill reads as deliberate, which is
+  the only test that could settle it.
+- **~12 seconds** from tunnel-up to published.
+
+### The two treatments
+
+`blurred` (default) fits the whole photo over an enlarged, blurred, darkened copy of itself —
+nothing is lost. `crop` covers the frame using sharp's `attention` region. For a 3:4 source
+that costs 25% of the frame; for 4:3 landscape, 58%. The dialog states the number before you
+choose, computed from the real dimensions.
+
+**A source within 2% of 9:16 gets NO canvas** — `story_path` stays NULL and the untouched
+original publishes, exactly as the first real Story did. Photos shot vertically for Stories
+therefore take a zero-processing path.
+
+### Traps this exposed
+
+1. **sharp cannot be imported by a client component.** The framing dialog needed
+   `needsStoryCanvas`, importing it from the sharp module dragged sharp into the browser
+   bundle, and the page failed to compile. **Every test still passed** — they run in Node.
+   Hence `lib/story-geometry.ts` (pure maths, client-safe) split from `lib/story-canvas.ts`
+   (sharp, server only). Anything a client component needs belongs in the former.
+2. **The dry-run marker lied.** It hardcoded `storage_path`, so a story dry run showed the
+   ORIGINAL while `asset_paths` showed the canvas — the publish logic was right, the display
+   was not. A dry run that names the wrong file is worse than none, since it invites signing
+   off on something else. `_resolve_rel()` now owns the surface→file decision and both the
+   URL and the marker read it.
+3. **The test harness wrote into the real asset store.** `makeTestDb()` isolated
+   `DATABASE_PATH` but not `ASSET_STORAGE_DIR`, harmless until a test wrote a FILE — then
+   fixture JPEGs landed among real uploads. Isolated at the harness level.
+
+### Not verified live
+
+Four Stories from one carousel, back to back. The fan-out is unit-tested and the dry run
+showed all four plans correct, but only ONE slide was published for real.
+
 ## Verified: first real Story published (2026-08-04)
 
 Stories were proven end to end against the live Instagram API — and, more usefully, so was

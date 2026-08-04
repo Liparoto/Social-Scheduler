@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "@/lib/config";
 import { getAsset } from "@/lib/queries";
+import { needsStoryCanvas, renderStoryCanvas, type StoryMode } from "@/lib/story-canvas";
 
 export const runtime = "nodejs";
 
@@ -15,32 +16,14 @@ const MIME_BY_EXT: Record<string, string> = {
   mov: "video/quicktime",
 };
 
-/** Serve a stored asset (or its thumbnail) for in-dashboard preview only. */
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params;
-  const asset = getAsset(Number(id));
-  if (!asset) {
-    return NextResponse.json({ error: "Not found." }, { status: 404 });
-  }
-  const variant = req.nextUrl.searchParams.get("variant");
-  // Video defaults to the DERIVATIVE, not the original. An iPhone original is routinely
-  // HEVC, which Chrome cannot decode (canPlayType('video/mp4; codecs="hvc1"') === "") —
-  // the <video> element loads metadata, sizes itself correctly, and then paints nothing.
-  // That silently broke every preview AND the cover-frame scrubber, so a cover could only
-  // be chosen blind. The derivative is H.264 by construction (see lib/video-convert.ts),
-  // and is also the smaller file. Falls back to the original when no derivative exists.
-  const rel =
-    asset.media_kind === "video"
-      ? (asset.publish_path ?? asset.storage_path)
-      : variant === "thumb" && asset.thumbnail_path
-        ? asset.thumbnail_path
-        : variant === "publish"
-          ? (asset.publish_path ?? asset.storage_path)
-          : asset.storage_path;
-
+/**
+ * Serve one stored file, with Range support.
+ *
+ * EVERY variant goes through here rather than each branch doing its own read: Range
+ * handling (206) is what makes a <video> seekable at all, and duplicating it per variant is
+ * how one branch quietly loses it. See the Range comment below for what breaks without it.
+ */
+async function serveFile(rel: string, req: NextRequest): Promise<NextResponse> {
   const base = path.resolve(config.assetStorageDir);
   const abs = path.resolve(base, rel);
   if (!abs.startsWith(base + path.sep)) {
@@ -106,4 +89,71 @@ export async function GET(
   } catch {
     return NextResponse.json({ error: "File missing on disk." }, { status: 404 });
   }
+}
+
+/** Serve a stored asset (or its thumbnail) for in-dashboard preview only. */
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const asset = getAsset(Number(id));
+  if (!asset) {
+    return NextResponse.json({ error: "Not found." }, { status: 404 });
+  }
+  const variant = req.nextUrl.searchParams.get("variant");
+
+  // A story canvas may not exist on disk yet. The framing dialog has to show BOTH options
+  // before either is chosen, and generating a canvas for every upload would burn CPU and
+  // disk on the many images that are never storied — so render on demand, then cache.
+  if (variant === "story" && asset.media_kind === "image") {
+    const requested = req.nextUrl.searchParams.get("mode");
+    const mode: StoryMode =
+      requested === "crop" || requested === "blurred" ? requested : asset.story_mode;
+
+    // Already story-shaped: there is no canvas and the original IS the right answer —
+    // the same rule the publish path applies (docs/design-story-canvas-and-framing.md §2).
+    if (!needsStoryCanvas(asset.width ?? 0, asset.height ?? 0)) {
+      return serveFile(asset.storage_path, req);
+    }
+
+    // Same naming as the story-framing route, so a preview and a committed choice share
+    // one cached render rather than each keeping their own.
+    const rel = `story/${asset.content_hash}-${mode}.jpg`;
+    const abs = path.join(config.assetStorageDir, rel);
+    try {
+      await fs.access(abs);
+    } catch {
+      try {
+        const original = await fs.readFile(
+          path.join(config.assetStorageDir, asset.storage_path)
+        );
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        await fs.writeFile(abs, await renderStoryCanvas(original, mode));
+      } catch {
+        return NextResponse.json(
+          { error: "Could not render a story canvas for this image." },
+          { status: 404 }
+        );
+      }
+    }
+    return serveFile(rel, req);
+  }
+
+  // Video defaults to the DERIVATIVE, not the original. An iPhone original is routinely
+  // HEVC, which Chrome cannot decode (canPlayType('video/mp4; codecs="hvc1"') === "") —
+  // the <video> element loads metadata, sizes itself correctly, and then paints nothing.
+  // That silently broke every preview AND the cover-frame scrubber, so a cover could only
+  // be chosen blind. The derivative is H.264 by construction (see lib/video-convert.ts),
+  // and is also the smaller file. Falls back to the original when no derivative exists.
+  const rel =
+    asset.media_kind === "video"
+      ? (asset.publish_path ?? asset.storage_path)
+      : variant === "thumb" && asset.thumbnail_path
+        ? asset.thumbnail_path
+        : variant === "publish"
+          ? (asset.publish_path ?? asset.storage_path)
+          : asset.storage_path;
+
+  return serveFile(rel, req);
 }
