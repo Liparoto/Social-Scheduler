@@ -39,7 +39,13 @@ export function UpdateBanner() {
   }, []);
 
   // Check once when the app loads (uses the server-side cache, so it's cheap).
+  //
+  // check() flips `checking` synchronously before awaiting, which costs one extra render
+  // on mount. Restructuring to avoid it would mean duplicating the fetch/error handling
+  // that the manual "Check again" button shares — a worse trade for a banner that renders
+  // nothing until the request returns.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above.
     check(false);
   }, [check]);
 

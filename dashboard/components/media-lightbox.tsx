@@ -248,7 +248,13 @@ export function MediaLightbox({
   // Whether the viewer has pressed play yet, so the rewind-to-start below happens once.
   const hasPlayed = useRef(false);
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  // Written in an effect, not during render: a render-phase ref write is unsafe under
+  // concurrent rendering, where a render can be started and thrown away. Runs after every
+  // render (no dependency array), so the handler stays as current as the old assignment
+  // made it — which is the whole point of the ref.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
   const [index, setIndex] = useState(() => stepIndex(initialIndex, 0, assets.length));
   const [mediaError, setMediaError] = useState(false);
 

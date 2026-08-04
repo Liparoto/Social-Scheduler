@@ -10,10 +10,11 @@ export function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  // A parsed JSON body genuinely has no known shape; every field below is validated
+  // before use. Matches the .catch(() => ...) idiom the other routes use, and avoids an
+  // explicit `any` for a value that is only ever read through those checks.
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
   const name = (body.name || "").trim();
@@ -34,8 +35,14 @@ export async function POST(req: NextRequest) {
   try {
     const id = createChannelGroup({ name, timezone });
     return NextResponse.json({ id }, { status: 201 });
-  } catch (err: any) {
-    if (String(err?.code || "").includes("SQLITE_CONSTRAINT")) {
+  } catch (err) {
+    // better-sqlite3 hangs the SQLite error name off `code`. The catch binding is
+    // `unknown`, so narrow to it rather than asserting the whole error's shape.
+    const code =
+      typeof err === "object" && err !== null && "code" in err
+        ? String((err as { code: unknown }).code ?? "")
+        : "";
+    if (code.includes("SQLITE_CONSTRAINT")) {
       return NextResponse.json(
         { error: `A group named "${name}" already exists.` },
         { status: 400 }

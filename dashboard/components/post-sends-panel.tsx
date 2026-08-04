@@ -297,7 +297,7 @@ export function PostSendsPanel({
     <section className="rounded-card border border-border bg-surface p-5">
       <h3 className="mb-1 font-display text-sm font-semibold text-ink">Scheduled sends</h3>
       <p className="mb-3 text-xs text-muted">
-        Retarget, hold, or remove this post's sends. Posted sends are permanent records and read-only.
+        Retarget, hold, or remove this post&apos;s sends. Posted sends are permanent records and read-only.
       </p>
 
       {sends.length === 0 ? (

@@ -29,7 +29,18 @@ export default function ComposePage() {
     // Drives the picker's '4 slides → 4 Stories' note before scheduling.
     asset_count: p.asset_count,
   }));
-  const defaultDate = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10); // tomorrow (UTC)
+  // "Tomorrow" in the INSTALL's timezone, not UTC. toISOString() is UTC, so from ~5pm
+  // Pacific onwards this returned the day AFTER tomorrow and the composer opened on the
+  // wrong default date every evening. en-CA formats as YYYY-MM-DD, which is what a
+  // <input type="date"> expects.
+  //
+  // The purity rule below is suppressed deliberately: a scheduling default is genuinely
+  // "now"-dependent, and this page is per-request and uncached, so reading the clock
+  // during render is the intended behaviour rather than an accident.
+  // eslint-disable-next-line react-hooks/purity
+  const defaultDate = new Date(Date.now() + 86_400_000).toLocaleDateString("en-CA", {
+    timeZone: config.defaultTimezone,
+  });
   const defaultTime = "09:00";
 
   return (
