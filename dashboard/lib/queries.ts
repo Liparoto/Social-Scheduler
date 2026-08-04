@@ -1007,6 +1007,9 @@ export interface PostLibraryRow extends Post {
   posted_count: number;
   last_posted_at: string | null;
   target_count: number;
+  // How many of those targets are Instagram Stories. >0 means this post is designated
+  // for Stories — a DESTINATION, which is why it can't be read off post_type.
+  story_target_count: number;
   periods: PostLibraryPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
@@ -1054,6 +1057,8 @@ export function listPosts(limit = 200): PostLibraryRow[] {
          (SELECT MAX(pub.published_at) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status = 'posted') AS last_posted_at,
          (SELECT COUNT(*) FROM post_targets pt WHERE pt.post_id = p.id) AS target_count,
+         (SELECT COUNT(*) FROM post_targets pt WHERE pt.post_id = p.id
+            AND pt.surface = 'story') AS story_target_count,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
             WHERE pt.post_id = p.id AND t.kind = 'time_of_day') AS time_of_day_tags,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
