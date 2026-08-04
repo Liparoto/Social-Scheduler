@@ -3,6 +3,7 @@ import { createDraftPostsBulk, getAsset, getChannel, getPeriod, listTags } from 
 import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 import { captionLimitError } from "@/lib/caption-limits";
+import { feedTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
   }
 
   const ids = createDraftPostsBulk(items, {
-    target_channel_ids: targetChannelIds,
+    targets: targetChannelIds ? feedTargets(targetChannelIds) : undefined,
     content_kind: contentKind,
     content_status: contentStatus,
     tag_ids: tagIds ?? undefined,

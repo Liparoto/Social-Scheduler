@@ -17,6 +17,7 @@ import type { ContentKind, ContentStatus, PeriodMode } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
 import { captionLimitError } from "@/lib/caption-limits";
 import { syncedPostCaption } from "@/lib/quick-edit-captions";
+import { feedTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -203,11 +204,13 @@ export async function PATCH(
   // targeted channel's actual caption length fit its platform's limit for this post's
   // type? This route doesn't change post_type/assets, so post.post_type (unaffected by
   // this request) is the right postType to check against.
-  const effectiveTargetIds = targetChannelIds ?? getPostTargets(postId);
+  const effectiveTargets = targetChannelIds
+    ? feedTargets(targetChannelIds)
+    : getPostTargets(postId);
   const effectiveVariants =
     captionVariants ?? getCaptionVariants(postId).map((v) => ({ platform: v.platform, body: v.body }));
-  const effectiveChannels = effectiveTargetIds
-    .map((cid) => getChannel(cid))
+  const effectiveChannels = effectiveTargets
+    .map((t) => getChannel(t.channel_id))
     .filter((c): c is NonNullable<typeof c> => !!c); // already rejected above if it came from this request
   const captionError = captionLimitError(effectiveChannels, effectiveVariants, post.caption, post.post_type);
   if (captionError) {
@@ -219,7 +222,12 @@ export async function PATCH(
     updatePostContentModel(postId, contentFields);
   }
   if (targetChannelIds !== undefined) {
-    setPostTargets(postId, targetChannelIds);
+    // This request speaks in channel ids, which can only mean FEED targets — but
+    // setPostTargets replaces the whole set, so writing only those would silently delete
+    // any Story targets the post has. Carry them across. (Phase 4's picker sends real
+    // targets and makes this shim unnecessary.)
+    const existingStories = getPostTargets(postId).filter((t) => t.surface === "story");
+    setPostTargets(postId, [...feedTargets(targetChannelIds), ...existingStories]);
   }
   if (periodLinks !== undefined) {
     setPostPeriods(postId, periodLinks);

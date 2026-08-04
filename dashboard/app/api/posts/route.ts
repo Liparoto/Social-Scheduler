@@ -5,6 +5,7 @@ import type { ContentKind, PostType } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 import { incompatiblePostError } from "@/lib/platforms";
 import { captionLimitError } from "@/lib/caption-limits";
+import { feedTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -137,12 +138,11 @@ export async function POST(req: NextRequest) {
     first_comment: (body.first_comment || "").trim(),
     post_type: postType,
     asset_ids: assetIds,
-    channel_ids: channelIds,
+    targets: feedTargets(channelIds),
     scheduled_at: scheduledUtc,
     created_by: body.created_by,
     content_kind: contentKind,
     content_status: "ready",
-    target_channel_ids: channelIds,
     skip_approval: postNow,
     caption_variants: captionVariants ?? undefined,
     period_links: periodLinks ?? undefined,

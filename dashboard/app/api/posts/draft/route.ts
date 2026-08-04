@@ -4,6 +4,7 @@ import type { ContentKind, ContentStatus } from "@/lib/types";
 import { parseCaptionVariants, parsePeriodLinks, parseTagIds } from "@/lib/content-model-validation";
 import { PLATFORMS, incompatiblePostError } from "@/lib/platforms";
 import { captionLimitError } from "@/lib/caption-limits";
+import { feedTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
 
@@ -144,7 +145,7 @@ export async function POST(req: NextRequest) {
     created_by: body.created_by,
     content_kind: contentKind,
     content_status: contentStatus,
-    target_channel_ids: targetChannelIds,
+    targets: targetChannelIds ? feedTargets(targetChannelIds) : undefined,
     caption_variants: captionVariants ?? undefined,
     period_links: periodLinks ?? undefined,
     tag_ids: tagIds ?? undefined,

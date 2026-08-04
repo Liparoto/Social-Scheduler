@@ -43,7 +43,12 @@ export default async function EditPostPage({
         periods={listPeriods()}
         timeOfDayTags={listTags("time_of_day")}
         topicTags={listTags("topic")}
-        initialTargets={getPostTargets(postId)}
+        // The editor's picker still speaks in channel ids; Phase 4 replaces it with
+        // the surface picker. Story targets are preserved on save by the content
+        // route, not by this list, so narrowing to feed here cannot lose them.
+        initialTargets={getPostTargets(postId)
+          .filter((t) => t.surface === "feed")
+          .map((t) => t.channel_id)}
         initialTagIds={getPostTags(postId).map((t) => t.id)}
         initialPeriods={Object.fromEntries(
           getPostPeriods(postId).map((l) => [l.period_id, l.mode])
