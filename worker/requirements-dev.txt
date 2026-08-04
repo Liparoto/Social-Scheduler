@@ -1,6 +1,0 @@
-# Dev/test dependencies (not needed to run the worker).
-#   pip install -r worker/requirements-dev.txt
--r requirements.txt
-
-# Test runner. Clear value: readable tests + fixtures for the publish state machine.
-pytest==8.3.3
