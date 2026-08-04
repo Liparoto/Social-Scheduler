@@ -29,6 +29,10 @@ export default function LibraryPage() {
     last_posted_at: p.last_posted_at,
     content_kind: p.content_kind,
     content_status: p.content_status,
+    // cooldown_days and tag_ids aren't shown on the card — they're what quick edit opens
+    // with, so the dialog needs no fetch of its own. Same trick as asset_ids above.
+    cooldown_days: p.cooldown_days,
+    tag_ids: p.tag_ids_csv ? p.tag_ids_csv.split(",").map(Number) : [],
     target_count: p.target_count,
     periods: p.periods,
     time_of_day_tags: p.time_of_day_tags,

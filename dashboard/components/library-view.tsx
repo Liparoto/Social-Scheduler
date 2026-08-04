@@ -41,6 +41,8 @@ interface PostLite {
   last_posted_at: string | null;
   content_kind: "one_time" | "evergreen";
   content_status: "draft" | "ready" | "retired";
+  cooldown_days: number | null;
+  tag_ids: number[];
   target_count: number;
   periods: LibrarySeasonPeriod[];
   time_of_day_tags: string | null;

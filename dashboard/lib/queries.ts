@@ -952,6 +952,10 @@ export interface PostLibraryRow extends Post {
   periods: PostLibraryPeriod[];
   time_of_day_tags: string | null;
   topic_tags: string | null;
+  // The same tags again, as ids rather than names — the name lists above are for display,
+  // but quick edit has to seed <TagEditor>, which works in tag ids. Names can't be mapped
+  // back safely (nothing stops a time_of_day and a topic tag sharing a name).
+  tag_ids_csv: string | null;
   target_platforms: string | null;
   // Distinct from scheduled_count (which also counts 'publishing'): specifically the
   // statuses that mergePostsIntoCarousel's cascade DELETE would silently wipe out for a
@@ -996,6 +1000,8 @@ export function listPosts(limit = 200): PostLibraryRow[] {
             WHERE pt.post_id = p.id AND t.kind = 'time_of_day') AS time_of_day_tags,
          (SELECT GROUP_CONCAT(t.name) FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
             WHERE pt.post_id = p.id AND t.kind = 'topic') AS topic_tags,
+         (SELECT GROUP_CONCAT(pt.tag_id) FROM post_tags pt
+            WHERE pt.post_id = p.id) AS tag_ids_csv,
          (SELECT GROUP_CONCAT(DISTINCT c.platform) FROM post_targets pt2
             JOIN channels c ON c.id = pt2.channel_id WHERE pt2.post_id = p.id) AS target_platforms,
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
