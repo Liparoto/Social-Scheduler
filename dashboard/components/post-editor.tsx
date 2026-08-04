@@ -16,6 +16,7 @@ import type {
 import { channelColor } from "@/lib/format";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
+import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
@@ -62,6 +63,15 @@ export function PostEditor({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Slide order is only editable for a carousel: a single or a Reel has one slide, and
+  // there is nothing to order. Hooks can't be conditional, so this always runs and the
+  // carousel check happens at render.
+  const slideOrder = useAssetOrder(post.id, assets);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const isCarousel = post.post_type === "carousel" && assets.length > 1;
+  const queuedSendCount = sends.filter(
+    (s) => s.status === "scheduled" || s.status === "pending_approval"
+  ).length;
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -165,6 +175,16 @@ export function PostEditor({
     startTransition(() => router.refresh());
   }
 
+  async function saveSlideOrder() {
+    if (savingOrder) return;
+    setSavingOrder(true);
+    const ok = await slideOrder.save();
+    setSavingOrder(false);
+    // Re-fetch so the strip, the send panel, and anything else reading assets agree with
+    // what was just written — the same refresh the caption save already does.
+    if (ok) startTransition(() => router.refresh());
+  }
+
   async function deletePost() {
     setDeleteError(null);
     setDeleting(true);
@@ -191,60 +211,92 @@ export function PostEditor({
       {/* Read-only context strip */}
       <section className={card}>
         <div className="flex items-start gap-4">
-          <div className="flex gap-2">
-            {assets.length ? (
-              assets.slice(0, 4).map((a) =>
-                a.media_kind === "video" ? (
-                  <div key={a.id} className="w-40">
-                    {/* MediaBadge positions itself bottom-right of its nearest positioned
-                        ancestor, so the slot goes around the picker's VIDEO — not around
-                        the whole picker, whose scrubber and Save control sit underneath. */}
-                    <CoverFramePicker
-                      asset={a}
-                      overlay={
+          {isCarousel ? (
+            <div className="space-y-2">
+              <CarouselReorder
+                assets={assets}
+                order={slideOrder.order}
+                onOrderChange={slideOrder.setOrder}
+                queuedSendCount={queuedSendCount}
+              />
+              {slideOrder.error ? (
+                <p className="text-xs text-status-failed">{slideOrder.error}</p>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={saveSlideOrder}
+                  disabled={!slideOrder.isDirty || savingOrder}
+                  className="rounded-md border border-border px-2.5 py-1 text-xs text-ink transition-colors hover:bg-surface-sunken disabled:opacity-40"
+                >
+                  {savingOrder ? "Saving…" : "Save order"}
+                </button>
+                <button
+                  type="button"
+                  onClick={slideOrder.reset}
+                  disabled={!slideOrder.isDirty || savingOrder}
+                  className="rounded-md px-2 py-1 text-xs text-muted transition-colors hover:text-ink disabled:opacity-40"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              {assets.length ? (
+                assets.slice(0, 4).map((a) =>
+                  a.media_kind === "video" ? (
+                    <div key={a.id} className="w-40">
+                      {/* MediaBadge positions itself bottom-right of its nearest positioned
+                          ancestor, so the slot goes around the picker's VIDEO — not around
+                          the whole picker, whose scrubber and Save control sit underneath. */}
+                      <CoverFramePicker
+                        asset={a}
+                        overlay={
+                          <MediaBadge
+                            mediaKind="video"
+                            label={post.caption ?? undefined}
+                            onOpen={() =>
+                              setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
+                            }
+                          />
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <div key={a.id}>
+                      <div className="relative h-16 w-16">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/media/${a.id}?variant=thumb`}
+                          alt=""
+                          className="h-16 w-16 rounded-lg object-cover"
+                        />
                         <MediaBadge
-                          mediaKind="video"
+                          mediaKind="image"
                           label={post.caption ?? undefined}
                           onOpen={() =>
                             setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
                           }
                         />
-                      }
-                    />
-                  </div>
-                ) : (
-                  <div key={a.id}>
-                    <div className="relative h-16 w-16">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={`/api/media/${a.id}?variant=thumb`}
-                        alt=""
-                        className="h-16 w-16 rounded-lg object-cover"
-                      />
-                      <MediaBadge
-                        mediaKind="image"
-                        label={post.caption ?? undefined}
-                        onOpen={() =>
-                          setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
-                        }
-                      />
+                      </div>
+                      {a.needs_review ? (
+                        <ConformControl
+                          assetId={a.id}
+                          conformMode={a.conform_mode}
+                          needsReview={a.needs_review}
+                        />
+                      ) : null}
                     </div>
-                    {a.needs_review ? (
-                      <ConformControl
-                        assetId={a.id}
-                        conformMode={a.conform_mode}
-                        needsReview={a.needs_review}
-                      />
-                    ) : null}
-                  </div>
+                  )
                 )
-              )
-            ) : (
-              <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
-                {post.post_type === "text" ? "Text post" : "no image"}
-              </div>
-            )}
-          </div>
+              ) : (
+                <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
+                  {post.post_type === "text" ? "Text post" : "no image"}
+                </div>
+              )}
+            </div>
+          )}
           <div className="data text-xs text-ink-soft">
             <p>{post.post_type}{assets.length > 1 ? ` · ${assets.length} imgs` : ""}</p>
             <p className="mt-1 text-muted">Schedule status: {post.status}</p>
