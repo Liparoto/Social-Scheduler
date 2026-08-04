@@ -20,6 +20,7 @@ import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
 import { BulkEditModal } from "@/components/bulk-edit-modal";
+import { QuickEditModal } from "@/components/quick-edit-modal";
 import { CheckboxFilterDropdown } from "@/components/checkbox-filter-dropdown";
 import { ChannelAvatar } from "@/components/ui";
 import type { Period, Tag } from "@/lib/types";
@@ -80,6 +81,18 @@ function splitTags(value: string | null): string[] {
   return value ? value.split(",") : [];
 }
 
+/**
+ * Shorten a caption for a screen-reader label. Array.from splits by code point, not by
+ * UTF-16 code unit — a plain .slice() can cut an emoji in half, and the lone surrogate
+ * that leaves behind gets replaced with U+FFFD when the browser parses the server HTML.
+ * The client then renders the original surrogate, and React reports a hydration mismatch.
+ * Captions here are full of emoji, so this is routine, not an edge case.
+ */
+function truncateForLabel(caption: string, max = 40): string {
+  const points = Array.from(caption);
+  return points.length <= max ? caption : `${points.slice(0, max).join("").trimEnd()}…`;
+}
+
 export function LibraryView({
   posts,
   channels,
@@ -125,6 +138,10 @@ export function LibraryView({
   );
   const [mergeOpen, setMergeOpen] = useState(false);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  // Which card's quick-edit dialog is open, if any. Held as an id rather than the post
+  // object so a router.refresh() flowing new props in doesn't leave the dialog rendering
+  // a stale copy of the post it is editing.
+  const [quickEditId, setQuickEditId] = useState<number | null>(null);
 
   function toggle(id: number) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -301,10 +318,25 @@ export function LibraryView({
       : [];
   });
 
+  // Resolved from the live post list every render, so it can't go stale. A post deleted or
+  // filtered away underneath an open dialog resolves to undefined and closes it rather than
+  // leaving the dialog editing something that is no longer there.
+  const quickEditPost = quickEditId === null ? undefined : posts.find((p) => p.id === quickEditId);
+
   function onMerged() {
     setMergeOpen(false);
     setSelected([]);
     setNotice("Merged into one carousel.");
+    startT(() => router.refresh());
+  }
+
+  // router.refresh() re-runs the server component and swaps in fresh post data without a
+  // navigation — the filters, the "showing N of M" line, the scroll position and the bulk
+  // selection all stay exactly as they were. Same mechanism the merge and bulk-edit flows
+  // already use; a full reload would defeat the point of not leaving the page.
+  function onQuickEdited() {
+    setQuickEditId(null);
+    setNotice("Post updated.");
     startT(() => router.refresh());
   }
 
@@ -564,15 +596,34 @@ export function LibraryView({
                 ) : null}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="line-clamp-2 text-sm text-ink">
-                  <Link
-                    href={`/library/${p.id}`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="hover:underline"
+                <div className="flex items-start gap-2">
+                  <p className="line-clamp-2 min-w-0 flex-1 text-sm text-ink">
+                    <Link
+                      href={`/library/${p.id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="hover:underline"
+                    >
+                      {p.caption || <span className="text-faint italic">No caption</span>}
+                    </Link>
+                  </p>
+                  {/* The card itself is a role=button that toggles bulk-selection, so this
+                      has to stop the click from bubbling — exactly what the nested title
+                      link and MediaBadge already do. Without it the trigger would select
+                      the post instead of opening the dialog, and bulk-select would break.
+                      Keyboard activation is covered by the card's closest("a, button")
+                      guard in onKeyDown. */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQuickEditId(p.id);
+                    }}
+                    aria-label={`Quick edit ${p.caption ? truncateForLabel(p.caption) : `post ${p.id}`}`}
+                    className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:bg-surface-sunken hover:text-ink"
                   >
-                    {p.caption || <span className="text-faint italic">No caption</span>}
-                  </Link>
-                </p>
+                    Edit
+                  </button>
+                </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.post_type}</span>
                   {p.asset_count > 1 ? <span>{p.asset_count} imgs</span> : null}
@@ -814,6 +865,27 @@ export function LibraryView({
           posts={selectedForMerge}
           onClose={() => setMergeOpen(false)}
           onMerged={onMerged}
+        />
+      ) : null}
+
+      {quickEditPost ? (
+        <QuickEditModal
+          // Remount on a different post so no edit state can carry across.
+          key={quickEditPost.id}
+          post={{
+            id: quickEditPost.id,
+            caption: quickEditPost.caption,
+            content_status: quickEditPost.content_status,
+            content_kind: quickEditPost.content_kind,
+            cooldown_days: quickEditPost.cooldown_days,
+            tag_ids: quickEditPost.tag_ids,
+            periods: quickEditPost.periods,
+          }}
+          periods={periods}
+          timeOfDayTags={timeOfDayTags}
+          topicTags={topicTags}
+          onClose={() => setQuickEditId(null)}
+          onSaved={onQuickEdited}
         />
       ) : null}
 
