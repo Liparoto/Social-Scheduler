@@ -1355,11 +1355,12 @@ the cover locally to 9:16.
 
 ---
 
-## Unmerge: split a carousel back into separate posts  `[ ] not started — backlog`
+## Unmerge: split a carousel back into separate posts  `[x] done`
 
 Splitting a carousel back into singles was **explicitly out of scope** of the merge feature
 (2026-07-30). This is the return trip: take one carousel post and break it into one post per
-slide. Also covers the narrower case of pulling a *single* slide out and leaving the rest.
+slide. The narrower case of pulling a *single* slide out and leaving the rest was scoped out
+during brainstorming and is **still open** — see the closing note at the end of this section.
 
 Merge is the model to follow — same guard/transaction/modal shape — but unmerge is **not**
 symmetrical, and the asymmetries below are where the work actually is.
@@ -1369,66 +1370,66 @@ symmetrical, and the asymmetries below are where the work actually is.
 Each changes the implementation, and none is ours to guess. Brainstorm first, per the usual
 order of operations, then write `docs/design-unmerge-carousel.md`.
 
-- [ ] **What happens to the caption?** A carousel has one `posts.caption` plus any
+- [x] **What happens to the caption?** A carousel has one `posts.caption` plus any
       `caption_variants` rows. Split into 5 posts, does each get a copy, only the first, or
       none? Copying means editing one later silently diverges from the others; dropping loses
       work the owner typed. Merge's precedent is that captions are handled explicitly rather
       than defaulted.
-- [ ] **What happens to tags, periods, channel targets, and `content_status`?** A carousel
+- [x] **What happens to tags, periods, channel targets, and `content_status`?** A carousel
       carries topic tags, time-of-day, in-season windows, `post_targets`, and cooldown
       overrides. Copy all to every child, or produce bare drafts the owner re-tags? Copying is
       probably right, but it is a decision, not an obvious default.
-- [ ] **What happens to scheduled sends?** Merge *warns* that non-survivor sends get canceled.
+- [x] **What happens to scheduled sends?** Merge *warns* that non-survivor sends get canceled.
       Unmerge is worse: one carousel with a queued send becomes N posts, and it is genuinely
       unclear whether that send should follow the first slide, be canceled, or block the split
       outright. **Recommend blocking the split while any send is `scheduled`** — the owner can
       cancel it themselves via existing queue control — because silently retargeting a real
       send is the kind of surprise this project avoids.
-- [ ] **Is the original carousel post kept or consumed?** Merge designates a *survivor*.
+- [x] **Is the original carousel post kept or consumed?** Merge designates a *survivor*.
       Unmerge could keep the carousel as post 1 and spawn N-1 siblings, or delete it and create
       N fresh posts. Keeping it preserves its id, metrics history, and any `posted` publications
       — **strongly prefer keeping it**, since deleting a post with `posted` publications would
       destroy real published records.
-- [ ] **Does an already-`posted` carousel get to be split at all?** It has real Instagram media
+- [x] **Does an already-`posted` carousel get to be split at all?** It has real Instagram media
       attached. Recommend refusing: the published carousel is a historical record.
 
 ### Phase 1 — pure planning layer
 
-- [ ] `dashboard/lib/unmerge-plan.ts`, mirroring `lib/merge-plan.ts`: import nothing but
+- [x] `dashboard/lib/unmerge-plan.ts`, mirroring `lib/merge-plan.ts`: import nothing but
       `./platforms` so every rejection path is testable without SQLite.
-- [ ] Guards: post exists; `post_type` is `carousel`; 2+ slides; no `posted`/`publishing`
+- [x] Guards: post exists; `post_type` is `carousel`; 2+ slides; no `posted`/`publishing`
       publication; the scheduled-send rule chosen above.
-- [ ] Derive each child's `post_type` **from its own asset's `media_kind`** — a video slide
+- [x] Derive each child's `post_type` **from its own asset's `media_kind`** — a video slide
       must become `reel`, not `single`. ⚠ See the known `createDraftPost` bug below: the
       existing derivation ignores `media_kind` and would silently produce an unpublishable post.
-- [ ] Tests in `dashboard/test/` — every guard, plus the video-slide case.
-- [ ] **Verify:** `cd dashboard && npm test`, `npx tsc --noEmit`, `npm run lint` at **0 errors**.
+- [x] Tests in `dashboard/test/` — every guard, plus the video-slide case.
+- [x] **Verify:** `cd dashboard && npm test`, `npx tsc --noEmit`, `npm run lint` at **0 errors**.
 
 ### Phase 2 — the transaction
 
-- [ ] `unmergeCarousel(postId)` in `lib/queries.ts`, one `.immediate()` transaction, modelled on
+- [x] `unmergeCarousel(postId)` in `lib/queries.ts`, one `.immediate()` transaction, modelled on
       `mergePostsIntoCarousel`.
-- [ ] **Trap — `post_type` is frozen at write time** and only re-validated by the Python worker
+- [x] **Trap — `post_type` is frozen at write time** and only re-validated by the Python worker
       at publish. A child left as `carousel` with one asset looks fine in the dashboard and then
       fails at send with `carousel needs 2-10 assets, has 1`. Set it explicitly; add a test.
-- [ ] **Trap — `UNIQUE (post_id, sort_order)` is checked per-row and immediately.** Renumbering
+- [x] **Trap — `UNIQUE (post_id, sort_order)` is checked per-row and immediately.** Renumbering
       in place collides with itself. Delete the involved `post_assets` rows and rebuild them; a
       join row carries nothing worth preserving.
-- [ ] Assets are **shared, never copied** — content-hash dedup means the children reference the
+- [x] Assets are **shared, never copied** — content-hash dedup means the children reference the
       same `assets` rows. Nothing is written to `/data`, and no asset may be deleted here.
-- [ ] **Verify:** `PRAGMA foreign_key_check` clean on a scratch copy made with `sqlite3 .backup`
+- [x] **Verify:** `PRAGMA foreign_key_check` clean on a scratch copy made with `sqlite3 .backup`
       (never `cp` — the DB is WAL). Report row counts before/after.
 
 ### Phase 3 — API and UI
 
-- [ ] `POST /api/posts/[id]/unmerge` — thin passthrough, all guards below it, matching
+- [x] `POST /api/posts/[id]/unmerge` — thin passthrough, all guards below it, matching
       `POST /api/posts/merge`.
-- [ ] Post-detail action + confirm modal that states plainly what will happen: how many posts
+- [x] Post-detail action + confirm modal that states plainly what will happen: how many posts
       result, what each inherits, and what is canceled. Reuse `components/slide-reorder.tsx` if
       the owner should pick the resulting order.
-- [ ] Theme tokens must already exist in `app/globals.css` — 7 families × light/dark = **14
+- [x] Theme tokens must already exist in `app/globals.css` — 7 families × light/dark = **14
       palettes**, and an invented class renders invisible in some of them.
-- [ ] **Verify in a real browser, with Playwright, not the in-app browser** — `renderToStaticMarkup`
+- [x] **Verify in a real browser, with Playwright, not the in-app browser** — `renderToStaticMarkup`
       strips event handlers and cannot measure layout, and destructive flows need
       `browser_handle_dialog`. Use throwaway drafts, never the owner's real content, and confirm
       the DB is byte-identical afterward.
@@ -1436,15 +1437,34 @@ order of operations, then write `docs/design-unmerge-carousel.md`.
 ### Known landmines already documented elsewhere in this file
 
 - [ ] **`createDraftPost` derives `post_type` from asset count alone and ignores `media_kind`**
-      (follow-up under the merge section, confirmed live 2026-07-30). Unmerge hits this directly
-      the moment a carousel contains a video. Fix it here or reuse a corrected helper.
+      (follow-up under the merge section, confirmed live 2026-07-30). **Still open — unmerge
+      sidesteps it rather than fixing it:** `unmergeCarousel` writes its own `INSERT` with an
+      explicit `post_type`, so it never reaches this derivation.
 - [x] **Publish-in-flight race — FIXED 2026-08-05.** The worker now claims a publication
       conditionally before loading anything, so a row being sent reads `publishing` from the
       first moment and the dashboard's existing guards see it. Unmerge inherits that protection
       for free; it still needs its own decision about what to do with a merely *queued* send.
-- [ ] **`listAssetsWithUsage()` and `/media`** count usage via `post_assets`. Unmerge changes
+- [x] **`listAssetsWithUsage()` and `/media`** count usage via `post_assets`. Unmerge changes
       which posts reference an asset without changing the asset — confirm the "unused" figure
       and reclaim total stay correct.
+
+**Shipped 2026-08-05.** Design: `docs/design-unmerge-carousel.md`. Plan:
+`docs/plan-unmerge-carousel.md`. Full split only — pulling a *single* slide out and leaving the
+rest a carousel is still open.
+
+Two decisions landed differently than the notes above guessed, both settled with the owner:
+
+- The **caption is copied to every resulting post** (plus its `caption_variants` rows), as an
+  independent copy — editing one later does not change the others. Tags, periods, channel
+  targets (with `surface`), `content_kind`, `content_status`, `cooldown_days` and `created_by`
+  copy the same way.
+- A carousel with a **queued** send is **refused**, not silently retargeted — the owner cancels
+  or holds it in queue control first. Published carousels are refused outright.
+
+Verified in a real browser against a `sqlite3 .backup` copy of the live DB, never the live DB
+itself: the happy path (6-slide carousel → 6 posts, `assets` and `post_assets` row counts
+unchanged), both 409 guards, dark and light themes, and — because Task 4 extracted the shared
+modal focus trap — the merge modal and the lightbox's arrow-key and `video[controls]` handling.
 
 ---
 
