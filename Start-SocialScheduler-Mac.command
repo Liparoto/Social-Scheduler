@@ -204,7 +204,10 @@ RUN_DIR="data/run"
 LOG_DIR="data/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
-if [ -n "$(lsof -ti "tcp:$PORT" 2>/dev/null)" ]; then
+# -sTCP:LISTEN matters: without it lsof also returns every CLIENT connected to the port
+# — a browser tab left open on the dashboard is enough — and Start would refuse to do
+# anything, insisting SocialScheduler was already running when nothing was serving.
+if [ -n "$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)" ]; then
   echo "SocialScheduler is already running."
   echo "Opening http://localhost:$PORT"
   echo
@@ -215,176 +218,121 @@ if [ -n "$(lsof -ti "tcp:$PORT" 2>/dev/null)" ]; then
   exit 0
 fi
 
-# ---- 6. Work out what to do. ----
-MODE="compose"
-WANT_AUTOSTART=0
+# ---- 6. The worker. It just runs. ----
+#
+# There is no menu. Starting SocialScheduler means the whole thing is on: the dashboard to
+# compose in, and the worker to publish what has been scheduled. The old compose-vs-live
+# choice was a distinction without a difference — an idle worker does nothing at all until
+# a send is actually due, and whether anything can post for real is decided by DRY_RUN in
+# .env, not by a question asked at launch.
+#
+# The worker is registered with launchd so it also comes back on its own after a restart,
+# which is the one thing Start/Stop cannot do: after a reboot nobody is there to click
+# anything. Stop halts it until the next login; KILL_SWITCH=1 in .env stops it for good
+# without uninstalling; Disable-Worker-Autostart-Mac.command removes it entirely.
+DRY_RUN="$(env_value DRY_RUN)"
+KILL_SWITCH="$(env_value KILL_SWITCH)"
 
+if [ "$DRY_RUN" = "0" ] && ! command -v cloudflared >/dev/null 2>&1; then
+  echo "⚠️  cloudflared isn't installed — it's needed to deliver your images to Meta for REAL posts."
+  echo "    Install it once with:  brew install cloudflared"
+  echo
+fi
+
+if [ "$DRY_RUN" != "0" ]; then
+  echo "Worker: DRY-RUN is on in .env — it will show what it WOULD post and publish nothing."
+elif [ "$KILL_SWITCH" = "1" ]; then
+  echo "Worker: KILL_SWITCH is on in .env — it will run but publish nothing."
+else
+  echo "Worker: publishing for real (DRY_RUN=0 in .env)."
+fi
+
+MANUAL_WORKER=0
 if agent_installed; then
-  # The worker belongs to launchd now. It runs whether or not this script does anything,
-  # so a compose-vs-live menu here would be fiction, and the "post for real?" question was
-  # already answered once when autostart was switched on. Don't ask it every launch.
-  MODE="live"
   if [ -z "$(agent_pid)" ]; then
-    # Registered but not running -- a previous Stop halted it. Bring it back.
+    # Registered but not running — a previous Stop halted it. Bring it back.
     launchctl kickstart "gui/$UID/$AGENT" 2>/dev/null
     sleep 2
   fi
-  echo "Worker: running automatically (autostart is on)."
-  echo "        Turn it off any time with Disable-Worker-Autostart-Mac.command."
-  echo
+  echo "        Running (pid $(agent_pid)) — starts on its own every time you log in."
+elif enable_autostart; then
+  echo "        Running (pid $(agent_pid)) — and will now start on its own every time you log in."
 else
-  echo "What would you like to do?"
-  echo "  1) Compose only    — open the dashboard; nothing will be posted (safe)"
-  echo "  2) Go live once    — publish scheduled posts until you stop it"
-  echo "  3) Go live, always — publish, and keep the worker running from now on"
-  echo "                       (starts by itself every time you log in)"
-  echo
-  read -r -p "Enter 1, 2 or 3 [1]: " choice
-  choice="${choice:-1}"
-  echo
-  case "$choice" in
-    2) MODE="live" ;;
-    3) MODE="live"; WANT_AUTOSTART=1 ;;
-    *) MODE="compose" ;;
+  # launchd took the job but never spawned it. Don't leave a broken agent registered;
+  # fall back to a worker for this session so the install still works.
+  echo "        (Could not register autostart — running it just for this session.)"
+  launchctl bootout "gui/$UID/$AGENT" 2>/dev/null
+  rm -f "$AGENT_PLIST"
+  MANUAL_WORKER=1
+fi
+echo
+
+# ---- 7. Fallback: a session-only worker, used only if autostart could not be set up. ----
+if [ "$MANUAL_WORKER" = "1" ]; then
+
+  echo "Starting the worker in the background..."
+  nohup .venv/bin/python -m worker.run >> "$LOG_DIR/worker-daemon.out" 2>&1 &
+  WORKER_PID=$!
+  disown
+  echo "$WORKER_PID" > "$RUN_DIR/worker.pid"
+
+  # How long before the worker stops itself. Anything unparseable falls back to 12.
+  # This exists because the worker publishes for real and now runs with no visible
+  # window — without a deadline, a forgotten worker posts unattended for days.
+  HOURS="$(env_value WORKER_AUTO_STOP_HOURS)"
+  case "$HOURS" in
+    ''|*[!0-9.]*) HOURS=12 ;;
   esac
-fi
+  AUTO_SECS="$(python3 -c "print(int(float('$HOURS') * 3600))" 2>/dev/null)"
+  case "$AUTO_SECS" in
+    ''|0|*[!0-9]*) AUTO_SECS=43200; HOURS=12 ;;
+  esac
 
-# ---- 7. Going live for real needs confirming — once. ----
-# Skipped entirely when autostart is already on: that decision was made and recorded.
-if [ "$MODE" = "live" ] && ! agent_installed; then
-  DRY_RUN="$(env_value DRY_RUN)"
-  KILL_SWITCH="$(env_value KILL_SWITCH)"
+  # An ABSOLUTE wake time, not a countdown. `sleep` is naive about the wall clock and
+  # macOS suspends it while the Mac is asleep, so `sleep $AUTO_SECS` silently stretches:
+  # the worker kept running hours past the time this very file advertised. Storing the
+  # epoch and polling the clock keeps worker.deadline honest to within WATCH_POLL
+  # seconds, across any number of sleep/wake cycles. The displayed string is derived
+  # FROM the epoch so the two can never disagree.
+  DEADLINE_EPOCH="$(python3 -c "import time; print(int(time.time()) + $AUTO_SECS)")"
+  DEADLINE="$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($DEADLINE_EPOCH).strftime('%Y-%m-%d %H:%M'))")"
+  echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
+  WATCH_POLL=30
 
-  if [ "$DRY_RUN" = "0" ]; then
-    # Real posting. Make sure they mean it, and warn if the delivery tool is missing.
-    if ! command -v cloudflared >/dev/null 2>&1; then
-      echo "⚠️  cloudflared isn't installed — it's needed to deliver your images to Meta for REAL posts."
-      echo "    Install it once with:  brew install cloudflared"
-      echo "    (You don't need it while DRY_RUN=1 — dry-run posts nothing.)"
-      echo
-    fi
-    echo "⚠️  DRY_RUN is OFF in your .env. Going live will POST to Instagram/Facebook FOR REAL."
-    read -r -p "Type YES (all caps) to post for real, or just press Enter to compose safely: " confirm
-    echo
-    if [ "$confirm" != "YES" ]; then
-      echo "Okay — starting in Compose only mode. Nothing will be posted."
-      echo
-      MODE="compose"
-      WANT_AUTOSTART=0
-    fi
-  fi
-fi
-
-# ---- 7b. Switch autostart on, if that is what they picked. ----
-if [ "$WANT_AUTOSTART" = "1" ] && [ "$MODE" = "live" ]; then
-  echo "Setting up the worker to start on its own..."
-  if enable_autostart; then
-    echo "✅ Done — the worker is running now and will start every time you log in."
-    echo "   Stop it any time with Stop-SocialScheduler-Mac.command."
-  else
-    echo "❌ launchd accepted the job but it never started."
-    echo "   exit code: $(launchctl print "gui/$UID/$AGENT" 2>/dev/null | grep 'last exit code' | sed 's/.*= //')"
-    echo "   Continuing with a worker started just for this session instead."
-    launchctl bootout "gui/$UID/$AGENT" 2>/dev/null
-    rm -f "$AGENT_PLIST"
-  fi
-  echo
-fi
-
-if [ "$MODE" = "live" ]; then
-  DRY_RUN="$(env_value DRY_RUN)"
-  KILL_SWITCH="$(env_value KILL_SWITCH)"
-  if [ "$DRY_RUN" != "0" ]; then
-    echo "DRY-RUN is on: the worker will show what it WOULD post but publish nothing."
-    echo "When you're ready to go live for real, set DRY_RUN=0 in your .env file."
-    echo
-  fi
-  if [ "$KILL_SWITCH" = "1" ]; then
-    echo "Note: KILL_SWITCH is ON — the worker will run but publish nothing until you set KILL_SWITCH=0 in .env."
-    echo
-  fi
-  # If the autostart LaunchAgent is installed, launchd already owns the worker. Starting
-  # another one here would leave two daemons polling the same database. They can no longer
-  # double-publish (publications are claimed conditionally), but it is still confusing and
-  # wasteful, and only one of them would be the one Stop knows how to stop.
-  AGENT="com.socialscheduler.worker"
-  AGENT_PID=""
-  if launchctl print "gui/$UID/$AGENT" >/dev/null 2>&1; then
-    AGENT_PID="$(launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}')"
-    if [ -z "$AGENT_PID" ]; then
-      # Registered but not running — a previous Stop halted it. Bring it back.
-      launchctl kickstart "gui/$UID/$AGENT" 2>/dev/null
-      sleep 2
-      AGENT_PID="$(launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}')"
-    fi
-    echo "Worker autostart is enabled — launchd is running the worker${AGENT_PID:+ (pid $AGENT_PID)}."
-    echo "Not starting a second one. Disable-Worker-Autostart-Mac.command turns autostart off."
-    echo
-  else
-    echo "Starting the worker in the background..."
-    nohup .venv/bin/python -m worker.run >> "$LOG_DIR/worker-daemon.out" 2>&1 &
-    WORKER_PID=$!
-    disown
-    echo "$WORKER_PID" > "$RUN_DIR/worker.pid"
-
-    # How long before the worker stops itself. Anything unparseable falls back to 12.
-    # This exists because the worker publishes for real and now runs with no visible
-    # window — without a deadline, a forgotten worker posts unattended for days.
-    HOURS="$(env_value WORKER_AUTO_STOP_HOURS)"
-    case "$HOURS" in
-      ''|*[!0-9.]*) HOURS=12 ;;
-    esac
-    AUTO_SECS="$(python3 -c "print(int(float('$HOURS') * 3600))" 2>/dev/null)"
-    case "$AUTO_SECS" in
-      ''|0|*[!0-9]*) AUTO_SECS=43200; HOURS=12 ;;
-    esac
-
-    # An ABSOLUTE wake time, not a countdown. `sleep` is naive about the wall clock and
-    # macOS suspends it while the Mac is asleep, so `sleep $AUTO_SECS` silently stretches:
-    # the worker kept running hours past the time this very file advertised. Storing the
-    # epoch and polling the clock keeps worker.deadline honest to within WATCH_POLL
-    # seconds, across any number of sleep/wake cycles. The displayed string is derived
-    # FROM the epoch so the two can never disagree.
-    DEADLINE_EPOCH="$(python3 -c "import time; print(int(time.time()) + $AUTO_SECS)")"
-    DEADLINE="$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($DEADLINE_EPOCH).strftime('%Y-%m-%d %H:%M'))")"
-    echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
-    WATCH_POLL=30
-
-    # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
-    #
-    # It must only ever act on ITS OWN worker. `sleep` is naive about wall clock — macOS
-    # suspends it while the Mac is asleep — so a watchdog routinely wakes LONG after the
-    # deadline recorded in worker.deadline, by which time the owner may have stopped and
-    # restarted everything. Acting unconditionally at that point does real damage: it
-    # deletes the CURRENT worker's pid files, leaving a worker that publishes for real
-    # while Stop can no longer find it (it reports success and kills nothing), and it
-    # signals a 12-hour-old PID number that may since have been recycled onto an
-    # unrelated process.
-    #
-    # Guard: worker.pid must still name this watchdog's own worker. If it names anything
-    # else — or is gone — another launch has taken over and this watchdog is obsolete, so
-    # it exits quietly and touches nothing.
-    (
-      while [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ]; do sleep "$WATCH_POLL"; done
-      still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
-      if [ "$still_ours" = "$WORKER_PID" ]; then
-        # The files are ours, so clean them up either way. Only SIGNAL the PID if it is
-        # still actually a worker — across a long sleep the number can belong to someone
-        # else, and killing a stranger's process is worse than leaving ours running.
-        if ps -p "$WORKER_PID" -o command= 2>/dev/null | grep -q "worker\.run"; then
-          kill "$WORKER_PID" 2>/dev/null
-        fi
-        rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+  # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
+  #
+  # It must only ever act on ITS OWN worker. `sleep` is naive about wall clock — macOS
+  # suspends it while the Mac is asleep — so a watchdog routinely wakes LONG after the
+  # deadline recorded in worker.deadline, by which time the owner may have stopped and
+  # restarted everything. Acting unconditionally at that point does real damage: it
+  # deletes the CURRENT worker's pid files, leaving a worker that publishes for real
+  # while Stop can no longer find it (it reports success and kills nothing), and it
+  # signals a 12-hour-old PID number that may since have been recycled onto an
+  # unrelated process.
+  #
+  # Guard: worker.pid must still name this watchdog's own worker. If it names anything
+  # else — or is gone — another launch has taken over and this watchdog is obsolete, so
+  # it exits quietly and touches nothing.
+  (
+    while [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ]; do sleep "$WATCH_POLL"; done
+    still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
+    if [ "$still_ours" = "$WORKER_PID" ]; then
+      # The files are ours, so clean them up either way. Only SIGNAL the PID if it is
+      # still actually a worker — across a long sleep the number can belong to someone
+      # else, and killing a stranger's process is worse than leaving ours running.
+      if ps -p "$WORKER_PID" -o command= 2>/dev/null | grep -q "worker\.run"; then
+        kill "$WORKER_PID" 2>/dev/null
       fi
-    ) >/dev/null 2>&1 &
-    WATCHDOG_PID=$!
-    disown
-    echo "$WATCHDOG_PID" > "$RUN_DIR/watchdog.pid"
+      rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+    fi
+  ) >/dev/null 2>&1 &
+  WATCHDOG_PID=$!
+  disown
+  echo "$WATCHDOG_PID" > "$RUN_DIR/watchdog.pid"
 
-    echo "Worker running in the background (logs are in data/logs/)."
-    echo "It will stop on its own at $DEADLINE, or whenever you double-click Stop."
-    echo
-  fi
+  echo "Worker running in the background (logs are in data/logs/)."
+  echo "It will stop on its own at $DEADLINE, or whenever you double-click Stop."
+  echo
 fi
 
 # ---- 8. Start the dashboard in the background. ----

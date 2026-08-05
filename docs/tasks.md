@@ -1454,12 +1454,24 @@ The worker had to be started by hand through `Start-SocialScheduler-Mac.command`
 gates live mode behind a typed `YES`, and it then stopped itself after 12 hours. The owner's
 actual intent is simpler: **the worker should be running whenever the Mac is.**
 
-**It is one script, not two.** The first cut shipped a separate
-`Enable-Worker-Autostart-Mac.command`, which was wrong: two double-clicks to express one
-intention is cumbersome and confusing, especially for the non-technical teammate this
-tooling exists for. Turning it on is now **option 3 in Start's menu**, and once it is on
-Start stops asking anything at all — no menu, no `Type YES` gate, because that decision was
-made and recorded. `Disable-Worker-Autostart-*` is the rarely-used undo.
+**One script, and no menu at all.** This went through two wrong shapes first: a separate
+`Enable-Worker-Autostart` script (two double-clicks for one intention), then a three-option
+menu inside Start. Both were over-thought. The owner's question settled it — *"someone
+starts it when they go live, and stops it when they stop the scheduler, so really just a
+single option is needed, right?"* — and they were right:
+
+- **Compose-vs-live was a distinction without a difference.** An idle worker does nothing
+  until a send is actually due, and whether anything can post for real is decided by
+  `DRY_RUN` in `.env`, which a fresh clone ships as `1`. The menu was protecting against
+  almost nothing that `DRY_RUN` did not already cover.
+- **The `Type YES` gate was pure friction** once the worker was autostarted: it fired on
+  every launch to re-confirm a decision already recorded, for a worker Start was not even
+  starting. Setting `DRY_RUN=0` in `.env` is itself the deliberate act.
+
+So Start now just says what is happening and does it. The one thing autostart genuinely
+buys — and the reason it is not simply "Start runs the worker" — is surviving a **reboot**:
+after a restart nobody is there to double-click anything. `Disable-Worker-Autostart-*` is
+the rarely-used undo.
 
 macOS uses a per-user LaunchAgent (`~/Library/LaunchAgents/com.socialscheduler.worker.plist`);
 Windows uses an at-logon Scheduled Task (`SocialSchedulerWorker`).
