@@ -153,16 +153,34 @@ conversion on upload" above for how this project closes that gap on the converti
 and the "Verified: first real Reel" note below for what remains untested (an in-spec file
 that skips conversion).
 
-**`cover_url` vs `thumb_offset` — precedence.** Instagram's REELS container accepts either
-`cover_url` (an actual image file Meta uses directly as the cover) or `thumb_offset` (a
-millisecond offset into the video; Meta extracts that frame itself). Where both are
-possible, an explicit `cover_url` image is the more direct instruction and takes
-precedence over deriving one from `thumb_offset` — there is nothing to derive once a real
-image is supplied. **This project only ever sends `thumb_offset`** (from
-`assets.cover_frame_ms`, via `worker/graph_api.py`'s `create_video_container` →
-`worker/publisher.py`) — a real, uploaded custom cover image via `cover_url` is not
-implemented (deferred, see docs/tasks.md). Absent either field, Meta's documented default
-is frame 0.
+**`cover_url` vs `thumb_offset` — precedence (verified 2026-07-29, re-confirmed 2026-08-04).**
+Instagram's REELS container accepts either `cover_url` (an actual image Meta downloads and
+uses as the cover) or `thumb_offset` (a millisecond offset into the video; Meta extracts
+that frame itself). Meta's docs state the rule outright: if both are specified, `cover_url`
+is used and `thumb_offset` is ignored. Absent either field, the documented default is
+frame 0.
+
+**This project resolves the choice itself and sends exactly one, never both.**
+`worker/publisher.py`'s `_build_plan` sets `cover_url` *or* `cover_frame_ms` and nulls the
+other, so the dry-run plan shows what will actually happen rather than deferring to Meta's
+precedence rule at request time. A dangling `cover_asset_id` falls back to `thumb_offset`
+and logs it — a missing cover is cosmetic, and refusing to publish over it would be worse.
+
+**Reels cover image spec** (from the IG User Media reference): **JPEG**, **8 MB maximum**,
+**sRGB** (other colour spaces are converted). 9:16 is recommended; Meta's own wording is
+that a non-9:16 image is cropped to the middle 9:16 rectangle.
+
+⚠ **A cover is NOT conformed like a feed image.** `dashboard/lib/conform.ts` targets the
+feed's 4:5–1.91:1 range; 9:16 is 0.5625, well outside it, so pushing a cover through that
+path would crop it to 0.8 and silently destroy the chosen framing.
+`dashboard/lib/conform-cover.ts` exists precisely to avoid this: it fixes colour space and
+file size and **never touches the aspect ratio**, warning instead when the ratio is not
+near 9:16. For the same reason `worker/publisher.py`'s `_resolve_rel` has a dedicated
+`cover` surface that resolves to `storage_path` and never `publish_path` — a feed
+derivative would be the cropped version.
+
+**Changing the cover of an already-published Reel is out of scope** — Meta does not
+document whether it is possible, and this project does not assume undocumented behaviour.
 
 ### Facebook Pages publishing (verified 2026-07-23)
 - Single photo: `POST /{page-id}/photos` with `url`, `caption`, `published=true`. The response

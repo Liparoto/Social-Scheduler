@@ -425,6 +425,13 @@ export function updateAssetCoverFrame(id: number, coverFrameMs: number): void {
     .run(coverFrameMs, id);
 }
 
+/** Point a video asset at an image asset to use as its Reels cover, or clear it. */
+export function setAssetCoverImage(videoAssetId: number, coverAssetId: number | null): void {
+  getDb()
+    .prepare("UPDATE assets SET cover_asset_id = ? WHERE id = ?")
+    .run(coverAssetId, videoAssetId);
+}
+
 export interface AssetWithUsage {
   id: number;
   content_hash: string;

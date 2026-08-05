@@ -98,14 +98,20 @@ class GraphClient:
         token: str,
         caption: str | None = None,
         thumb_offset: int | None = None,
+        cover_url: str | None = None,
     ) -> str:
         """Create a REELS container. Meta downloads video_url server-side, transcodes it,
         and the container is not publishable until its status_code reaches FINISHED —
         which for video takes far longer than for an image (see the Reels poll budget).
 
         thumb_offset is a MILLISECOND offset; Meta extracts that frame as the cover, so
-        we never generate or upload a cover image. Meta's documented default is 0 (the
-        first frame) when the field is absent.
+        we never generate or upload a cover image for that path. Meta's documented
+        default is 0 (the first frame) when the field is absent.
+
+        cover_url is a real image (public URL) to use as the cover instead. Meta's own
+        docs say cover_url wins and thumb_offset is ignored if both are sent — but our
+        caller (_build_plan / _publish_reel) already resolves that choice and only ever
+        passes one of the two, so this method just forwards whichever is given.
         """
         data = {
             "media_type": "REELS",
@@ -118,6 +124,8 @@ class GraphClient:
         # truthiness check would silently drop it.
         if thumb_offset is not None:
             data["thumb_offset"] = thumb_offset
+        if cover_url is not None:
+            data["cover_url"] = cover_url
         return self._post(f"{ig_user_id}/media", data)["id"]
 
     def create_story_container(

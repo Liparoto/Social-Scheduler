@@ -9,7 +9,7 @@ from dataclasses import fields
 
 import pytest
 
-from worker import publisher
+from worker import db, publisher
 from worker.graph_api import GraphClient
 
 
@@ -80,6 +80,28 @@ def test_thumb_offset_zero_is_sent_not_dropped():
 
     _url, data = c.session.posts[0]
     assert data["thumb_offset"] == 0
+
+
+def test_create_video_container_sends_cover_url_when_given():
+    """A custom cover image is a real public URL Meta cURLs, separate from thumb_offset."""
+    c = client([FakeResponse({"id": "C4"})])
+    c.create_video_container(
+        "IG1", "https://x/v.mp4", "TOKEN", cover_url="https://img.example/cover.jpg"
+    )
+
+    _url, data = c.session.posts[0]
+    assert data["cover_url"] == "https://img.example/cover.jpg"
+    assert "thumb_offset" not in data
+
+
+def test_create_video_container_omits_cover_url_when_not_given():
+    """Not chosen -> not sent at all, mirroring thumb_offset's own None handling."""
+    c = client([FakeResponse({"id": "C5"})])
+    c.create_video_container("IG1", "https://x/v.mp4", "TOKEN", thumb_offset=1200)
+
+    _url, data = c.session.posts[0]
+    assert "cover_url" not in data
+    assert data["thumb_offset"] == 1200
 
 
 def test_reels_poll_budget_is_longer_than_the_image_budget():
@@ -207,3 +229,270 @@ def test_reel_poll_exhaustion_is_retryable_not_terminal():
     # Exhausted the Reels budget (max_tries=2), never the image budget (max_tries=1) —
     # pins that _publish_reel actually used reels_status_poll_max_tries to poll.
     assert polls["count"] == 2
+
+
+# ---- _publish_reel: cover_url vs. thumb_offset are mutually exclusive at the client call --
+def test_publish_reel_sends_cover_url_and_omits_thumb_offset_when_cover_set():
+    """When the plan carries a cover_url, create_video_container must receive cover_url
+    and NOT thumb_offset — never both, even though the plan also happens to carry a
+    cover_frame_ms of None here (as _build_plan produces when a cover wins)."""
+    calls = {}
+
+    class _C:
+        def create_video_container(self, ig, url, token, caption=None,
+                                    thumb_offset=None, cover_url=None):
+            calls["kwargs"] = {"thumb_offset": thumb_offset, "cover_url": cover_url}
+            return "CONT"
+
+        def get_container_status(self, cid, token):
+            return "FINISHED"
+
+        def publish_container(self, ig, cid, token):
+            return "MEDIA1"
+
+    class _Cfg:
+        status_poll_interval = 0
+        status_poll_max_tries = 1
+        reels_status_poll_interval = 0
+        reels_status_poll_max_tries = 1
+
+    plan = {
+        "platform": "instagram", "post_type": "reel", "account_id": "IG1",
+        "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
+        "caption": "hi", "cover_frame_ms": None, "cover_url": "https://img.example/cover.jpg",
+    }
+    got = publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), lambda _: None)
+
+    assert got == "MEDIA1"
+    assert calls["kwargs"] == {"thumb_offset": None, "cover_url": "https://img.example/cover.jpg"}
+
+
+def test_publish_reel_still_sends_thumb_offset_when_no_cover_url_in_plan():
+    """A plan with no cover_url key at all (e.g. built before this feature, or a plain
+    dict fixture) must fall back to thumb_offset exactly as before — no regression."""
+    calls = {}
+
+    class _C:
+        def create_video_container(self, ig, url, token, caption=None,
+                                    thumb_offset=None, cover_url=None):
+            calls["kwargs"] = {"thumb_offset": thumb_offset, "cover_url": cover_url}
+            return "CONT"
+
+        def get_container_status(self, cid, token):
+            return "FINISHED"
+
+        def publish_container(self, ig, cid, token):
+            return "MEDIA1"
+
+    class _Cfg:
+        status_poll_interval = 0
+        status_poll_max_tries = 1
+        reels_status_poll_interval = 0
+        reels_status_poll_max_tries = 1
+
+    plan = {
+        "platform": "instagram", "post_type": "reel", "account_id": "IG1",
+        "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
+        "caption": "hi", "cover_frame_ms": 0,
+    }
+    got = publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), lambda _: None)
+
+    assert got == "MEDIA1"
+    # 0 is the explicit "first frame" choice and must survive, never dropped as falsy.
+    assert calls["kwargs"] == {"thumb_offset": 0, "cover_url": None}
+
+
+# ---- _build_plan: resolves cover_asset_id against real DB rows -----------------------
+def _reel_video_asset_id(conn, post_id):
+    return conn.execute(
+        "SELECT asset_id FROM post_assets WHERE post_id = ?", (post_id,)
+    ).fetchone()[0]
+
+
+def _set_dangling_cover(conn, video_id, cover_frame_ms, missing_cover_id=999999):
+    """Point video_id's cover_asset_id at a row that does not exist. The conn fixture
+    enables `PRAGMA foreign_keys = ON` (as production connections do), which would
+    normally reject this — exactly why it needs a dedicated helper. This mirrors how a
+    dangling id actually arises per the design doc: a hand-edited /data database, since
+    a live app can never delete a still-referenced row while foreign_keys is on.
+    """
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        "UPDATE assets SET cover_frame_ms = ?, cover_asset_id = ? WHERE id = ?",
+        (cover_frame_ms, missing_cover_id, video_id),
+    )
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def test_build_plan_with_cover_asset_id_carries_cover_url_and_no_frame(conn, config, make_publication):
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    cover_id = conn.execute(
+        """INSERT INTO assets (content_hash, media_kind, storage_path, public_url)
+           VALUES (?, 'image', ?, NULL)""",
+        ("cover-hash-1", "assets/cover-1.jpg"),
+    ).lastrowid
+    conn.execute(
+        "UPDATE assets SET cover_frame_ms = ?, cover_asset_id = ? WHERE id = ?",
+        (1500, cover_id, video_id),
+    )
+    conn.commit()
+
+    channel = db.get_channel(conn, pub["channel_id"])
+    post = db.get_post(conn, pub["post_id"])
+    assets = db.get_ordered_assets(conn, pub["post_id"])
+    plan = publisher._build_plan(
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
+    )
+
+    assert plan["cover_url"] == "https://tunnel.test/assets/cover-1.jpg"
+    # cover_url wins -> thumb_offset is omitted (None), even though cover_frame_ms=1500
+    # is still stored on the asset for later (removing the cover restores it).
+    assert plan["cover_frame_ms"] is None
+
+
+def test_build_plan_cover_url_ignores_publish_path_and_uses_the_original(conn, config, make_publication):
+    """A cover must resolve to storage_path even when the row HAS a publish_path.
+
+    publish_path is a FEED conform, cropped into 4:5..1.91:1. A cover is deliberately
+    left at its own aspect ratio (Instagram center-crops to 9:16 itself), so serving the
+    feed derivative would silently mangle the framing the owner picked -- the exact
+    failure conform-cover.ts exists to prevent. Cover rows normally have publish_path
+    NULL, but content-hash dedup can return a row that was ALSO uploaded as a feed image,
+    so the resolution must not depend on that being NULL.
+    """
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    cover_id = conn.execute(
+        """INSERT INTO assets (content_hash, media_kind, storage_path, publish_path, public_url)
+           VALUES (?, 'image', ?, ?, NULL)""",
+        ("cover-hash-dedup", "assets/cover-orig.jpg", "assets/cover-FEEDCROPPED.jpg"),
+    ).lastrowid
+    conn.execute(
+        "UPDATE assets SET cover_frame_ms = ?, cover_asset_id = ? WHERE id = ?",
+        (1500, cover_id, video_id),
+    )
+    conn.commit()
+
+    channel = db.get_channel(conn, pub["channel_id"])
+    post = db.get_post(conn, pub["post_id"])
+    assets = db.get_ordered_assets(conn, pub["post_id"])
+    plan = publisher._build_plan(
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
+    )
+
+    assert plan["cover_url"] == "https://tunnel.test/assets/cover-orig.jpg"
+    assert "FEEDCROPPED" not in plan["cover_url"]
+    assert plan["cover_frame_ms"] is None
+
+
+def test_build_plan_without_cover_asset_id_uses_thumb_offset_as_before(conn, config, make_publication):
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    conn.execute("UPDATE assets SET cover_frame_ms = ? WHERE id = ?", (777, video_id))
+    conn.commit()
+
+    channel = db.get_channel(conn, pub["channel_id"])
+    post = db.get_post(conn, pub["post_id"])
+    assets = db.get_ordered_assets(conn, pub["post_id"])
+    plan = publisher._build_plan(
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
+    )
+
+    assert plan["cover_frame_ms"] == 777
+    assert plan["cover_url"] is None
+
+
+def test_build_plan_dangling_cover_asset_id_falls_back_to_thumb_offset(conn, config, make_publication):
+    """cover_asset_id points at a row that no longer exists (deleted out from under it).
+    A missing cover is cosmetic -> fall back to the frame offset, never raise."""
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    _set_dangling_cover(conn, video_id, cover_frame_ms=2400)
+
+    channel = db.get_channel(conn, pub["channel_id"])
+    post = db.get_post(conn, pub["post_id"])
+    assets = db.get_ordered_assets(conn, pub["post_id"])
+    plan = publisher._build_plan(
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
+    )
+
+    assert plan["cover_url"] is None
+    assert plan["cover_frame_ms"] == 2400
+
+
+# ---- end-to-end through publish_one: cover_url reaches the client, dangling id doesn't
+#      break the publish ----------------------------------------------------------------
+class FakeReelsClient:
+    """A fake Graph client with the Reels method surface (create_video_container plus
+    the poll/publish/quota calls publish_one exercises for Instagram), separate from
+    FakeGraphClient in conftest.py, which never implements create_video_container."""
+
+    def __init__(self):
+        self.calls = []
+
+    def create_video_container(self, ig_user_id, video_url, token, caption=None,
+                                thumb_offset=None, cover_url=None):
+        self.calls.append(("container", video_url, caption, thumb_offset, cover_url))
+        return "CONT1"
+
+    def get_container_status(self, container_id, token):
+        return "FINISHED"
+
+    def publish_container(self, ig_user_id, creation_id, token):
+        self.calls.append(("publish", creation_id))
+        return "MEDIA1"
+
+    def get_content_publishing_limit(self, ig_user_id, token):
+        return (0, 50, 86400)
+
+
+def test_publish_one_sends_cover_url_end_to_end(conn, config, make_publication):
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    cover_id = conn.execute(
+        """INSERT INTO assets (content_hash, media_kind, storage_path, public_url)
+           VALUES (?, 'image', ?, NULL)""",
+        ("cover-hash-2", "assets/cover-2.jpg"),
+    ).lastrowid
+    conn.execute(
+        "UPDATE assets SET cover_frame_ms = ?, cover_asset_id = ? WHERE id = ?",
+        (1500, cover_id, video_id),
+    )
+    conn.commit()
+
+    client = FakeReelsClient()
+    out = publisher.publish_one(
+        conn, pub, config, client, dry_run=False, asset_base_url="https://tunnel.test",
+    )
+
+    assert out.result == "posted"
+    assert out.plan["cover_url"] == "https://tunnel.test/assets/cover-2.jpg"
+    assert out.plan["cover_frame_ms"] is None
+    _kind, _url, _caption, thumb_offset, cover_url = client.calls[0]
+    assert cover_url == "https://tunnel.test/assets/cover-2.jpg"
+    assert thumb_offset is None
+
+
+def test_publish_one_dangling_cover_asset_id_falls_back_and_still_publishes(
+    conn, config, make_publication
+):
+    """The trap this test exists to catch: a dangling cover_asset_id must not raise and
+    must not block the publish. A missing cover is cosmetic; refusing to publish a
+    Reel over it would be far worse."""
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    _set_dangling_cover(conn, video_id, cover_frame_ms=2400)
+
+    client = FakeReelsClient()
+    out = publisher.publish_one(
+        conn, pub, config, client, dry_run=False, asset_base_url="https://tunnel.test",
+    )
+
+    assert out.result == "posted"
+    assert out.plan["cover_url"] is None
+    assert out.plan["cover_frame_ms"] == 2400
+    _kind, _url, _caption, thumb_offset, cover_url = client.calls[0]
+    assert thumb_offset == 2400
+    assert cover_url is None

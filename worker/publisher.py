@@ -114,6 +114,14 @@ def _resolve_rel(asset, surface: str = "feed") -> str | None:
                 NULL means the original is already the right shape. The conformed copy is
                 never right here: conformance targets the FEED's 4:5..1.91:1 range
                 (dashboard/lib/conform.ts) and a story is 9:16.
+      * cover — a Reel's cover image: ALWAYS the original, never the feed derivative.
+                storage_path already holds the cover-conformed bytes (sRGB JPEG <=8MB with
+                the aspect ratio deliberately untouched, dashboard/lib/conform-cover.ts).
+                publish_path, if the row has one, is a FEED conform cropped into
+                4:5..1.91:1 — using it would silently mangle the framing the owner chose,
+                which is the exact failure the cover conform exists to prevent. A cover row
+                normally has publish_path NULL, but content-hash dedup can hand back a row
+                that was also uploaded as a feed image, so this must not rely on that.
 
     Split out so _resolve_url and the dry-run marker in _build_plan cannot disagree about
     what would be sent — they did, and the dry run quietly showed the original for a story
@@ -127,6 +135,8 @@ def _resolve_rel(asset, surface: str = "feed") -> str | None:
     original = asset["storage_path"]
     if surface == "story":
         return canvas or original or conformed
+    if surface == "cover":
+        return original
     return conformed or original
 
 
@@ -292,7 +302,7 @@ def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str |
 
 
 def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None,
-                 config=None, surface: str = "feed") -> dict:
+                 config=None, surface: str = "feed", conn=None) -> dict:
     # For real publishes every asset resolves (validated above). In dry-run there is no
     # tunnel, so show a readable local marker instead of a live URL.
     asset_urls = [
@@ -309,23 +319,51 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
         _resolve_local_path(a, caps, config, surface) if config is not None else None
         for a in assets
     ]
+    # The chosen cover frame travels with the plan so dry-run shows it too. It lives
+    # on the ASSET, so a recycled evergreen video reuses the same choice.
+    #
+    # The `in .keys()` guard mirrors _resolve_url's handling of publish_path: many
+    # existing tests build asset fixtures as plain dicts without this column, and a
+    # bare assets[0]["cover_frame_ms"] would KeyError on every one of them.
+    cover_frame_ms = (
+        assets[0]["cover_frame_ms"]
+        if assets and "cover_frame_ms" in assets[0].keys()
+        else None
+    )
+    # A custom cover image overrides the frame choice — Meta's documented precedence is
+    # "cover_url wins, thumb_offset is ignored", but we resolve that explicitly here
+    # rather than sending both and leaning on Meta's behaviour, since the dry-run plan
+    # is one of this project's main debugging surfaces and must show what will actually
+    # happen. Same `.keys()` guard as cover_frame_ms, for the same reason (plain-dict
+    # fixtures across dozens of existing tests don't carry this column).
+    cover_url = None
+    if (
+        assets
+        and conn is not None
+        and "cover_asset_id" in assets[0].keys()
+        and assets[0]["cover_asset_id"] is not None
+    ):
+        cover_asset = db.get_asset(conn, assets[0]["cover_asset_id"])
+        # A dangling cover_asset_id (the referenced row was deleted) falls back to the
+        # frame offset rather than raising — a missing cover is cosmetic, refusing to
+        # publish over it would be far worse. cover_frame_ms is left as resolved above.
+        if cover_asset is not None:
+            # surface="cover", NOT the caller's surface and not the "feed" default: a
+            # cover must resolve to the cover-conformed original, never to a feed
+            # derivative cropped into 4:5..1.91:1. See _resolve_rel.
+            cover_url = _resolve_url(cover_asset, asset_base_url, "cover") or (
+                f"(local:{_resolve_rel(cover_asset, 'cover')})"
+            )
+            cover_frame_ms = None
     return {
         "platform": channel["platform"],
         "account": channel["account_name"],
         # IG user id, or FB Page id — whichever this channel's platform uses.
         "account_id": channel["remote_account_id"],
         "post_type": post["post_type"],
-        # The chosen cover frame travels with the plan so dry-run shows it too. It lives
-        # on the ASSET, so a recycled evergreen video reuses the same choice.
-        #
-        # The `in .keys()` guard mirrors _resolve_url's handling of publish_path: many
-        # existing tests build asset fixtures as plain dicts without this column, and a
-        # bare assets[0]["cover_frame_ms"] would KeyError on every one of them.
-        "cover_frame_ms": (
-            assets[0]["cover_frame_ms"]
-            if assets and "cover_frame_ms" in assets[0].keys()
-            else None
-        ),
+        # Resolved above: exactly one of these is ever set, never both.
+        "cover_frame_ms": cover_frame_ms,
+        "cover_url": cover_url,
         "surface": surface,
         # Stories have no caption field. Nulled in the PLAN, not merely skipped at the
         # call site, so dry-run output shows the truth about what would be sent.
@@ -395,14 +433,23 @@ def _publish_reel(client, plan, token, config, sleep_fn) -> str:
     """Reels use the same container -> poll -> publish shape as an image, with two
     differences: media_type=REELS with a video_url, and a much longer poll budget
     because Meta transcodes the video server-side before the container is publishable.
+
+    The plan already resolves cover_url vs. thumb_offset to exactly one (never both —
+    see _build_plan), so only one is ever passed through to the client here too.
     """
     ig = plan["account_id"]
+    cover_url = plan.get("cover_url")
+    cover_kwargs = (
+        {"cover_url": cover_url}
+        if cover_url is not None
+        else {"thumb_offset": plan.get("cover_frame_ms")}
+    )
     container = client.create_video_container(
         ig,
         plan["asset_urls"][0],
         token,
         caption=plan["caption"],
-        thumb_offset=plan.get("cover_frame_ms"),
+        **cover_kwargs,
     )
     _poll_until_finished(
         client, container, token, config, sleep_fn,
@@ -678,7 +725,8 @@ def publish_one(
         surface = _surface(pub)
         _validate(post, assets, dry_run, asset_base_url, channel["platform"], caption,
                   config, surface)
-        plan = _build_plan(channel, post, assets, asset_base_url, caption, config, surface)
+        plan = _build_plan(channel, post, assets, asset_base_url, caption, config,
+                           surface, conn)
     except _NonRetryable as exc:
         log(f"validation failed: {exc}")
         return _mark_failure(conn, pub, config, now, str(exc), terminal=True)

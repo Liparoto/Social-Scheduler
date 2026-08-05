@@ -1,0 +1,34 @@
+-- 0016_cover_asset.sql
+-- Let a VIDEO asset point at an IMAGE asset to use as its Reels cover:
+--   assets.cover_asset_id  (new, nullable, references assets(id))
+--
+-- Instagram's cover_url takes a public image URL and OVERRIDES thumb_offset entirely
+-- ("If you specify both cover_url and thumb_offset, we use cover_url and ignore
+-- thumb_offset"). So a cover image and a cover frame are alternatives, not a stack --
+-- assets.cover_frame_ms stays populated while an image overrides it, so removing the
+-- image restores the previously chosen frame rather than losing it.
+--
+-- The cover is an ordinary assets row (media_kind='image') so it inherits content-hash
+-- dedup, the local store, and the worker's URL resolution for free. The Library lists
+-- POSTS rather than assets, so a cover does not show up as a spurious library entry.
+--
+-- Purely additive: a nullable column with no CHECK, so SQLite can ALTER TABLE ADD COLUMN
+-- and no table rebuild is needed.
+--
+-- RENUMBERED 0012 -> 0016 (2026-08-04). This was authored as 0012_cover_asset.sql on the
+-- custom-cover-image branch while main was still at 0011; main then shipped its own 0012
+-- (channel_avatar) through 0015 (story_framing), so the original number collided.
+--
+-- schema_migrations is keyed by FILENAME, so any install that already applied this under
+-- the OLD name sees 0016 as pending and fails with "duplicate column name: cover_asset_id"
+-- -- the column is there, the bookkeeping just doesn't know it. A fresh clone is
+-- unaffected. Such an install reconciles the record once, with:
+--
+--   sqlite3 data/socialscheduler.db \
+--     "UPDATE schema_migrations SET version='0016_cover_asset.sql' \
+--      WHERE version='0012_cover_asset.sql';"
+--
+-- Verified on a sqlite3 .backup copy of the owner's live DB: migrate.py then reports
+-- "Pending: 0" and PRAGMA foreign_key_check is clean.
+
+ALTER TABLE assets ADD COLUMN cover_asset_id INTEGER REFERENCES assets(id);

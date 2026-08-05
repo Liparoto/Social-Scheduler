@@ -111,6 +111,7 @@ export interface Asset {
   story_mode: "blurred" | "crop";
   duration_ms: number | null;
   cover_frame_ms: number | null;
+  cover_asset_id: number | null;
   has_audio: number;
   created_at: string;
 }
