@@ -343,12 +343,47 @@ def test_build_plan_with_cover_asset_id_carries_cover_url_and_no_frame(conn, con
     post = db.get_post(conn, pub["post_id"])
     assets = db.get_ordered_assets(conn, pub["post_id"])
     plan = publisher._build_plan(
-        channel, post, assets, "https://tunnel.test", post["caption"], config, conn
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
     )
 
     assert plan["cover_url"] == "https://tunnel.test/assets/cover-1.jpg"
     # cover_url wins -> thumb_offset is omitted (None), even though cover_frame_ms=1500
     # is still stored on the asset for later (removing the cover restores it).
+    assert plan["cover_frame_ms"] is None
+
+
+def test_build_plan_cover_url_ignores_publish_path_and_uses_the_original(conn, config, make_publication):
+    """A cover must resolve to storage_path even when the row HAS a publish_path.
+
+    publish_path is a FEED conform, cropped into 4:5..1.91:1. A cover is deliberately
+    left at its own aspect ratio (Instagram center-crops to 9:16 itself), so serving the
+    feed derivative would silently mangle the framing the owner picked -- the exact
+    failure conform-cover.ts exists to prevent. Cover rows normally have publish_path
+    NULL, but content-hash dedup can return a row that was ALSO uploaded as a feed image,
+    so the resolution must not depend on that being NULL.
+    """
+    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    video_id = _reel_video_asset_id(conn, pub["post_id"])
+    cover_id = conn.execute(
+        """INSERT INTO assets (content_hash, media_kind, storage_path, publish_path, public_url)
+           VALUES (?, 'image', ?, ?, NULL)""",
+        ("cover-hash-dedup", "assets/cover-orig.jpg", "assets/cover-FEEDCROPPED.jpg"),
+    ).lastrowid
+    conn.execute(
+        "UPDATE assets SET cover_frame_ms = ?, cover_asset_id = ? WHERE id = ?",
+        (1500, cover_id, video_id),
+    )
+    conn.commit()
+
+    channel = db.get_channel(conn, pub["channel_id"])
+    post = db.get_post(conn, pub["post_id"])
+    assets = db.get_ordered_assets(conn, pub["post_id"])
+    plan = publisher._build_plan(
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
+    )
+
+    assert plan["cover_url"] == "https://tunnel.test/assets/cover-orig.jpg"
+    assert "FEEDCROPPED" not in plan["cover_url"]
     assert plan["cover_frame_ms"] is None
 
 
@@ -362,7 +397,7 @@ def test_build_plan_without_cover_asset_id_uses_thumb_offset_as_before(conn, con
     post = db.get_post(conn, pub["post_id"])
     assets = db.get_ordered_assets(conn, pub["post_id"])
     plan = publisher._build_plan(
-        channel, post, assets, "https://tunnel.test", post["caption"], config, conn
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
     )
 
     assert plan["cover_frame_ms"] == 777
@@ -380,7 +415,7 @@ def test_build_plan_dangling_cover_asset_id_falls_back_to_thumb_offset(conn, con
     post = db.get_post(conn, pub["post_id"])
     assets = db.get_ordered_assets(conn, pub["post_id"])
     plan = publisher._build_plan(
-        channel, post, assets, "https://tunnel.test", post["caption"], config, conn
+        channel, post, assets, "https://tunnel.test", post["caption"], config, conn=conn
     )
 
     assert plan["cover_url"] is None

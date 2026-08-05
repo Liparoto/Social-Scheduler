@@ -15,6 +15,7 @@ const landscape: Asset = {
   width: 4032, height: 3024, byte_size: 1000, publish_path: "pub/a.jpg",
   conform_mode: "crop", needs_review: 0, duration_ms: null, cover_frame_ms: null,
   has_audio: 0, created_at: "2026-08-04", story_path: null, story_mode: "blurred",
+  cover_asset_id: null,
 };
 
 const vertical: Asset = { ...landscape, width: 1320, height: 2346 };
