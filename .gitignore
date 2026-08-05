@@ -46,3 +46,6 @@ worker/venv/
 
 # Local isolated feature worktrees
 .worktrees/
+
+# Subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/
