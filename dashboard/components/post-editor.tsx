@@ -27,6 +27,7 @@ import { FramingButton } from "./framing-button";
 import { CoverFramePicker } from "./cover-frame-picker";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "./media-lightbox";
 import { UnmergeModal } from "./unmerge-modal";
+import { ExtractSlidesModal } from "./extract-slides-modal";
 import { PostSendsPanel } from "./post-sends-panel";
 import { ChannelAvatar } from "@/components/ui";
 
@@ -90,6 +91,7 @@ export function PostEditor({
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [unmergeOpen, setUnmergeOpen] = useState(false);
+  const [extractOpen, setExtractOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [kind, setKind] = useState<ContentKind>(post.content_kind);
@@ -414,32 +416,55 @@ export function PostEditor({
         </div>
       </section>
 
-      {/* Split a carousel back into separate posts — the inverse of merge. Deliberately NOT in
-          the destructive-red card below it: nothing is deleted, the photos are shared with the
-          new posts, and this post keeps its id and its history. */}
+      {/* Break a carousel up — the inverse of merge. Deliberately NOT in the destructive-red
+          card below it: nothing is deleted, the photos are shared with the new posts, and this
+          post keeps its id and its history. Both actions live together because they are the
+          same family of operation: all of it, or just the ones you pick. */}
       {isCarousel ? (
         <section className={card}>
-          <h3 className="mb-1 font-display text-sm font-semibold text-ink">
-            Split into separate posts
-          </h3>
+          <h3 className="mb-1 font-display text-sm font-semibold text-ink">Break this up</h3>
           <p className="mb-3 text-sm text-muted">
-            Turns this carousel into {assets.length} separate posts, one per photo. This post keeps
-            the first photo. No photos are deleted.
+            Split all {assets.length} photos into separate posts, or pull out just the ones you
+            pick and keep the rest together. No photos are deleted.
           </p>
-          <button
-            type="button"
-            onClick={() => setUnmergeOpen(true)}
-            disabled={isDirty || slideOrder.isDirty}
-            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
-          >
-            Split into separate posts…
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setUnmergeOpen(true)}
+              disabled={isDirty || slideOrder.isDirty}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+            >
+              Split into separate posts…
+            </button>
+            <button
+              type="button"
+              onClick={() => setExtractOpen(true)}
+              disabled={isDirty || slideOrder.isDirty}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+            >
+              Pull slides out…
+            </button>
+          </div>
           {isDirty || slideOrder.isDirty ? (
             <p className="mt-2 text-xs text-status-failed">
-              Save your changes first — splitting copies what&apos;s saved.
+              Save your changes first — both of these copy what&apos;s saved.
             </p>
           ) : null}
         </section>
+      ) : null}
+      {extractOpen ? (
+        <ExtractSlidesModal
+          postId={post.id}
+          slides={assets.map((a) => ({ assetId: a.id, mediaKind: a.media_kind }))}
+          onClose={() => setExtractOpen(false)}
+          onExtracted={() => {
+            setExtractOpen(false);
+            // Stay on this post — it survives, holding the slides that weren't pulled out.
+            // router.refresh() re-runs the server component so its slides, its type, and
+            // this card's counts all update.
+            startTransition(() => router.refresh());
+          }}
+        />
       ) : null}
       {unmergeOpen ? (
         <UnmergeModal
