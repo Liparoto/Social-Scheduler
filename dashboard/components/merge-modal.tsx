@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { SlideReorder, type Slide } from "@/components/slide-reorder";
+import { useModalFocusTrap } from "./use-modal-focus-trap";
 
 // Everything the modal needs about a selected post — a subset of library-view's PostLite,
 // kept narrow so this file doesn't have to import (and stay in sync with) the whole thing.
@@ -12,9 +13,6 @@ export interface MergeCandidatePost {
   asset_ids: number[]; // in this post's current slide order
   has_queued_publication: boolean; // scheduled/pending_approval — see lib/queries.ts
 }
-
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Review-and-confirm dialog for folding several selected Library posts into one carousel.
@@ -35,14 +33,6 @@ export function MergeModal({
   onMerged: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const previouslyFocused = useRef<HTMLElement | null>(null);
-  // Kept current via an effect (not a render-time assignment) so the mount effect below can
-  // read the latest onClose through .current without listing it as a dependency — writing a
-  // ref during render itself is flagged by the React Compiler's refs rule.
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  });
 
   const survivor = posts[0];
   const others = posts.slice(1);
@@ -90,53 +80,7 @@ export function MergeModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Focus in on open, trap Tab while open, restore focus + body scroll on close/unmount —
-  // mirrors media-lightbox.tsx exactly (see that file's comment for why onClose is read
-  // through a ref rather than closed over directly).
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-
-    const panel = panelRef.current;
-    const focusables = () =>
-      panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [];
-    (focusables()[0] ?? panel)?.focus();
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        e.preventDefault();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey) {
-        if (active === first || !panel?.contains(active)) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else if (active === last || !panel?.contains(active)) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previouslyFocused.current?.focus();
-    };
-  }, []);
+  useModalFocusTrap({ panelRef, onClose });
 
   async function confirm() {
     setError(null);

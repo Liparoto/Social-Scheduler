@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { videoPreviewSrc } from "@/lib/format";
 import { stepIndex } from "@/lib/lightbox-nav";
+import { useModalFocusTrap } from "./use-modal-focus-trap";
 
 /** The minimum an asset needs to be shown full-size — see media-lightbox-design.md. */
 export interface LightboxAsset {
@@ -13,9 +14,6 @@ export interface LightboxAsset {
   width: number | null;
   height: number | null;
 }
-
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
 
 /** Minimum horizontal drag, in px, before a touch swipe counts as a slide change. */
 const SWIPE_PX = 50;
@@ -239,22 +237,8 @@ export function MediaLightbox({
   onClose: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const previouslyFocused = useRef<HTMLElement | null>(null);
-  // The setup effect below must run ONCE per open, not on every parent re-render.
-  // Callers pass onClose as an inline arrow, so its identity changes on each render of
-  // the parent; depending on it directly tore the effect down and rebuilt it, which
-  // reset focus to the close button and discarded wherever the user had tabbed to.
-  // Reading it through a ref keeps the handler current with an empty dependency array.
   // Whether the viewer has pressed play yet, so the rewind-to-start below happens once.
   const hasPlayed = useRef(false);
-  const onCloseRef = useRef(onClose);
-  // Written in an effect, not during render: a render-phase ref write is unsafe under
-  // concurrent rendering, where a render can be started and thrown away. Runs after every
-  // render (no dependency array), so the handler stays as current as the old assignment
-  // made it — which is the whole point of the ref.
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  });
   const [index, setIndex] = useState(() => stepIndex(initialIndex, 0, assets.length));
   const [mediaError, setMediaError] = useState(false);
 
@@ -296,61 +280,22 @@ export function MediaLightbox({
     stepRef.current = step;
   });
 
-  // Focus in on open, trap Tab while open, restore focus + body scroll on close/unmount.
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-
-    const panel = panelRef.current;
-    const focusables = () =>
-      panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [];
-    (focusables()[0] ?? panel)?.focus();
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        // Arrow keys already mean "seek" inside a video player, and the player's own
-        // controls must keep working — only steal them when focus is elsewhere.
-        const target = e.target as HTMLElement | null;
-        if (target?.closest("video")) return;
-        if (stateRef.current.length < 2) return;
-        e.preventDefault();
-        stepRef.current(e.key === "ArrowLeft" ? -1 : 1);
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        e.preventDefault();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey) {
-        if (active === first || !panel?.contains(active)) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else if (active === last || !panel?.contains(active)) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previouslyFocused.current?.focus();
-    };
-  }, []);
+  useModalFocusTrap({
+    panelRef,
+    onClose,
+    // Arrow keys already mean "seek" inside a video player, and the player's own controls
+    // must keep working — only steal them when focus is elsewhere. Returning false lets the
+    // hook fall through to its Tab handling, which is what the inline version did.
+    onKeyDown: (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return false;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("video")) return true;
+      if (stateRef.current.length < 2) return true;
+      e.preventDefault();
+      stepRef.current(e.key === "ArrowLeft" ? -1 : 1);
+      return true;
+    },
+  });
 
   // Depending on `assets` itself would re-run this on every parent render: every caller
   // passes a fresh array literal, carousel or not, so the effect would fire a new
