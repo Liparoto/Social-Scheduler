@@ -71,6 +71,35 @@ def get_ordered_assets(conn: sqlite3.Connection, post_id: int) -> list[sqlite3.R
     ).fetchall()
 
 
+def claim_publication(conn: sqlite3.Connection, publication_id: int, now_iso: str) -> bool:
+    """Atomically take ownership of a due publication. True only if THIS call won it.
+
+    The WHERE clause is the entire point: the row moves to 'publishing' only from
+    'scheduled', so of any number of concurrent callers exactly one can succeed. SQLite
+    applies a single UPDATE atomically, so no explicit transaction is needed for the
+    test-and-set itself.
+
+    Claim BEFORE doing any work, never after. publish_one used to load the post and
+    assets and make an HTTP quota call while the row still read 'scheduled', and:
+
+      * the dashboard's merge/delete guards allow 'scheduled' through, so a merge could
+        CASCADE-delete the row mid-send — the worker's later writes then updated 0 rows
+        in silence, leaving a real Instagram post with no record of it;
+      * nothing stops two worker daemons running at once, and both would fetch the same
+        'scheduled' row and publish it.
+
+    is_held is re-checked here even though fetch_due_publications already filters it —
+    a hold applied between the fetch and the claim should still win.
+    """
+    cur = conn.execute(
+        "UPDATE publications SET status = 'publishing', updated_at = ? "
+        "WHERE id = ? AND status = 'scheduled' AND is_held = 0",
+        (now_iso, publication_id),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def update_publication(conn: sqlite3.Connection, publication_id: int, **fields) -> None:
     if not fields:
         return

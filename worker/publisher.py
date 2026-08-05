@@ -36,7 +36,10 @@ def _iso(dt: datetime) -> str:
 
 @dataclass
 class PublishOutcome:
+    # 'skipped' means the row was not claimable — another worker won it, or it was held
+    # or deleted between the due-fetch and the claim. Nothing was sent.
     result: str  # 'posted' | 'dry_run' | 'retry_scheduled' | 'failed' | 'rate_limited'
+                 # | 'skipped'
     detail: str
     plan: dict = field(default_factory=dict)
 
@@ -714,6 +717,14 @@ def publish_one(
         if logger:
             logger.info("[pub %s] %s", pub["id"], msg)
 
+    # 0. Claim the row BEFORE any other work — see db.claim_publication for why the
+    #    ordering is the whole fix. A dry run publishes nothing and must not take the
+    #    claim: it would leave a real row parked at 'publishing' for a send that never
+    #    happened.
+    if not dry_run and not db.claim_publication(conn, pub["id"], _iso(now)):
+        log("skipped: no longer claimable — another worker won it, or it was held/deleted")
+        return PublishOutcome("skipped", "not claimable: already claimed, held, or gone")
+
     # 1. Load + validate. Bad data/config is a terminal (non-retryable) failure.
     try:
         channel, post, assets = _load_targets(conn, pub)
@@ -767,8 +778,9 @@ def publish_one(
             log(f"quota check failed: {exc}")
             return _mark_failure(conn, pub, config, now, f"quota check: {exc}", terminal=False)
 
-    # 4. Publish for real.
-    db.update_publication(conn, pub["id"], status="publishing", updated_at=_iso(now))
+    # 4. Publish for real. The row is ALREADY 'publishing' — step 0 claimed it. Writing
+    #    it again here would be redundant, and re-adding that write would quietly
+    #    re-open the race by making step 0 look optional.
     try:
         media_id = _PUBLISHERS[plan["platform"]](client, plan, token, config, sleep_fn)
     except _NonRetryable as exc:
