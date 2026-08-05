@@ -609,7 +609,7 @@ test("each new post gets its own COPY of caption, variants, targets, tags and se
     cooldown_days: 45,
     targets: [{ channel_id: channel, surface: "story" }],
     tag_ids: [tag],
-    period_links: [{ periodId, mode: "in_season" }],
+    period_links: [{ periodId, mode: "green" }],
     caption_variants: [{ platform: null, body: "sunset", sort_order: 0 }],
   });
 
@@ -641,7 +641,7 @@ test("each new post gets its own COPY of caption, variants, targets, tags and se
   ]);
   assert.deepEqual(
     db.prepare("SELECT period_id, mode FROM post_periods WHERE post_id = ?").all(child),
-    [{ period_id: periodId, mode: "in_season" }]
+    [{ period_id: periodId, mode: "green" }]
   );
 });
 
