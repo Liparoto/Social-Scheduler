@@ -1263,3 +1263,90 @@ commit `a927704`; re-measured afterward at exactly 64×64 with the layers offset
   and can't measure layout. Both the stack-sizing bug and the entire lightbox interaction path
   were only catchable in a real browser because of this. If this area of the UI keeps growing, a
   jsdom-based suite would start paying for itself.
+
+---
+
+## Custom Reels cover image (2026-07-29, rebased and finished 2026-08-04)  `[x] done — not yet merged to main`
+
+**Design:** `docs/superpowers/specs/2026-07-29-custom-cover-image-design.md` · **Plan:**
+`docs/superpowers/plans/2026-07-29-custom-cover-image.md`
+
+The cover-frame picker could only choose a moment that already existed in the footage. This
+adds the other half the owner asked for: **upload a real image as a Reel's cover** — a title
+card, a branded frame, a better photo. Instagram supports it natively via `cover_url`, so this
+is plumbing rather than invention.
+
+**The trap the whole design exists to avoid.** 9:16 is 0.5625, and the existing image pipeline
+conforms uploads to the *feed* range of 0.8–1.91. A cover pushed through the normal upload path
+would be cropped to 0.8, mangling exactly the framing the owner chose, silently.
+`dashboard/lib/conform-cover.ts` is therefore a **separate** conform: sRGB JPEG stepped under
+8 MB, aspect ratio **never touched**, warning instead when the ratio isn't near 9:16. Meta
+center-crops a non-9:16 cover itself, and it is better to let the platform do that visibly than
+to crop locally and pretend the result was chosen.
+
+**One choice, not two fighting controls.** Meta's precedence is fixed — `cover_url` wins and
+`thumb_offset` is ignored — so the picker shows a single Frame/Image toggle, and
+`_build_plan` resolves it to exactly one field in the plan rather than sending both and leaning
+on Meta's behaviour. Setting an image leaves `cover_frame_ms` untouched and marks the scrubber
+as overridden rather than hiding it, so removing the image restores the previously chosen frame.
+
+- [x] `migrations/0016_cover_asset.sql` — `assets.cover_asset_id`, nullable, additive.
+- [x] `dashboard/lib/conform-cover.ts` + `setAssetCoverImage()` + `Asset.cover_asset_id`.
+- [x] `POST`/`DELETE /api/assets/[id]/cover-image` — conform, content-hash dedup, link/unlink.
+      `DELETE` unlinks only; it never deletes the asset row, since dedup means another post may
+      reference the same bytes.
+- [x] Worker: `create_video_container` gains `cover_url`; `_build_plan` carries `cover_url` **or**
+      `cover_frame_ms`, never both; a dangling `cover_asset_id` falls back rather than raising.
+- [x] `_resolve_rel` gains a **`cover` surface** resolving to `storage_path`, never `publish_path`
+      — see traps below.
+- [x] Frame-or-Image toggle in `cover-frame-picker.tsx`, with preview, Remove, and the ratio
+      warning surfaced.
+
+**Traps this exposed.**
+
+1. **Migration renumbering breaks installs that already applied it.** Authored as `0012` while
+   main was at `0011`; main then shipped its own 0012–0015. `schema_migrations` is keyed by
+   **filename**, so renaming to `0016` made it look pending again and fail with `duplicate
+   column name`. Fresh clones are unaffected; the owner's install needed a one-time
+   `UPDATE schema_migrations SET version=...`. Documented in the migration header.
+2. **A surface-aware `_resolve_rel` silently broke the cover.** The Stories work made
+   `_resolve_rel` prefer `publish_path` for the `feed` surface. The cover resolution was still
+   taking that default, so a cover row that *had* a `publish_path` would have published the
+   **feed-cropped** derivative — the exact mangling this feature exists to prevent. Cover rows
+   normally have `publish_path` NULL, but content-hash dedup can return a row that was also
+   uploaded as a feed image, so correctness must not depend on that.
+3. **`DRY_RUN=1` on the command line does nothing.** `worker/run.py` calls
+   `load_env(override=True)` every loop so `.env` can be toggled live — which means `.env`'s
+   `DRY_RUN=0` **overwrites** the environment variable you passed. An attempted dry run made
+   real Graph API calls and created a live container; nothing published only because the
+   container errored first. `DATABASE_PATH=<scratch>` protects the data, **not** the network.
+   Exercise publish behaviour via `_build_plan` directly or the test suite instead.
+
+**Verification.** `pytest worker/tests` 464 passed; `npm test` 52 + 258 = 310 passed;
+`tsc --noEmit` clean; `npm run lint` **0 errors** (13 pre-existing warnings, none in this
+branch's files); `test-conform-cover.mjs` 6/6 (dimensions unchanged, sRGB, ≤8 MB);
+`smoke-cover-image.mjs` all 8 scenarios. Migration tested both ways against a `sqlite3 .backup`
+copy — fresh DB 0001→0016 clean, and the already-applied case reproduced and fixed.
+
+Browser-verified against the real Reel (`/library/2`, asset 8) on the :3939 dev server with
+Playwright: a 9:16 cover uploads with **no** warning and preserved 1080×1920 dimensions; a 1:1
+cover produces exactly one warning naming the middle-9:16 crop and is left uncropped at
+1200×1200; the scrubber stays visible at `opacity 0.6` with an "Overridden by the uploaded
+image" badge and is **not** disabled; Remove restores it to full opacity with `cover_frame_ms`
+still 3900; re-uploading identical bytes deduped to the existing asset row rather than creating
+a new one; the lightbox `overlay` slot still renders. Console clean (0 errors, 0 warnings). All
+five theme tokens the picker uses resolve in **all 14 palettes** (7 families × light/dark);
+light-mode contrast 6.33:1 (warning) and 6.02:1 (badge). Test covers were removed through the
+app's own delete API, leaving the live DB at exactly its starting counts — 167 assets, 110
+posts, 25 publications — asset 8 back to `cover_frame_ms=3900` / `cover_asset_id` NULL, no
+files left in `data/assets/cover/`, `foreign_key_check` and `integrity_check` clean.
+
+**Deliberately out of scope:** changing the cover of an **already-published** Reel (Meta does
+not document whether it is possible); generating a cover (title cards, text overlay); covers
+for Threads or TikTok (no equivalent — TikTok has a timestamp, like `thumb_offset`); cropping
+the cover locally to 9:16.
+
+- [ ] **Follow-up:** `listAssetsWithUsage()` still doesn't know about `assets.cover_asset_id`,
+      so a linked cover shows on `/media` as "Unused" with a Delete button and counts toward the
+      reclaim total. The delete itself is safe — the foreign key rejects it — but the figure
+      overstates. (Same item noted under the `/media` work above.)
