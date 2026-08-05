@@ -25,6 +25,7 @@ import { PeriodAttach } from "./period-attach";
 import { FramingButton } from "./framing-button";
 import { CoverFramePicker } from "./cover-frame-picker";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "./media-lightbox";
+import { UnmergeModal } from "./unmerge-modal";
 import { PostSendsPanel } from "./post-sends-panel";
 import { ChannelAvatar } from "@/components/ui";
 
@@ -88,6 +89,7 @@ export function PostEditor({
   ).length;
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [unmergeOpen, setUnmergeOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [kind, setKind] = useState<ContentKind>(post.content_kind);
@@ -411,6 +413,40 @@ export function PostEditor({
         </div>
       </section>
 
+      {/* Split a carousel back into separate posts — the inverse of merge. Deliberately NOT in
+          the destructive-red card below it: nothing is deleted, the photos are shared with the
+          new posts, and this post keeps its id and its history. */}
+      {isCarousel ? (
+        <section className={card}>
+          <h3 className="mb-1 font-display text-sm font-semibold text-ink">
+            Split into separate posts
+          </h3>
+          <p className="mb-3 text-sm text-muted">
+            Turns this carousel into {assets.length} separate posts, one per photo. This post keeps
+            the first photo. No photos are deleted.
+          </p>
+          <button
+            type="button"
+            onClick={() => setUnmergeOpen(true)}
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken"
+          >
+            Split into separate posts…
+          </button>
+        </section>
+      ) : null}
+      {unmergeOpen ? (
+        <UnmergeModal
+          postId={post.id}
+          slideCount={assets.length}
+          onClose={() => setUnmergeOpen(false)}
+          onUnmerged={() => {
+            setUnmergeOpen(false);
+            // Stay on this post — it survives, and it is now a single. router.refresh() re-runs
+            // the server component so its slides, type, and the now-absent Split card all update.
+            startTransition(() => router.refresh());
+          }}
+        />
+      ) : null}
       {/* Delete post — guarded, irreversible */}
       <section className="rounded-card border border-status-failed/30 bg-surface p-5">
         <h3 className="mb-1 font-display text-sm font-semibold text-status-failed">Delete post</h3>
