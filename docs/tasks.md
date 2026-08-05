@@ -1359,8 +1359,8 @@ the cover locally to 9:16.
 
 Splitting a carousel back into singles was **explicitly out of scope** of the merge feature
 (2026-07-30). This is the return trip: take one carousel post and break it into one post per
-slide. The narrower case of pulling a *single* slide out and leaving the rest was scoped out
-during brainstorming and is **still open** — see the closing note at the end of this section.
+slide. The narrower case of pulling selected slides out and leaving the rest shipped
+separately on 2026-08-05 — see `docs/design-extract-slides.md`.
 
 Merge is the model to follow — same guard/transaction/modal shape — but unmerge is **not**
 symmetrical, and the asymmetries below are where the work actually is.
@@ -1449,8 +1449,8 @@ order of operations, then write `docs/design-unmerge-carousel.md`.
       and reclaim total stay correct.
 
 **Shipped 2026-08-05.** Design: `docs/design-unmerge-carousel.md`. Plan:
-`docs/plan-unmerge-carousel.md`. Full split only — pulling a *single* slide out and leaving the
-rest a carousel is still open.
+`docs/plan-unmerge-carousel.md`. Full split only; pulling selected slides out shipped
+separately the same day — see the Extract slides section below.
 
 Two decisions landed differently than the notes above guessed, both settled with the owner:
 
@@ -1465,6 +1465,57 @@ Verified in a real browser against a `sqlite3 .backup` copy of the live DB, neve
 itself: the happy path (6-slide carousel → 6 posts, `assets` and `post_assets` row counts
 unchanged), both 409 guards, dark and light themes, and — because Task 4 extracted the shared
 modal focus trap — the merge modal and the lightbox's arrow-key and `video[controls]` handling.
+
+---
+
+## Extract slides: pull selected photos out of a carousel  `[x] done`
+
+**Shipped 2026-08-05.** Design: `docs/design-extract-slides.md`. Plan:
+`docs/plan-extract-slides.md`. The narrower half of unmerge, deferred when the full split
+shipped earlier the same day.
+
+Pick one or more slides on the post screen and pull them out; each becomes its own post and
+the original keeps the rest. Both actions now live in one **"Break this up"** card.
+
+What it does:
+
+- Each selected slide becomes its own post, typed from its own `media_kind` (a video slide
+  becomes a Reel), carrying an independent **copy** of the caption, caption variants, channel
+  targets with `surface`, tags, seasons, `content_kind`, `content_status`, `cooldown_days`.
+- The original keeps every unselected slide, **renumbered contiguously from 0**, and is
+  retyped: 2+ left stays `carousel`, exactly 1 left becomes `single` or `reel`.
+- Assets stay shared. `assets` and `post_assets` row counts are unchanged, so `/media` usage
+  and reclaim figures are unaffected.
+
+Decisions settled with the owner during brainstorming:
+
+- Selecting several slides produces **one post each**, not one new carousel together.
+- Extracted posts **inherit** the content model rather than coming out bare.
+
+Three guards of its own on top of the five shared with the full split: nothing selected, a
+slide that is not in this post (a stale picker), and selecting *every* slide — which would
+leave the original with zero photos, so it names the full split instead of silently
+redirecting a differently-labelled button.
+
+**The trap this feature exists to survive:** the original now keeps *several* slides and they
+must come out contiguous. `UNIQUE (post_id, sort_order)` is checked per-row and immediately,
+so renumbering in place collides the moment a survivor moves onto a number a later survivor
+still holds. The full split sidestepped this by rebuilding a single row at 0; extraction
+cannot, so it deletes every join row and rebuilds the keepers.
+
+Two refactors landed first, each with the existing tests unedited and green as proof they were
+inert: guards 1-5 moved into a shared `checkRestructurable` prelude, and the
+post-creation-with-content-model block became `spawnPostsFromSlides`, so the two operations
+cannot drift on what they copy.
+
+Verified in a real browser against a `sqlite3 .backup` copy of the live DB, never the live DB:
+pulling slides 2 and 4 out of a 4-slide carousel left `0→19, 1→21` (gap closed), produced two
+`single` drafts in carousel order, and left `assets`/`post_assets` at 167/167 with
+`foreign_key_check` clean. Guard 8 blocks client-side too. Dark mode measured, not eyeballed:
+the dialog's background matches the page's exactly.
+
+Still open: reordering while extracting (reorder is already its own control), and extracting
+several slides into one new carousel together.
 
 ---
 
