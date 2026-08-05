@@ -4,7 +4,7 @@
 
 **Goal:** Open a carousel post and split it into one post per slide — the original survives and keeps slide 1, each remaining slide becomes a new draft post carrying a copy of the caption, channels, tags, and seasons.
 
-**Architecture:** Four layers, mirroring the shipped merge feature exactly. A pure planning module (`lib/unmerge-plan.ts`) holds every guard and imports no runtime code, so the whole rejection chain is unit-testable without SQLite. One `.immediate()` transaction (`unmergeCarousel` in `lib/queries.ts`) turns an approved plan into writes. A thin route passes through. A confirm modal fronts it.
+**Architecture:** Four layers, mirroring the shipped merge feature exactly. A pure planning module (`lib/unmerge-plan.ts`) holds every guard and imports no runtime code, so the whole rejection chain is unit-testable without SQLite. One `.immediate()` transaction (`unmergeCarousel` in `lib/queries.ts`) turns an approved plan into writes. A thin route passes through. A confirm modal fronts it. Five tasks, because the modal is the third to need the same focus trap, so Task 4 extracts that into a shared hook before Task 5 consumes it.
 
 **Tech Stack:** Next.js 16.2.11 (App Router), React 19.2.4, TypeScript, better-sqlite3 ^13.0.1, `node --test` (the runner already wired up in `dashboard/package.json`).
 
@@ -34,6 +34,9 @@
 | `dashboard/lib/queries.unmerge.test.ts` | **new.** The transaction against a real migrated DB. |
 | `dashboard/app/api/posts/[id]/unmerge/route.ts` | **new.** Thin passthrough. No guards live here. |
 | `dashboard/test/unmerge-route.test.ts` | **new.** Status codes and body shape through the real handler. |
+| `dashboard/components/use-modal-focus-trap.ts` | **new.** The focus trap shared by every modal — extracted from the two existing copies. |
+| `dashboard/components/media-lightbox.tsx` | **modify.** Convert to the shared hook. |
+| `dashboard/components/merge-modal.tsx` | **modify.** Convert to the shared hook. |
 | `dashboard/components/unmerge-modal.tsx` | **new.** Confirm dialog. Exports `splitSummary` so the copy is testable. |
 | `dashboard/test-ui/unmerge-modal-ui.test.ts` | **new.** `splitSummary` pluralization. |
 | `dashboard/components/post-editor.tsx` | **modify.** The action, rendered only for a carousel with 2+ slides. |
@@ -1248,7 +1251,203 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: The UI
+## Task 4: Extract the shared modal focus trap
+
+**Files:**
+- Create: `dashboard/components/use-modal-focus-trap.ts`
+- Modify: `dashboard/components/merge-modal.tsx`
+- Modify: `dashboard/components/media-lightbox.tsx`
+
+**Interfaces:**
+- Produces, for Task 5: `useModalFocusTrap({ panelRef, onClose, onKeyDown? }): void`
+
+**This is a pure refactor. No behaviour changes.** `merge-modal.tsx` and `media-lightbox.tsx` each carry their own copy of the same ~45-line focus-trap effect, and the unmerge modal in Task 5 would make three. Three copies is where it gets extracted. The two existing files must behave *identically* afterwards — if you find yourself improving the trap while moving it, stop and move it unchanged.
+
+**The one real difference between the two copies:** the lightbox also handles `ArrowLeft`/`ArrowRight`, checked **after** Escape and **before** Tab. The hook takes an optional `onKeyDown` for exactly that slot. `merge-modal.tsx` does not pass one.
+
+**Why there is no unit test for this task:** the hook needs a live DOM (`document.activeElement`, `document.body.style`, a real event listener), and this project's test harness has no jsdom — which is why neither existing copy is unit-tested today. `npx tsc --noEmit` and `npm run lint` are the automated gates here; behaviour is verified in the browser at **Task 5, step 7**, which exercises all three modals — the two this task refactors and the new one. Do not add a test framework for this.
+
+- [ ] **Step 1: Write the hook**
+
+Create `dashboard/components/use-modal-focus-trap.ts`:
+
+```ts
+"use client";
+
+import { useEffect, useRef } from "react";
+
+// Every focusable thing a modal panel can contain. Shared so the trap, the initial focus,
+// and the Tab cycling all agree on what "focusable" means — they broke apart once when only
+// one of the three was updated.
+export const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The behaviour every modal in this app shares: focus the first control on open, keep Tab
+ * inside the panel, close on Escape, lock body scroll while open, and put focus back where
+ * it was on close.
+ *
+ * Extracted from media-lightbox.tsx and merge-modal.tsx, which had it verbatim twice.
+ *
+ * `onClose` and `onKeyDown` are read through refs rather than closed over, so the listener
+ * installs ONCE on mount and never needs re-binding when the caller re-renders with new
+ * callbacks. (Writing a ref during render is flagged by the React Compiler's refs rule, so
+ * both are updated in an effect instead.)
+ *
+ * @param onKeyDown Optional extra key handling, consulted AFTER Escape and BEFORE Tab.
+ *                  Return true to say "handled — stop here". The lightbox uses this for
+ *                  ArrowLeft/ArrowRight; a plain confirm dialog passes nothing.
+ */
+export function useModalFocusTrap({
+  panelRef,
+  onClose,
+  onKeyDown,
+}: {
+  panelRef: React.RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+  onKeyDown?: (e: KeyboardEvent) => boolean;
+}): void {
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const onKeyDownRef = useRef(onKeyDown);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onKeyDownRef.current = onKeyDown;
+  });
+
+  useEffect(() => {
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+
+    const panel = panelRef.current;
+    const focusables = () =>
+      panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [];
+    (focusables()[0] ?? panel)?.focus();
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      // The caller's slot: after Escape, before Tab. Exactly where the lightbox's arrow
+      // handling sat before this was extracted.
+      if (onKeyDownRef.current?.(e)) return;
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !panel?.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel?.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused.current?.focus();
+    };
+    // Mount-only, deliberately: panelRef is a stable ref object, and both callbacks are read
+    // through refs above. Re-running would tear down and re-install the listener on every
+    // parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+```
+
+> If `npm run lint` does **not** complain about the empty dependency array, delete the `eslint-disable-next-line` comment — an unnecessary disable is itself a lint error under some configs, and this project runs at 0.
+
+- [ ] **Step 2: Convert `merge-modal.tsx`**
+
+In `dashboard/components/merge-modal.tsx`:
+
+1. Change the React import from `import { useEffect, useRef, useState } from "react";` to `import { useRef, useState } from "react";`
+2. Add `import { useModalFocusTrap } from "./use-modal-focus-trap";`
+3. Delete the local `FOCUSABLE_SELECTOR` const.
+4. Delete the `previouslyFocused` ref, the `onCloseRef` ref, the `useEffect` that syncs `onCloseRef`, and the entire focus-trap `useEffect` (the one ending `}, []);` with the comment "Focus in on open, trap Tab while open…").
+5. Keep `const panelRef = useRef<HTMLDivElement>(null);` and, in its place, call:
+
+```tsx
+useModalFocusTrap({ panelRef, onClose });
+```
+
+- [ ] **Step 3: Convert `media-lightbox.tsx`**
+
+In `dashboard/components/media-lightbox.tsx`, the same conversion, plus the arrow keys:
+
+1. Drop `useEffect` from the React import **only if** nothing else in the file still uses it — the file has other effects, so check before editing the import.
+2. Add `import { useModalFocusTrap, FOCUSABLE_SELECTOR } from "./use-modal-focus-trap";` — import `FOCUSABLE_SELECTOR` only if something else in the file still references it; otherwise import just the hook and delete the local const.
+3. Delete the `previouslyFocused` ref, the `onCloseRef` ref, the effect that syncs `onCloseRef`, and the whole focus-trap `useEffect` at lines ~299-353.
+4. Keep `panelRef`, `stepRef` and `stateRef` exactly as they are, and replace the deleted effect with:
+
+```tsx
+useModalFocusTrap({
+  panelRef,
+  onClose,
+  // Arrow keys already mean "seek" inside a video player, and the player's own controls
+  // must keep working — only steal them when focus is elsewhere. Returning false lets the
+  // hook fall through to its Tab handling, which is what the inline version did.
+  onKeyDown: (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return false;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("video")) return true;
+    if (stateRef.current.length < 2) return true;
+    e.preventDefault();
+    stepRef.current(e.key === "ArrowLeft" ? -1 : 1);
+    return true;
+  },
+});
+```
+
+> Note the two `return true` lines for the "ignore this arrow key" cases. The original `return`ed out of the handler entirely, so falling through to Tab handling would be a behaviour change — and an arrow key is never a Tab, so returning true (handled) is what preserves it.
+
+- [ ] **Step 4: Verify nothing else used the deleted constants**
+
+```bash
+cd dashboard && grep -rn "FOCUSABLE_SELECTOR\|previouslyFocused\|onCloseRef" components/ app/ lib/
+```
+
+Expected: matches **only** in `components/use-modal-focus-trap.ts`. Any match in another file is a leftover — remove it.
+
+- [ ] **Step 5: Run the full check suite**
+
+```bash
+cd dashboard && npm test && npx tsc --noEmit && npm run lint
+```
+
+Expected: all pass, **0 errors** from each, and the test count is **unchanged from the previous task** — this is a refactor, so it neither adds nor removes tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add dashboard/components/use-modal-focus-trap.ts dashboard/components/merge-modal.tsx dashboard/components/media-lightbox.tsx
+git commit -m "refactor(ui): extract the shared modal focus trap
+
+merge-modal and media-lightbox carried the same ~45-line trap verbatim,
+and the unmerge modal would have made three. Behaviour is unchanged; the
+lightbox's arrow-key handling moves into the hook's optional onKeyDown
+slot, in the same position it occupied inline.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+## Task 5: The UI
 
 **Files:**
 - Create: `dashboard/components/unmerge-modal.tsx`
@@ -1258,6 +1457,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes from Task 3: `POST /api/posts/:id/unmerge`.
+- Consumes from Task 4: `useModalFocusTrap({ panelRef, onClose })` from `./use-modal-focus-trap`.
 - Produces: `UnmergeModal({ postId, slideCount, onClose, onUnmerged })` and `splitSummary(slideCount): string`.
 
 **Why `splitSummary` is exported separately:** the modal renders through `createPortal`, which needs a real `document` and so cannot go through `renderToStaticMarkup` — the same reason `merge-modal.tsx` has no UI test. Pulling the one piece of computed copy into a pure function makes the part that can actually be wrong (pluralization, the count) testable without a browser. The rest of the modal is verified in Playwright at step 7.
@@ -1306,11 +1506,9 @@ Create `dashboard/components/unmerge-modal.tsx`:
 ```tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-
-const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+import { useModalFocusTrap } from "./use-modal-focus-trap";
 
 /**
  * The modal's one piece of computed copy, pulled out so it can be tested without a DOM —
@@ -1330,8 +1528,9 @@ export function splitSummary(slideCount: number): string {
  * until POST /api/posts/[id]/unmerge succeeds — this holds no draft state of its own, because
  * there is nothing to choose: the split is total and the existing slide order is kept.
  *
- * Focus handling mirrors merge-modal.tsx and media-lightbox.tsx exactly (see media-lightbox
- * for why onClose is read through a ref rather than closed over directly).
+ * Focus, Escape, Tab cycling and body-scroll locking all come from useModalFocusTrap, the
+ * same hook merge-modal.tsx and media-lightbox.tsx use. No extra keys here — a confirm
+ * dialog has nothing to navigate.
  */
 export function UnmergeModal({
   postId,
@@ -1345,59 +1544,10 @@ export function UnmergeModal({
   onUnmerged: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const previouslyFocused = useRef<HTMLElement | null>(null);
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  });
-
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-
-    const panel = panelRef.current;
-    const focusables = () =>
-      panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [];
-    (focusables()[0] ?? panel)?.focus();
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) {
-        e.preventDefault();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey) {
-        if (active === first || !panel?.contains(active)) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else if (active === last || !panel?.contains(active)) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previouslyFocused.current?.focus();
-    };
-  }, []);
+  useModalFocusTrap({ panelRef, onClose });
 
   async function confirm() {
     setError(null);
@@ -1558,7 +1708,13 @@ Then, in order:
 9. Open one of the new posts and confirm it shows one photo and the inherited caption.
 10. **Negative case:** schedule a send on another throwaway carousel, then open it and click Split. `browser_snapshot` — confirm the modal shows the red error text *"That carousel has a send in the queue. Cancel or hold that send first, then split."* and that the post is **unchanged**.
 11. **Theme check:** `browser_navigate` to the post page, switch to a dark theme in the theme controls, `browser_take_screenshot` — confirm the Split card and modal are legible. Repeat for one light theme.
-12. **Clean up** the throwaway posts and assets.
+
+**Task 4 regression checks — the focus trap was refactored under two shipped modals, so both must still work:**
+
+12. **Merge modal:** go to `/library`, multi-select two throwaway single-image drafts, open the merge modal. Confirm it opens with focus inside it, `Tab` cycles within the dialog rather than escaping to the page behind, `Escape` closes it, and focus returns to the control that opened it. Do **not** confirm the merge.
+13. **Lightbox arrow keys** — the one behaviour the refactor could plausibly break: open a carousel post, click a photo to open the lightbox, press `ArrowRight` and `ArrowLeft` and confirm it steps between slides. Then `Escape` to close and confirm focus is restored.
+14. **Lightbox arrows inside a video:** open a post with a video, click into the video player, press `ArrowLeft` — confirm it seeks the video rather than changing slides. This is the `target?.closest("video")` branch, and it is the easiest one to get backwards when moving it into the hook.
+15. **Clean up** the throwaway posts and assets.
 
 Record the outcome of each numbered step. If any fails, fix it and re-run from step 2.
 
