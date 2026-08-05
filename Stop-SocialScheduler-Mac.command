@@ -76,7 +76,10 @@ fi
 # fallback, it's required: `npm run dev` spawns the actual Next.js server as a
 # child, and killing npm can leave that child holding the port.
 DASH_PID="$(live_pid "$RUN_DIR/dashboard.pid")"
-PORT_PIDS="$(lsof -ti "tcp:$PORT" 2>/dev/null)"
+# -sTCP:LISTEN matters: without it lsof also returns every CLIENT connected to the
+# port — a browser tab with the dashboard open, for instance — and the kill/kill -9
+# below would take those down too. Only the process actually LISTENING is ours.
+PORT_PIDS="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)"
 
 # Say it once, up front, if either path found something. Killing the npm wrapper
 # often frees the port before the sweep runs, so keying the message off the sweep
@@ -96,10 +99,10 @@ fi
 
 # ---- 4. Give things a moment, then insist if anything is still holding the port. ----
 for _ in 1 2 3 4 5; do
-  [ -z "$(lsof -ti "tcp:$PORT" 2>/dev/null)" ] && break
+  [ -z "$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)" ] && break
   sleep 1
 done
-PORT_PIDS="$(lsof -ti "tcp:$PORT" 2>/dev/null)"
+PORT_PIDS="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)"
 if [ -n "$PORT_PIDS" ]; then
   # shellcheck disable=SC2086
   kill -9 $PORT_PIDS 2>/dev/null

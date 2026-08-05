@@ -34,10 +34,12 @@ chmod +x "$BIN_DIR/worker.run"
 AUTO_SECS=2
 FAILED=0
 
-start_watchdog() {  # $1 = WORKER_PID
+start_watchdog() {  # $1 = WORKER_PID, $2 = optional absolute deadline epoch
   local WORKER_PID="$1"
+  local DEADLINE_EPOCH="${2:-$(( $(date +%s) + AUTO_SECS ))}"
+  local WATCH_POLL=1
   (
-    sleep "$AUTO_SECS"
+    while [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ]; do sleep "$WATCH_POLL"; done
     still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
     if [ "$still_ours" = "$WORKER_PID" ]; then
       if ps -p "$WORKER_PID" -o command= 2>/dev/null | grep -q "worker\.run"; then
@@ -87,6 +89,20 @@ check "NEW worker.pid preserved"          "$NEW"  "$(cat "$RUN_DIR/worker.pid" 2
 check "NEW watchdog.pid preserved"        "new-wd" "$(cat "$RUN_DIR/watchdog.pid" 2>/dev/null)"
 check "NEW worker.deadline preserved"     "new-deadline" "$(cat "$RUN_DIR/worker.deadline" 2>/dev/null)"
 kill "$NEW" 2>/dev/null
+
+echo
+echo "TEST 3 — deadline already in the past (what waking from system sleep looks like)"
+# The old code slept a fixed countdown, so a Mac that slept through the deadline left the
+# worker running for hours past the advertised time. Polling an ABSOLUTE epoch means a
+# watchdog that wakes late fires at once instead of restarting its countdown.
+"$BIN_DIR/worker.run" >/dev/null 2>&1 & LATE=$!; disown
+echo "$LATE" > "$RUN_DIR/worker.pid"
+echo "wd" > "$RUN_DIR/watchdog.pid"; echo "deadline" > "$RUN_DIR/worker.deadline"
+check "  (precondition) worker is up"     "alive" "$(alive $LATE)"
+start_watchdog "$LATE" "$(( $(date +%s) - 3600 ))"   # deadline passed an hour ago
+sleep 3
+check "late watchdog stopped it promptly" "dead"  "$(alive $LATE)"
+check "worker.pid removed"                "gone"  "$([ -f "$RUN_DIR/worker.pid" ] && echo present || echo gone)"
 
 rm -rf "$RUN_DIR" "$BIN_DIR"
 echo

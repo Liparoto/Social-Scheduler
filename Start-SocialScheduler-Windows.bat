@@ -181,8 +181,28 @@ if "%MODE%"=="live" (
   if defined DEADLINE >"!RUN_DIR!\worker.deadline" echo !DEADLINE!
 
   REM The watchdog: waits, then stops the worker and clears its bookkeeping.
+  REM
+  REM It must only ever act on ITS OWN worker. A watchdog can wake long after the
+  REM deadline -- a sleeping machine stretches `timeout` the same way it stretches the
+  REM macOS `sleep` -- by which point the owner may have stopped and restarted
+  REM everything. Acting unconditionally then deletes the CURRENT worker's pid files:
+  REM leaving a worker publishing for real that Stop can no longer find, since Stop
+  REM reads worker.pid — and `taskkill /F` would force-kill a stale PID number that
+  REM Windows may since have recycled onto an unrelated process.
+  REM
+  REM Guard: worker.pid must still name this watchdog's own worker, or it exits
+  REM quietly. Mirrors the same guard in Start-SocialScheduler-Mac.command, which is
+  REM covered by scripts/test-watchdog-guard.sh.
+  REM
+  REM WARNING - UNTESTED: written on macOS with no Windows machine available. The logic mirrors
+  REM the tested shell version, but verify on Windows before relying on it. If the guard
+  REM ever fails to match, the watchdog simply never stops the worker — so a broken
+  REM guard shows up as "the worker outlived its deadline", not as anything destructive.
   > "!RUN_DIR!\run-watchdog.cmd" echo @echo off
   >>"!RUN_DIR!\run-watchdog.cmd" echo timeout /t !AUTO_SECS! /nobreak ^>NUL
+  >>"!RUN_DIR!\run-watchdog.cmd" echo set "STILL_OURS="
+  >>"!RUN_DIR!\run-watchdog.cmd" echo if exist "!RUN_DIR!\worker.pid" set /p STILL_OURS=^<"!RUN_DIR!\worker.pid"
+  >>"!RUN_DIR!\run-watchdog.cmd" echo if not "%%STILL_OURS%%"=="!WORKER_PID!" exit /b 0
   >>"!RUN_DIR!\run-watchdog.cmd" echo taskkill /PID !WORKER_PID! /T /F ^>NUL 2^>^&1
   >>"!RUN_DIR!\run-watchdog.cmd" echo del /q "!RUN_DIR!\worker.pid" "!RUN_DIR!\watchdog.pid" "!RUN_DIR!\worker.deadline" ^>NUL 2^>^&1
 

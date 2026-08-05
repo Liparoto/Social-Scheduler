@@ -187,8 +187,16 @@ if [ "$MODE" = "live" ]; then
     ''|0|*[!0-9]*) AUTO_SECS=43200; HOURS=12 ;;
   esac
 
-  DEADLINE="$(python3 -c "import datetime; print((datetime.datetime.now() + datetime.timedelta(seconds=$AUTO_SECS)).strftime('%Y-%m-%d %H:%M'))")"
+  # An ABSOLUTE wake time, not a countdown. `sleep` is naive about the wall clock and
+  # macOS suspends it while the Mac is asleep, so `sleep $AUTO_SECS` silently stretches:
+  # the worker kept running hours past the time this very file advertised. Storing the
+  # epoch and polling the clock keeps worker.deadline honest to within WATCH_POLL
+  # seconds, across any number of sleep/wake cycles. The displayed string is derived
+  # FROM the epoch so the two can never disagree.
+  DEADLINE_EPOCH="$(python3 -c "import time; print(int(time.time()) + $AUTO_SECS)")"
+  DEADLINE="$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($DEADLINE_EPOCH).strftime('%Y-%m-%d %H:%M'))")"
   echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
+  WATCH_POLL=30
 
   # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
   #
@@ -205,7 +213,7 @@ if [ "$MODE" = "live" ]; then
   # else — or is gone — another launch has taken over and this watchdog is obsolete, so
   # it exits quietly and touches nothing.
   (
-    sleep "$AUTO_SECS"
+    while [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ]; do sleep "$WATCH_POLL"; done
     still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
     if [ "$still_ours" = "$WORKER_PID" ]; then
       # The files are ours, so clean them up either way. Only SIGNAL the PID if it is
