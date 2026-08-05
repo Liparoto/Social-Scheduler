@@ -198,6 +198,19 @@ if [ ! -d ".venv" ]; then
   echo
 fi
 
+# ---- 5c. Make sure cloudflared is here (it delivers your media to Meta). ----
+#
+# Deliberately unconditional, not gated on DRY_RUN=0. The old gate meant a fresh clone —
+# which ships DRY_RUN=1 — was never even warned, and only found out it was missing when
+# its first REAL publish failed. Getting it now, while we are already installing things,
+# means going live later is just a flag change. It is a no-op once installed, and a
+# failure here is never fatal: composing and dry runs need no tunnel.
+#
+# Run with the venv's Python, not the system one, because it needs certifi: python.org's
+# macOS build trusts no certificates until you run its separate Install Certificates
+# step, and without that the download fails TLS verification against GitHub.
+.venv/bin/python -m worker.cloudflared_setup
+
 # ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
 PORT=3939
 RUN_DIR="data/run"
@@ -233,9 +246,11 @@ fi
 DRY_RUN="$(env_value DRY_RUN)"
 KILL_SWITCH="$(env_value KILL_SWITCH)"
 
-if [ "$DRY_RUN" = "0" ] && ! command -v cloudflared >/dev/null 2>&1; then
-  echo "⚠️  cloudflared isn't installed — it's needed to deliver your images to Meta for REAL posts."
-  echo "    Install it once with:  brew install cloudflared"
+if [ "$DRY_RUN" = "0" ] && ! command -v cloudflared >/dev/null 2>&1 \
+   && [ ! -x "data/bin/cloudflared" ]; then
+  echo "⚠️  cloudflared isn't available — it's needed to deliver your media to Meta for REAL posts."
+  echo "    The step above tried to install it and couldn't; check your internet connection"
+  echo "    and run this again, or install it with:  brew install cloudflared"
   echo
 fi
 

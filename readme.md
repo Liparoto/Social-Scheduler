@@ -57,8 +57,11 @@ Nothing personal is in this repo — no credentials, no database, no images. You
 - **Windows:** double-click **`Start-SocialScheduler-Windows.bat`**.
 
 On first run it creates your `.env` from the template, prepares the database, and installs
-everything (dashboard deps **and** the worker's Python environment). Every run it re-checks the
-database so new updates apply automatically. Then it asks what you want to do:
+everything (dashboard deps, the worker's Python environment, **and** `cloudflared` — the small
+Cloudflare program that lets Meta fetch your media at publish time). Nothing to install by hand
+and no Cloudflare account: it downloads into `data/bin/`, and if you already have your own copy
+it uses that instead. Every run it re-checks the database so new updates apply automatically.
+Then it asks what you want to do:
 
 - **1) Compose only** — opens the dashboard at `http://localhost:3939`; the worker never runs, so
   **nothing can post**. This is the default and is always safe.

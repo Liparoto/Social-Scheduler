@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .asset_server import AssetServer
+from .cloudflared_setup import repo_root, vendored_path
 from .config import Config
 
 _URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
@@ -44,6 +45,27 @@ _PROBE_CTX.verify_mode = ssl.CERT_NONE
 
 class TunnelError(RuntimeError):
     """The tunnel could not be established (missing binary, timeout, crash)."""
+
+
+def resolve_binary(configured: str, root: Path | None = None) -> str | None:
+    """Find a cloudflared to run, or None. Absolute path where possible.
+
+    Order: whatever CLOUDFLARED_PATH names (on PATH or as a literal path), then this
+    install's own copy under data/bin, which the launcher downloads on first run. The
+    fallback is what lets a fresh clone publish with no manual install — and returning
+    an absolute path is what lets the launchd-managed worker find it at all, since
+    launchd's minimal PATH does not include Homebrew.
+    """
+    exe = shutil.which(configured)
+    if exe:
+        return exe
+    # is_file, not exists: CLOUDFLARED_PATH pointing at the *folder* cloudflared lives in
+    # is an easy mistake, and exists() would accept it and then fail inside Popen with
+    # IsADirectoryError instead of the readable TunnelError below. Path("") is "." too.
+    if configured and Path(configured).is_file():
+        return configured
+    local = vendored_path(root or repo_root())
+    return str(local) if local.exists() else None
 
 
 def parse_tunnel_url(text: str) -> str | None:
@@ -100,12 +122,13 @@ class CloudflaredTunnel:
         self.base_url: str | None = None
 
     def start(self) -> str:
-        exe = shutil.which(self.binary) or (self.binary if Path(self.binary).exists() else None)
+        exe = resolve_binary(self.binary)
         if exe is None:
             raise TunnelError(
-                f"'{self.binary}' not found. Install it once: `brew install cloudflared` "
-                "(macOS) or download from "
-                "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+                f"'{self.binary}' not found. It normally installs itself the first time "
+                "you run Start-SocialScheduler — run that again, or install it yourself "
+                "with `brew install cloudflared` (macOS) or from "
+                "https://github.com/cloudflare/cloudflared/releases/latest"
             )
 
         self._proc = subprocess.Popen(

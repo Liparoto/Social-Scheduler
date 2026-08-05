@@ -87,6 +87,18 @@ if not exist ".venv" (
   echo.
 )
 
+REM ---- 5c. Make sure cloudflared is here (it delivers your media to Meta). ----
+REM
+REM Deliberately unconditional, not gated on DRY_RUN=0. The old gate meant a fresh clone -
+REM which ships DRY_RUN=1 - was never even warned, and only found out it was missing when
+REM its first REAL publish failed. Getting it now, while we are already installing things,
+REM means going live later is just a flag change. It is a no-op once installed, and a
+REM failure here is never fatal: composing and dry runs need no tunnel.
+REM
+REM Run with the venv's Python, not the system one, because it needs certifi for TLS
+REM verification against GitHub (see the note in worker/cloudflared_setup.py).
+".venv\Scripts\python" -m worker.cloudflared_setup
+
 REM ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
 set PORT=3939
 set "RUN_DIR=%~dp0data\run"
@@ -126,9 +138,11 @@ call :env_value KILL_SWITCH KILL_SWITCH
 
 if "!DRY_RUN!"=="0" (
   where cloudflared >nul 2>nul
-  if errorlevel 1 (
-    echo [!] cloudflared isn't installed - it's needed to deliver your images to Meta for REAL posts.
-    echo     Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+  if errorlevel 1 if not exist "data\bin\cloudflared.exe" (
+    REM [^!] not [!] — with delayed expansion on, a lone ! is swallowed and prints as [].
+    echo [^!] cloudflared isn't available - it's needed to deliver your media to Meta for REAL posts.
+    echo     The step above tried to install it and couldn't; check your internet connection
+    echo     and run this again, or get it from https://github.com/cloudflare/cloudflared/releases/latest
     echo.
   )
 )
@@ -219,7 +233,7 @@ if defined READY (
   start "" "http://localhost:%PORT%"
   echo [OK] Running at http://localhost:%PORT%
 ) else (
-  echo [!] The dashboard didn't start within 90 seconds.
+  echo [^!] The dashboard didn't start within 90 seconds.
   echo     Check data\logs\dashboard.log for the reason.
   echo     If it starts later, open http://localhost:%PORT% yourself.
 )

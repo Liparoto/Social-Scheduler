@@ -1591,3 +1591,44 @@ advancing on the 30s poll.
       capability gap, not hidden in the code: launchd can also *restart* a crashed worker
       (`KeepAlive`); `schtasks` has no equivalent flag, so Windows gets start-at-logon only
       and a crashed worker stays down until the next logon.
+
+---
+
+## Phase: cloudflared installs itself (2026-08-05) — SHIPPED
+
+Reported from Windows: a fresh install never sets up cloudflared, so the person has to
+figure it out themselves. It applied to macOS too, and was worse than it looked — the
+launchers only warned when `DRY_RUN=0`, and a fresh clone ships `DRY_RUN=1`, so a new
+install got **no warning at all** and only found out when its first REAL publish failed.
+
+Design: `docs/superpowers/specs/2026-08-05-cloudflared-autoinstall-design.md`
+
+- [x] `worker/cloudflared_setup.py` — detects OS/arch, reads Cloudflare's latest GitHub
+      release, downloads to a temp file, extracts (`.tgz` on macOS, bare `.exe` on
+      Windows), `chmod +x`, proves it runs with `--version`, and only THEN moves it into
+      `data/bin/`. Idempotent: a working binary short-circuits before any network call.
+- [x] A present-but-broken binary counts as missing, so a truncated download self-heals.
+- [x] An existing system install (e.g. `brew install cloudflared`) is used as-is —
+      nothing is downloaded and nobody's setup gets overridden.
+- [x] `worker/tunnel.py` — `resolve_binary()`: PATH → literal path → `data/bin` copy.
+      Returns an **absolute** path, which also kills the launchd landmine recorded
+      earlier in this file: launchd's minimal PATH excludes Homebrew, so a bare
+      `cloudflared` never resolved for the autostarted worker.
+- [x] Both launchers run it in the first-run block, **unconditionally** — the `DRY_RUN=0`
+      gate is precisely what failed. Non-fatal: composing and dry runs need no tunnel.
+- [x] `.env.example` / `readme.md` — `CLOUDFLARED_PATH` is now optional and commented out;
+      the "one-time setup: brew install cloudflared" instruction is gone.
+
+**The certificate trap (cost a full debugging cycle, worth recording):** the first real
+download died with `CERTIFICATE_VERIFY_FAILED`. python.org's macOS Python ships **no CA
+store** — it depends on a separate "Install Certificates.command" almost nobody runs — so
+stdlib `urllib` cannot verify github.com. The rest of the worker never hit this because
+`requests` bundles `certifi`. Fixed by using certifi's bundle when importable and running
+the module with the **venv** Python, not the system one. Verification is never disabled:
+this downloads an executable that then gets run.
+
+**Verified:** 28 new tests, full suite 508 passed. Real download on macOS/arm64 (41.2 MB,
+`cloudflared version 2026.7.3`, second run downloads nothing). Real tunnel opened with the
+vendored binary and **nothing on PATH**, bytes fetched back through the public
+`trycloudflare.com` URL, clean teardown. **Windows remains untested** — no Windows machine
+available, same caveat as every other Windows script here.
