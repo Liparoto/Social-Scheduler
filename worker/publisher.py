@@ -114,6 +114,14 @@ def _resolve_rel(asset, surface: str = "feed") -> str | None:
                 NULL means the original is already the right shape. The conformed copy is
                 never right here: conformance targets the FEED's 4:5..1.91:1 range
                 (dashboard/lib/conform.ts) and a story is 9:16.
+      * cover — a Reel's cover image: ALWAYS the original, never the feed derivative.
+                storage_path already holds the cover-conformed bytes (sRGB JPEG <=8MB with
+                the aspect ratio deliberately untouched, dashboard/lib/conform-cover.ts).
+                publish_path, if the row has one, is a FEED conform cropped into
+                4:5..1.91:1 — using it would silently mangle the framing the owner chose,
+                which is the exact failure the cover conform exists to prevent. A cover row
+                normally has publish_path NULL, but content-hash dedup can hand back a row
+                that was also uploaded as a feed image, so this must not rely on that.
 
     Split out so _resolve_url and the dry-run marker in _build_plan cannot disagree about
     what would be sent — they did, and the dry run quietly showed the original for a story
@@ -127,6 +135,8 @@ def _resolve_rel(asset, surface: str = "feed") -> str | None:
     original = asset["storage_path"]
     if surface == "story":
         return canvas or original or conformed
+    if surface == "cover":
+        return original
     return conformed or original
 
 
@@ -338,8 +348,11 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
         # frame offset rather than raising — a missing cover is cosmetic, refusing to
         # publish over it would be far worse. cover_frame_ms is left as resolved above.
         if cover_asset is not None:
-            cover_url = _resolve_url(cover_asset, asset_base_url) or (
-                f"(local:{cover_asset['storage_path']})"
+            # surface="cover", NOT the caller's surface and not the "feed" default: a
+            # cover must resolve to the cover-conformed original, never to a feed
+            # derivative cropped into 4:5..1.91:1. See _resolve_rel.
+            cover_url = _resolve_url(cover_asset, asset_base_url, "cover") or (
+                f"(local:{_resolve_rel(cover_asset, 'cover')})"
             )
             cover_frame_ms = None
     return {
