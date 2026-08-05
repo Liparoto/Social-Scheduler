@@ -71,6 +71,24 @@ if [ -n "$WORKER_PID" ]; then
   STOPPED_ANY=1
 fi
 
+# The autostart LaunchAgent, when it is installed. launchd owns that process, so there is
+# no worker.pid for it and the block above cannot see it — without this, Stop would report
+# success while the worker kept running and publishing.
+#
+# SIGTERM, deliberately, not `bootout`: the worker exits 0 on SIGTERM and the agent's
+# KeepAlive rule only restarts on a NON-zero exit, so this really stops it while leaving
+# the agent registered to come back at the next login. `bootout` would also work but would
+# quietly disable autostart, which is not what "Stop" should mean.
+AGENT="com.socialscheduler.worker"
+if launchctl print "gui/$UID/$AGENT" >/dev/null 2>&1; then
+  AGENT_PID="$(launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}')"
+  if [ -n "$AGENT_PID" ]; then
+    echo "Stopping the worker (autostart agent, pid $AGENT_PID)..."
+    launchctl kill TERM "gui/$UID/$AGENT" 2>/dev/null
+    STOPPED_ANY=1
+  fi
+fi
+
 # ---- 3. The dashboard. ----
 # Kill the npm wrapper we recorded, then sweep the port. The sweep is not a
 # fallback, it's required: `npm run dev` spawns the actual Next.js server as a

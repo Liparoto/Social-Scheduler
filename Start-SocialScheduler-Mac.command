@@ -169,69 +169,88 @@ if [ "$MODE" = "live" ]; then
     echo "Note: KILL_SWITCH is ON — the worker will run but publish nothing until you set KILL_SWITCH=0 in .env."
     echo
   fi
-  echo "Starting the worker in the background..."
-  nohup .venv/bin/python -m worker.run >> "$LOG_DIR/worker-daemon.out" 2>&1 &
-  WORKER_PID=$!
-  disown
-  echo "$WORKER_PID" > "$RUN_DIR/worker.pid"
-
-  # How long before the worker stops itself. Anything unparseable falls back to 12.
-  # This exists because the worker publishes for real and now runs with no visible
-  # window — without a deadline, a forgotten worker posts unattended for days.
-  HOURS="$(env_value WORKER_AUTO_STOP_HOURS)"
-  case "$HOURS" in
-    ''|*[!0-9.]*) HOURS=12 ;;
-  esac
-  AUTO_SECS="$(python3 -c "print(int(float('$HOURS') * 3600))" 2>/dev/null)"
-  case "$AUTO_SECS" in
-    ''|0|*[!0-9]*) AUTO_SECS=43200; HOURS=12 ;;
-  esac
-
-  # An ABSOLUTE wake time, not a countdown. `sleep` is naive about the wall clock and
-  # macOS suspends it while the Mac is asleep, so `sleep $AUTO_SECS` silently stretches:
-  # the worker kept running hours past the time this very file advertised. Storing the
-  # epoch and polling the clock keeps worker.deadline honest to within WATCH_POLL
-  # seconds, across any number of sleep/wake cycles. The displayed string is derived
-  # FROM the epoch so the two can never disagree.
-  DEADLINE_EPOCH="$(python3 -c "import time; print(int(time.time()) + $AUTO_SECS)")"
-  DEADLINE="$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($DEADLINE_EPOCH).strftime('%Y-%m-%d %H:%M'))")"
-  echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
-  WATCH_POLL=30
-
-  # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
-  #
-  # It must only ever act on ITS OWN worker. `sleep` is naive about wall clock — macOS
-  # suspends it while the Mac is asleep — so a watchdog routinely wakes LONG after the
-  # deadline recorded in worker.deadline, by which time the owner may have stopped and
-  # restarted everything. Acting unconditionally at that point does real damage: it
-  # deletes the CURRENT worker's pid files, leaving a worker that publishes for real
-  # while Stop can no longer find it (it reports success and kills nothing), and it
-  # signals a 12-hour-old PID number that may since have been recycled onto an
-  # unrelated process.
-  #
-  # Guard: worker.pid must still name this watchdog's own worker. If it names anything
-  # else — or is gone — another launch has taken over and this watchdog is obsolete, so
-  # it exits quietly and touches nothing.
-  (
-    while [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ]; do sleep "$WATCH_POLL"; done
-    still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
-    if [ "$still_ours" = "$WORKER_PID" ]; then
-      # The files are ours, so clean them up either way. Only SIGNAL the PID if it is
-      # still actually a worker — across a long sleep the number can belong to someone
-      # else, and killing a stranger's process is worse than leaving ours running.
-      if ps -p "$WORKER_PID" -o command= 2>/dev/null | grep -q "worker\.run"; then
-        kill "$WORKER_PID" 2>/dev/null
-      fi
-      rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+  # If the autostart LaunchAgent is installed, launchd already owns the worker. Starting
+  # another one here would leave two daemons polling the same database. They can no longer
+  # double-publish (publications are claimed conditionally), but it is still confusing and
+  # wasteful, and only one of them would be the one Stop knows how to stop.
+  AGENT="com.socialscheduler.worker"
+  AGENT_PID=""
+  if launchctl print "gui/$UID/$AGENT" >/dev/null 2>&1; then
+    AGENT_PID="$(launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}')"
+    if [ -z "$AGENT_PID" ]; then
+      # Registered but not running — a previous Stop halted it. Bring it back.
+      launchctl kickstart "gui/$UID/$AGENT" 2>/dev/null
+      sleep 2
+      AGENT_PID="$(launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}')"
     fi
-  ) >/dev/null 2>&1 &
-  WATCHDOG_PID=$!
-  disown
-  echo "$WATCHDOG_PID" > "$RUN_DIR/watchdog.pid"
+    echo "Worker autostart is enabled — launchd is running the worker${AGENT_PID:+ (pid $AGENT_PID)}."
+    echo "Not starting a second one. Disable-Worker-Autostart-Mac.command turns autostart off."
+    echo
+  else
+    echo "Starting the worker in the background..."
+    nohup .venv/bin/python -m worker.run >> "$LOG_DIR/worker-daemon.out" 2>&1 &
+    WORKER_PID=$!
+    disown
+    echo "$WORKER_PID" > "$RUN_DIR/worker.pid"
 
-  echo "Worker running in the background (logs are in data/logs/)."
-  echo "It will stop on its own at $DEADLINE, or whenever you double-click Stop."
-  echo
+    # How long before the worker stops itself. Anything unparseable falls back to 12.
+    # This exists because the worker publishes for real and now runs with no visible
+    # window — without a deadline, a forgotten worker posts unattended for days.
+    HOURS="$(env_value WORKER_AUTO_STOP_HOURS)"
+    case "$HOURS" in
+      ''|*[!0-9.]*) HOURS=12 ;;
+    esac
+    AUTO_SECS="$(python3 -c "print(int(float('$HOURS') * 3600))" 2>/dev/null)"
+    case "$AUTO_SECS" in
+      ''|0|*[!0-9]*) AUTO_SECS=43200; HOURS=12 ;;
+    esac
+
+    # An ABSOLUTE wake time, not a countdown. `sleep` is naive about the wall clock and
+    # macOS suspends it while the Mac is asleep, so `sleep $AUTO_SECS` silently stretches:
+    # the worker kept running hours past the time this very file advertised. Storing the
+    # epoch and polling the clock keeps worker.deadline honest to within WATCH_POLL
+    # seconds, across any number of sleep/wake cycles. The displayed string is derived
+    # FROM the epoch so the two can never disagree.
+    DEADLINE_EPOCH="$(python3 -c "import time; print(int(time.time()) + $AUTO_SECS)")"
+    DEADLINE="$(python3 -c "import datetime; print(datetime.datetime.fromtimestamp($DEADLINE_EPOCH).strftime('%Y-%m-%d %H:%M'))")"
+    echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
+    WATCH_POLL=30
+
+    # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
+    #
+    # It must only ever act on ITS OWN worker. `sleep` is naive about wall clock — macOS
+    # suspends it while the Mac is asleep — so a watchdog routinely wakes LONG after the
+    # deadline recorded in worker.deadline, by which time the owner may have stopped and
+    # restarted everything. Acting unconditionally at that point does real damage: it
+    # deletes the CURRENT worker's pid files, leaving a worker that publishes for real
+    # while Stop can no longer find it (it reports success and kills nothing), and it
+    # signals a 12-hour-old PID number that may since have been recycled onto an
+    # unrelated process.
+    #
+    # Guard: worker.pid must still name this watchdog's own worker. If it names anything
+    # else — or is gone — another launch has taken over and this watchdog is obsolete, so
+    # it exits quietly and touches nothing.
+    (
+      while [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ]; do sleep "$WATCH_POLL"; done
+      still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
+      if [ "$still_ours" = "$WORKER_PID" ]; then
+        # The files are ours, so clean them up either way. Only SIGNAL the PID if it is
+        # still actually a worker — across a long sleep the number can belong to someone
+        # else, and killing a stranger's process is worse than leaving ours running.
+        if ps -p "$WORKER_PID" -o command= 2>/dev/null | grep -q "worker\.run"; then
+          kill "$WORKER_PID" 2>/dev/null
+        fi
+        rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+      fi
+    ) >/dev/null 2>&1 &
+    WATCHDOG_PID=$!
+    disown
+    echo "$WATCHDOG_PID" > "$RUN_DIR/watchdog.pid"
+
+    echo "Worker running in the background (logs are in data/logs/)."
+    echo "It will stop on its own at $DEADLINE, or whenever you double-click Stop."
+    echo
+  fi
 fi
 
 # ---- 8. Start the dashboard in the background. ----

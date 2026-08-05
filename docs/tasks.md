@@ -1445,3 +1445,54 @@ order of operations, then write `docs/design-unmerge-carousel.md`.
 - [ ] **`listAssetsWithUsage()` and `/media`** count usage via `post_assets`. Unmerge changes
       which posts reference an asset without changing the asset — confirm the "unused" figure
       and reclaim total stay correct.
+
+---
+
+## Worker autostart via launchd (2026-08-05)  `[x] done — LIVE`
+
+The worker had to be started by hand through `Start-SocialScheduler-Mac.command`, which
+gates live mode behind a typed `YES`, and it then stopped itself after 12 hours. The owner's
+actual intent is simpler: **the worker should be running whenever the Mac is.**
+
+`Enable-Worker-Autostart-Mac.command` installs a per-user LaunchAgent
+(`~/Library/LaunchAgents/com.socialscheduler.worker.plist`). `Disable-...` removes it.
+
+- [x] `RunAtLoad` starts the worker at login; `KeepAlive: {SuccessfulExit: false}` restarts
+      it **only** on a non-zero exit. The worker exits 0 on SIGTERM, so `Stop-...command`
+      still genuinely stops it instead of fighting launchd, and it returns at the next login.
+- [x] `Stop-...command` learned to stop the agent (`launchctl kill TERM`, not `bootout`, so
+      autostart survives). Without this, Stop would report success while launchd's worker
+      kept publishing — it has no `worker.pid` for Stop to find.
+- [x] `Start-...command` refuses to start a second worker while the agent owns one, and
+      kickstarts a stopped agent instead.
+- [x] The 12-hour auto-stop watchdog is retired when autostart is enabled — a deadline
+      contradicts "always running". `KILL_SWITCH=1` in `.env` remains the emergency stop and
+      still takes effect within one poll, without uninstalling anything.
+
+**Three traps, all of which cost real debugging time:**
+
+1. **launchd's `PATH` does not include `/usr/local/bin`.** The worker shells out to
+   `cloudflared` by bare name for the publish tunnel, so without an explicit
+   `EnvironmentVariables` `PATH` a REAL publish fails with `'cloudflared' not found` — and
+   only at send time. The plist sets PATH explicitly.
+2. **`com.apple.provenance` makes a log file unusable as `StandardOutPath`.** macOS stamps
+   files created by a Terminal-launched process with that xattr, it **cannot be removed**
+   (`xattr -d` silently no-ops), and launchd refuses to open such a file for a job. The job
+   then dies with **exit 78 `EX_CONFIG` before the worker ever starts**, with nothing in any
+   log. Reusing the launcher's `worker-daemon.out` triggered exactly this. launchd now writes
+   to its own `worker-launchd.out`, which the enable script deletes first to guarantee a
+   fresh inode. Nothing is lost: the real rotating log is `data/logs/worker.log`.
+3. **A registered launchd job is not a running one.** The first version of the enable script
+   checked `launchctl print` succeeded and cheerfully reported success while the job failed
+   to spawn on a loop — leaving *no worker running at all*. It now polls for a real pid and
+   prints the exit code on failure.
+
+**Verified:** crash-restart (SIGKILL → respawned in 5s), clean stop (`launchctl kill TERM` →
+exit 0, no respawn, still registered), exactly one worker process throughout, heartbeat
+advancing on the 30s poll.
+
+- [ ] **Not done — this is login-scoped, not boot-scoped.** A LaunchAgent runs when the owner
+      logs in. If the Mac reboots and sits at the login window, the worker does not run. A
+      true boot-scoped daemon needs a `LaunchDaemon` in `/Library/LaunchDaemons` and `sudo`.
+- [ ] **Not done — Windows has no equivalent.** `Start-SocialScheduler-Windows.bat` still
+      hand-starts the worker; Task Scheduler would be the analogue.
