@@ -897,7 +897,8 @@ target CSS selectors rather than coordinates that a media-heavy grid invalidates
 used asset, thumbnail backfill for assets that have none. Two unused personal files
 (`IMG_3707_1080.mov`, the Malaya photo) were kept at the owner's direction.
 
-- [ ] **Follow-up:** when migration `0012_cover_asset.sql` (the `custom-cover-image` branch)
+- [ ] **Follow-up:** when migration `0016_cover_asset.sql` (the `custom-cover-image` branch;
+      renumbered from `0012` once main shipped its own 0012–0015)
       merges to main, `listAssetsWithUsage()` must learn about `assets.cover_asset_id`. Until
       it does, a Reels cover image has no `post_assets` row, so `/media` will show it as
       "Unused" with a Delete button and count its bytes in the reclaim total. The delete

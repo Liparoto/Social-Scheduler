@@ -14,5 +14,21 @@
 --
 -- Purely additive: a nullable column with no CHECK, so SQLite can ALTER TABLE ADD COLUMN
 -- and no table rebuild is needed.
+--
+-- RENUMBERED 0012 -> 0016 (2026-08-04). This was authored as 0012_cover_asset.sql on the
+-- custom-cover-image branch while main was still at 0011; main then shipped its own 0012
+-- (channel_avatar) through 0015 (story_framing), so the original number collided.
+--
+-- schema_migrations is keyed by FILENAME, so any install that already applied this under
+-- the OLD name sees 0016 as pending and fails with "duplicate column name: cover_asset_id"
+-- -- the column is there, the bookkeeping just doesn't know it. A fresh clone is
+-- unaffected. Such an install reconciles the record once, with:
+--
+--   sqlite3 data/socialscheduler.db \
+--     "UPDATE schema_migrations SET version='0016_cover_asset.sql' \
+--      WHERE version='0012_cover_asset.sql';"
+--
+-- Verified on a sqlite3 .backup copy of the owner's live DB: migrate.py then reports
+-- "Pending: 0" and PRAGMA foreign_key_check is clean.
 
 ALTER TABLE assets ADD COLUMN cover_asset_id INTEGER REFERENCES assets(id);
