@@ -1263,7 +1263,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **This is a pure refactor. No behaviour changes.** `merge-modal.tsx` and `media-lightbox.tsx` each carry their own copy of the same ~45-line focus-trap effect, and the unmerge modal in Task 5 would make three. Three copies is where it gets extracted. The two existing files must behave *identically* afterwards — if you find yourself improving the trap while moving it, stop and move it unchanged.
 
-**The one real difference between the two copies:** the lightbox also handles `ArrowLeft`/`ArrowRight`, checked **after** Escape and **before** Tab. The hook takes an optional `onKeyDown` for exactly that slot. `merge-modal.tsx` does not pass one.
+**Two real differences between the two copies:**
+
+1. The lightbox also handles `ArrowLeft`/`ArrowRight`, checked **after** Escape and **before** Tab. The hook takes an optional `onKeyDown` for exactly that slot. `merge-modal.tsx` does not pass one.
+2. The lightbox's `FOCUSABLE_SELECTOR` includes `video[controls]`; merge-modal's had drifted without it. The shared hook takes the **superset** — `video[controls]` stays in. This is safe as a shared default: a native video player's controls are focusable, so leaving it out would let Tab walk out of a lightbox showing a video, while a modal with no `<video>` simply matches nothing extra. `components/slide-reorder.tsx`, the only media the merge modal renders, emits `<img>` only. Do **not** add a selector-override parameter — it would be a config knob with one caller and no second behaviour to select between.
 
 **Why there is no unit test for this task:** the hook needs a live DOM (`document.activeElement`, `document.body.style`, a real event listener), and this project's test harness has no jsdom — which is why neither existing copy is unit-tested today. `npx tsc --noEmit` and `npm run lint` are the automated gates here; behaviour is verified in the browser at **Task 5, step 7**, which exercises all three modals — the two this task refactors and the new one. Do not add a test framework for this.
 
@@ -1279,8 +1282,13 @@ import { useEffect, useRef } from "react";
 // Every focusable thing a modal panel can contain. Shared so the trap, the initial focus,
 // and the Tab cycling all agree on what "focusable" means — they broke apart once when only
 // one of the three was updated.
+//
+// `video[controls]` comes from media-lightbox's copy, which had it; merge-modal's copy had
+// drifted without it. It is the superset, and it is safe as the shared default: a native
+// video player's controls are focusable, so leaving it out would let Tab walk out of a
+// lightbox showing a video. Modals with no <video> match nothing extra.
 export const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
 
 /**
  * The behaviour every modal in this app shares: focus the first control on open, keep Tab
