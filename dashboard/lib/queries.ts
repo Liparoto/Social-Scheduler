@@ -20,7 +20,12 @@ import type {
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
-import { planUnmerge, type UnmergeCandidate, type UnmergeProblem } from "./unmerge-plan";
+import {
+  planUnmerge,
+  planExtractSlides,
+  type UnmergeCandidate,
+  type UnmergeProblem,
+} from "./unmerge-plan";
 import { expandTarget } from "./story-fanout";
 import type { BulkEditContext } from "./bulk-edit-context";
 import type { PeriodWindow } from "./periods";
@@ -1070,6 +1075,115 @@ export function mergePostsIntoCarousel(
   return tx.immediate();
 }
 
+/** The original's content model, read ONCE before any new post is written. */
+interface CarouselSourceRows {
+  source: {
+    caption: string | null;
+    first_comment: string | null;
+    content_kind: string;
+    content_status: string;
+    cooldown_days: number | null;
+    created_by: string | null;
+  };
+  variants: { platform: string | null; body: string; sort_order: number }[];
+  targets: { channel_id: number; surface: string }[];
+  tags: { tag_id: number }[];
+  periods: { period_id: number; mode: string }[];
+}
+
+/** Everything a new post inherits from the carousel it came out of, read in one place. */
+function readCarouselSourceRows(
+  db: ReturnType<typeof getDb>,
+  postId: number
+): CarouselSourceRows {
+  return {
+    source: db
+      .prepare(
+        `SELECT caption, first_comment, content_kind, content_status, cooldown_days, created_by
+           FROM posts WHERE id = ?`
+      )
+      .get(postId) as CarouselSourceRows["source"],
+    variants: db
+      .prepare("SELECT platform, body, sort_order FROM caption_variants WHERE post_id = ?")
+      .all(postId) as CarouselSourceRows["variants"],
+    targets: db
+      .prepare("SELECT channel_id, surface FROM post_targets WHERE post_id = ?")
+      .all(postId) as CarouselSourceRows["targets"],
+    tags: db.prepare("SELECT tag_id FROM post_tags WHERE post_id = ?")
+      .all(postId) as CarouselSourceRows["tags"],
+    periods: db
+      .prepare("SELECT period_id, mode FROM post_periods WHERE post_id = ?")
+      .all(postId) as CarouselSourceRows["periods"],
+  };
+}
+
+/**
+ * Create one new single-slide draft post per part, each carrying a COPY of the carousel's
+ * content model. Returns the new ids in the order the parts were given.
+ *
+ * Shared by unmergeCarousel and extractSlidesFromCarousel. They must copy IDENTICALLY — the
+ * promise of both operations is that a resulting post is a fully-formed post — and one helper
+ * is what guarantees they cannot drift apart as fields are added later.
+ *
+ * Callers must read `rows` BEFORE any of this runs; re-reading per post would start picking
+ * up the rows this loop itself inserts.
+ */
+function spawnPostsFromSlides(
+  db: ReturnType<typeof getDb>,
+  parts: { asset_id: number; post_type: PostType }[],
+  rows: CarouselSourceRows,
+  now: string
+): number[] {
+  const insertPost = db.prepare(
+    `INSERT INTO posts (caption, first_comment, post_type, status, content_kind,
+                        content_status, cooldown_days, created_by, updated_at)
+     VALUES (@caption, @first_comment, @post_type, 'draft', @content_kind,
+             @content_status, @cooldown_days, @created_by, @now)`
+  );
+  const insertSlide = db.prepare(
+    "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, 0)"
+  );
+  const insertVariant = db.prepare(
+    "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?, ?, ?, ?)"
+  );
+  const insertTarget = db.prepare(
+    "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?, ?, ?)"
+  );
+  const insertTag = db.prepare("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)");
+  const insertPeriod = db.prepare(
+    "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
+  );
+
+  const created: number[] = [];
+  for (const part of parts) {
+    // status is hardcoded 'draft' in the statement above: a brand-new post has no
+    // publications, and 'draft' is what that means. Copying the original's status would
+    // claim a send history this post does not have.
+    const newId = Number(
+      insertPost.run({
+        caption: rows.source.caption,
+        first_comment: rows.source.first_comment,
+        post_type: part.post_type,
+        content_kind: rows.source.content_kind,
+        content_status: rows.source.content_status,
+        cooldown_days: rows.source.cooldown_days,
+        created_by: rows.source.created_by,
+        now,
+      }).lastInsertRowid
+    );
+    insertSlide.run(newId, part.asset_id);
+    // posts.caption and caption_variants always move together: the worker reads variants in
+    // preference to posts.caption, so copying one without the other would publish text the
+    // post record says isn't there.
+    for (const v of rows.variants) insertVariant.run(newId, v.platform, v.body, v.sort_order);
+    for (const t of rows.targets) insertTarget.run(newId, t.channel_id, t.surface);
+    for (const t of rows.tags) insertTag.run(newId, t.tag_id);
+    for (const p of rows.periods) insertPeriod.run(newId, p.period_id, p.mode);
+    created.push(newId);
+  }
+  return created;
+}
+
 /**
  * Split one carousel into separate posts — the return trip for mergePostsIntoCarousel.
  *
@@ -1107,31 +1221,7 @@ export function unmergeCarousel(
 
     // Read the source ONCE, before anything is written. Re-reading per child would also
     // start picking up rows the loop itself just inserted.
-    const source = db
-      .prepare(
-        `SELECT caption, first_comment, content_kind, content_status, cooldown_days, created_by
-           FROM posts WHERE id = ?`
-      )
-      .get(postId) as {
-      caption: string | null;
-      first_comment: string | null;
-      content_kind: string;
-      content_status: string;
-      cooldown_days: number | null;
-      created_by: string | null;
-    };
-    const variants = db
-      .prepare("SELECT platform, body, sort_order FROM caption_variants WHERE post_id = ?")
-      .all(postId) as { platform: string | null; body: string; sort_order: number }[];
-    const targets = db
-      .prepare("SELECT channel_id, surface FROM post_targets WHERE post_id = ?")
-      .all(postId) as { channel_id: number; surface: string }[];
-    const tags = db
-      .prepare("SELECT tag_id FROM post_tags WHERE post_id = ?")
-      .all(postId) as { tag_id: number }[];
-    const periods = db
-      .prepare("SELECT period_id, mode FROM post_periods WHERE post_id = ?")
-      .all(postId) as { period_id: number; mode: string }[];
+    const rows = readCarouselSourceRows(db, postId);
 
     // post_assets carries no data worth preserving — (id, post_id, asset_id, sort_order), and
     // nothing references its id. UNIQUE (post_id, sort_order) is checked per-row and
@@ -1153,53 +1243,7 @@ export function unmergeCarousel(
       postId
     );
 
-    const insertPost = db.prepare(
-      `INSERT INTO posts (caption, first_comment, post_type, status, content_kind,
-                          content_status, cooldown_days, created_by, updated_at)
-       VALUES (@caption, @first_comment, @post_type, 'draft', @content_kind,
-               @content_status, @cooldown_days, @created_by, @now)`
-    );
-    const insertSlide = db.prepare(
-      "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, 0)"
-    );
-    const insertVariant = db.prepare(
-      "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?, ?, ?, ?)"
-    );
-    const insertTarget = db.prepare(
-      "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?, ?, ?)"
-    );
-    const insertTag = db.prepare("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)");
-    const insertPeriod = db.prepare(
-      "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
-    );
-
-    const created: number[] = [];
-    for (const part of rest) {
-      // status is hardcoded 'draft' in the statement above: a brand-new post has no
-      // publications, and 'draft' is what that means. Copying the original's status would
-      // claim a send history this post does not have.
-      const newId = Number(
-        insertPost.run({
-          caption: source.caption,
-          first_comment: source.first_comment,
-          post_type: part.post_type,
-          content_kind: source.content_kind,
-          content_status: source.content_status,
-          cooldown_days: source.cooldown_days,
-          created_by: source.created_by,
-          now,
-        }).lastInsertRowid
-      );
-      insertSlide.run(newId, part.asset_id);
-      // posts.caption and caption_variants always move together: the worker reads variants in
-      // preference to posts.caption, so copying one without the other would publish text the
-      // post record says isn't there.
-      for (const v of variants) insertVariant.run(newId, v.platform, v.body, v.sort_order);
-      for (const t of targets) insertTarget.run(newId, t.channel_id, t.surface);
-      for (const t of tags) insertTag.run(newId, t.tag_id);
-      for (const p of periods) insertPeriod.run(newId, p.period_id, p.mode);
-      created.push(newId);
-    }
+    const created = spawnPostsFromSlides(db, rest, rows, now);
 
     return { ok: true, post_ids: [postId, ...created] };
   });
@@ -1209,6 +1253,71 @@ export function unmergeCarousel(
   // isolation — and under a concurrent writer it would surface as an opaque SQLITE_BUSY
   // partway through the split rather than a clean rejection. Same reasoning as
   // mergePostsIntoCarousel.
+  return tx.immediate();
+}
+
+/**
+ * Pull selected slides out of a carousel as their own posts, leaving the rest a carousel.
+ *
+ * The narrower half of unmergeCarousel. The ORIGINAL survives and keeps every slide that was
+ * NOT selected, along with its id, its publications, and the metrics hanging off them. Each
+ * selected slide becomes a NEW draft post carrying a COPY of the original's content model —
+ * the same copy unmergeCarousel makes, via the same helper, so the two cannot drift.
+ *
+ * **Assets are shared, never copied.** Nothing is written to /data, and no `assets` row is
+ * created, changed, or deleted.
+ *
+ * Returns the plan's own problem (with its HTTP status) on rejection, having written nothing.
+ * `post_ids[0]` is always `postId`; the rest are the extracted posts in carousel order.
+ *
+ * Throws (rather than returning a problem) if the database itself fails mid-transaction —
+ * better-sqlite3 rolls the whole thing back, which is what puts the original's slides back.
+ */
+export function extractSlidesFromCarousel(
+  postId: number,
+  assetIds: number[]
+): { ok: true; post_ids: number[] } | { ok: false; problem: UnmergeProblem } {
+  const db = getDb();
+  const tx = db.transaction(():
+    | { ok: true; post_ids: number[] }
+    | { ok: false; problem: UnmergeProblem } => {
+    const plan = planExtractSlides(loadUnmergeCandidate(db, postId), assetIds);
+    // Rejected: return before a single write happens. (The transaction commits empty.)
+    if (!plan.ok) return { ok: false, problem: plan.problem };
+
+    const now = nowIso();
+    // Read the source ONCE, before anything is written — re-reading per extracted post would
+    // start picking up the rows the loop itself inserts.
+    const rows = readCarouselSourceRows(db, postId);
+
+    // The keepers must come out CONTIGUOUS from 0. `post_assets` has
+    // UNIQUE (post_id, sort_order) checked per-row and immediately, so renumbering in place
+    // collides with itself the moment a survivor moves onto a number a later survivor still
+    // holds. A join row is (id, post_id, asset_id, sort_order) and nothing references its id,
+    // so every row is deleted and the keepers are rebuilt — the same resolution merge and the
+    // full split use, and the reason this operation could not reuse the split's "rebuild one
+    // row at 0" shortcut.
+    db.prepare("DELETE FROM post_assets WHERE post_id = ?").run(postId);
+    const keep = db.prepare(
+      "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, ?)"
+    );
+    plan.keeperAssetIds.forEach((assetId, i) => keep.run(postId, assetId, i));
+
+    // Retyped from what it is LEFT holding: two or more keepers stay a carousel, a lone
+    // survivor takes its own asset's type. Everything else on the original — status, caption,
+    // variants, targets, tags, periods, publications — is deliberately untouched.
+    db.prepare("UPDATE posts SET post_type = ?, updated_at = ? WHERE id = ?").run(
+      plan.originalType,
+      now,
+      postId
+    );
+
+    const created = spawnPostsFromSlides(db, plan.extracted, rows, now);
+    return { ok: true, post_ids: [postId, ...created] };
+  });
+  // .immediate(): this reads the rows it validates and then writes based on what it read, so
+  // a deferred transaction would surface a concurrent writer as an opaque SQLITE_BUSY partway
+  // through rather than a clean rejection. Same reasoning as unmergeCarousel.
   return tx.immediate();
 }
 
