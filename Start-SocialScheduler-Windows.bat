@@ -105,21 +105,46 @@ if defined ALREADY (
   exit /b 0
 )
 
-REM ---- 6. Ask what to do. ----
-echo What would you like to do?
-echo   1^) Compose only  - open the dashboard; nothing will be posted ^(safe^)
-echo   2^) Go live       - open the dashboard AND run the worker that publishes
-echo.
-set "choice="
-set /p "choice=Enter 1 or 2 [1]: "
-if "%choice%"=="" set "choice=1"
-echo.
+REM ---- 6. Work out what to do. ----
+REM
+REM WARNING - UNTESTED: the autostart path below was written on macOS with no Windows
+REM machine available. It mirrors the tested launchd version in
+REM Start-SocialScheduler-Mac.command. Verify on Windows before relying on it.
+set "TASKNAME=SocialSchedulerWorker"
+set "AUTOSTART=0"
+schtasks /Query /TN "%TASKNAME%" >NUL 2>&1 && set "AUTOSTART=1"
 
 set "MODE=compose"
-if "%choice%"=="2" set "MODE=live"
+set "WANT_AUTOSTART=0"
 
-REM ---- 7. If going live, respect the safety switches before starting the worker. ----
-if "%MODE%"=="live" (
+if "!AUTOSTART!"=="1" (
+  REM Task Scheduler owns the worker: it runs whether or not this script does anything,
+  REM so a compose-vs-live menu here would be fiction, and the "post for real?" question
+  REM was already answered once when autostart was switched on. Don't ask it every launch.
+  set "MODE=live"
+  echo Worker: running automatically ^(autostart is on^).
+  echo         Turn it off any time with Disable-Worker-Autostart-Windows.bat
+  echo.
+) else (
+  echo What would you like to do?
+  echo   1^) Compose only    - open the dashboard; nothing will be posted ^(safe^)
+  echo   2^) Go live once    - publish scheduled posts until you stop it
+  echo   3^) Go live, always - publish, and keep the worker running from now on
+  echo                        ^(starts by itself every time you log in^)
+  echo.
+  set "choice="
+  set /p "choice=Enter 1, 2 or 3 [1]: "
+  if "!choice!"=="" set "choice=1"
+  echo.
+  if "!choice!"=="2" set "MODE=live"
+  if "!choice!"=="3" (
+    set "MODE=live"
+    set "WANT_AUTOSTART=1"
+  )
+)
+
+REM ---- 7. Going live for real needs confirming - once. Skipped when autostart is on. ----
+if "!MODE!"=="live" if "!AUTOSTART!"=="0" (
   call :env_value DRY_RUN DRY_RUN
   call :env_value KILL_SWITCH KILL_SWITCH
 
@@ -155,6 +180,47 @@ if "%MODE%"=="live" (
     echo Note: KILL_SWITCH is ON - the worker will run but publish nothing until you set KILL_SWITCH=0 in .env.
     echo.
   )
+
+REM ---- 7b. Switch autostart on, if that is what they picked. ----
+REM Registers an at-logon Scheduled Task that launches the worker windowless via
+REM run-hidden.vbs, the same helper the manual path uses.
+REM
+REM Difference from macOS, deliberately not hidden: launchd can also RESTART the worker if
+REM it crashes ^(KeepAlive^). schtasks has no equivalent flag, so this gives start-at-logon
+REM only. A crashed worker stays down until the next logon or a manual start.
+if "!WANT_AUTOSTART!"=="1" if "!MODE!"=="live" (
+  echo Setting up the worker to start on its own...
+
+  > "!RUN_DIR!\run-worker-autostart.cmd" echo @echo off
+  >>"!RUN_DIR!\run-worker-autostart.cmd" echo cd /d "%~dp0"
+  >>"!RUN_DIR!\run-worker-autostart.cmd" echo ".venv\Scripts\python" -m worker.run ^>^> "!LOG_DIR!\worker-autostart.out" 2^>^&1
+
+  REM Retire the 12h auto-stop watchdog: a deadline contradicts "always running".
+  if exist "!RUN_DIR!\watchdog.pid" (
+    set /p WD_PID=<"!RUN_DIR!\watchdog.pid"
+    taskkill /PID !WD_PID! /T /F >NUL 2>&1
+    del /q "!RUN_DIR!\watchdog.pid" "!RUN_DIR!\worker.deadline" >NUL 2>&1
+  )
+
+  schtasks /Create /F /SC ONLOGON /TN "%TASKNAME%" /TR "wscript //nologo \"%~dp0scripts\run-hidden.vbs\" \"!RUN_DIR!\run-worker-autostart.cmd\"" >NUL 2>&1
+  if errorlevel 1 (
+    echo [!] Couldn't register the scheduled task. Continuing with a worker started
+    echo     just for this session instead.
+    echo.
+  ) else (
+    schtasks /Run /TN "%TASKNAME%" >NUL 2>&1
+    set "AUTOSTART=1"
+    echo Done - the worker is running now and will start every time you log in.
+    echo Stop it any time with Stop-SocialScheduler-Windows.bat
+    echo.
+  )
+)
+
+  REM If autostart owns the worker, don't start a second one polling the same database.
+  if "!AUTOSTART!"=="1" (
+    echo Worker autostart is enabled - not starting a second worker.
+    echo.
+  ) else (
   echo Starting the worker in the background...
 
   REM Write the worker's command to its own .cmd file rather than threading
@@ -213,6 +279,7 @@ if "%MODE%"=="live" (
   echo Worker running in the background ^(logs are in data\logs\^).
   echo It will stop on its own at !DEADLINE!, or whenever you double-click Stop.
   echo.
+  )
 )
 
 REM ---- 8. Start the dashboard in the background. ----

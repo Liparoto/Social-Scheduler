@@ -66,6 +66,102 @@ live_pid() {
   echo "$p"
 }
 
+# ---- The autostart LaunchAgent: the worker runs whenever you are logged in. ----
+AGENT="com.socialscheduler.worker"
+AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT.plist"
+
+agent_installed() { launchctl print "gui/$UID/$AGENT" >/dev/null 2>&1; }
+agent_pid()       { launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}'; }
+
+# Install the agent and confirm it actually STARTED. Echoes nothing on success beyond a
+# short confirmation; returns non-zero if launchd took the job but never spawned it.
+enable_autostart() {
+  local repo launchd_log
+  repo="$(pwd -P)"
+  # launchd gets its OWN stdout file, deliberately not the nohup log this script uses.
+  # macOS stamps files created by a Terminal-launched process with a com.apple.provenance
+  # xattr that CANNOT be removed (`xattr -d` silently no-ops), and launchd refuses to open
+  # such a file for a job -- it then dies with exit 78 EX_CONFIG before the worker ever
+  # runs, logging nothing anywhere. Deleting it first guarantees a fresh inode.
+  launchd_log="$repo/data/logs/worker-launchd.out"
+  mkdir -p "$HOME/Library/LaunchAgents" "$repo/data/logs"
+  rm -f "$launchd_log"
+
+  cat > "$AGENT_PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$AGENT</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$repo/.venv/bin/python</string>
+    <string>-m</string>
+    <string>worker.run</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>$repo</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart ONLY on a non-zero exit, i.e. a crash. The worker exits 0 on SIGTERM, so
+       Stop-SocialScheduler-Mac.command genuinely stops it instead of fighting launchd. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin. The worker shells out to
+       cloudflared by bare name for the publish tunnel, so without this a REAL publish
+       fails with "not found" -- at send time, the worst moment to find out. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>$launchd_log</string>
+  <key>StandardErrorPath</key>
+  <string>$launchd_log</string>
+</dict>
+</plist>
+PLIST_EOF
+
+  # Retire the hand-started worker and its 12h auto-stop watchdog: a deadline
+  # contradicts "always running", and two daemons would just be confusing.
+  if [ -f "$RUN_DIR/watchdog.pid" ]; then
+    kill "$(cat "$RUN_DIR/watchdog.pid" 2>/dev/null)" 2>/dev/null
+    rm -f "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+  fi
+  if [ -f "$RUN_DIR/worker.pid" ]; then
+    kill "$(cat "$RUN_DIR/worker.pid" 2>/dev/null)" 2>/dev/null
+    rm -f "$RUN_DIR/worker.pid"
+  fi
+
+  launchctl bootout "gui/$UID/$AGENT" 2>/dev/null
+  sleep 1
+  launchctl bootstrap "gui/$UID" "$AGENT_PLIST" 2>/dev/null || launchctl load -w "$AGENT_PLIST" 2>/dev/null
+
+  # A REGISTERED job is not a RUNNING job -- launchd will accept a plist and then fail to
+  # spawn it forever. Wait for a real pid before claiming this worked.
+  local i=0
+  while [ $i -lt 20 ]; do
+    [ -n "$(agent_pid)" ] && return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # ---- 1. Preflight: the two things that must be installed. ----
 if ! command -v node >/dev/null 2>&1; then
   pause_and_exit "Node.js isn't installed. Get it from https://nodejs.org (choose LTS), then double-click this again."
@@ -119,27 +215,48 @@ if [ -n "$(lsof -ti "tcp:$PORT" 2>/dev/null)" ]; then
   exit 0
 fi
 
-# ---- 6. Ask what to do. ----
-echo "What would you like to do?"
-echo "  1) Compose only  — open the dashboard; nothing will be posted (safe)"
-echo "  2) Go live       — open the dashboard AND run the worker that publishes"
-echo
-read -r -p "Enter 1 or 2 [1]: " choice
-choice="${choice:-1}"
-echo
-
+# ---- 6. Work out what to do. ----
 MODE="compose"
-if [ "$choice" = "2" ]; then
+WANT_AUTOSTART=0
+
+if agent_installed; then
+  # The worker belongs to launchd now. It runs whether or not this script does anything,
+  # so a compose-vs-live menu here would be fiction, and the "post for real?" question was
+  # already answered once when autostart was switched on. Don't ask it every launch.
   MODE="live"
+  if [ -z "$(agent_pid)" ]; then
+    # Registered but not running -- a previous Stop halted it. Bring it back.
+    launchctl kickstart "gui/$UID/$AGENT" 2>/dev/null
+    sleep 2
+  fi
+  echo "Worker: running automatically (autostart is on)."
+  echo "        Turn it off any time with Disable-Worker-Autostart-Mac.command."
+  echo
+else
+  echo "What would you like to do?"
+  echo "  1) Compose only    — open the dashboard; nothing will be posted (safe)"
+  echo "  2) Go live once    — publish scheduled posts until you stop it"
+  echo "  3) Go live, always — publish, and keep the worker running from now on"
+  echo "                       (starts by itself every time you log in)"
+  echo
+  read -r -p "Enter 1, 2 or 3 [1]: " choice
+  choice="${choice:-1}"
+  echo
+  case "$choice" in
+    2) MODE="live" ;;
+    3) MODE="live"; WANT_AUTOSTART=1 ;;
+    *) MODE="compose" ;;
+  esac
 fi
 
-# ---- 7. If going live, respect the safety switches before starting the worker. ----
-if [ "$MODE" = "live" ]; then
+# ---- 7. Going live for real needs confirming — once. ----
+# Skipped entirely when autostart is already on: that decision was made and recorded.
+if [ "$MODE" = "live" ] && ! agent_installed; then
   DRY_RUN="$(env_value DRY_RUN)"
   KILL_SWITCH="$(env_value KILL_SWITCH)"
 
   if [ "$DRY_RUN" = "0" ]; then
-    # Real posting. Make sure she means it, and warn if the delivery tool is missing.
+    # Real posting. Make sure they mean it, and warn if the delivery tool is missing.
     if ! command -v cloudflared >/dev/null 2>&1; then
       echo "⚠️  cloudflared isn't installed — it's needed to deliver your images to Meta for REAL posts."
       echo "    Install it once with:  brew install cloudflared"
@@ -153,8 +270,25 @@ if [ "$MODE" = "live" ]; then
       echo "Okay — starting in Compose only mode. Nothing will be posted."
       echo
       MODE="compose"
+      WANT_AUTOSTART=0
     fi
   fi
+fi
+
+# ---- 7b. Switch autostart on, if that is what they picked. ----
+if [ "$WANT_AUTOSTART" = "1" ] && [ "$MODE" = "live" ]; then
+  echo "Setting up the worker to start on its own..."
+  if enable_autostart; then
+    echo "✅ Done — the worker is running now and will start every time you log in."
+    echo "   Stop it any time with Stop-SocialScheduler-Mac.command."
+  else
+    echo "❌ launchd accepted the job but it never started."
+    echo "   exit code: $(launchctl print "gui/$UID/$AGENT" 2>/dev/null | grep 'last exit code' | sed 's/.*= //')"
+    echo "   Continuing with a worker started just for this session instead."
+    launchctl bootout "gui/$UID/$AGENT" 2>/dev/null
+    rm -f "$AGENT_PLIST"
+  fi
+  echo
 fi
 
 if [ "$MODE" = "live" ]; then

@@ -1448,14 +1448,21 @@ order of operations, then write `docs/design-unmerge-carousel.md`.
 
 ---
 
-## Worker autostart via launchd (2026-08-05)  `[x] done — LIVE`
+## Worker autostart (2026-08-05)  `[x] done — LIVE`
 
 The worker had to be started by hand through `Start-SocialScheduler-Mac.command`, which
 gates live mode behind a typed `YES`, and it then stopped itself after 12 hours. The owner's
 actual intent is simpler: **the worker should be running whenever the Mac is.**
 
-`Enable-Worker-Autostart-Mac.command` installs a per-user LaunchAgent
-(`~/Library/LaunchAgents/com.socialscheduler.worker.plist`). `Disable-...` removes it.
+**It is one script, not two.** The first cut shipped a separate
+`Enable-Worker-Autostart-Mac.command`, which was wrong: two double-clicks to express one
+intention is cumbersome and confusing, especially for the non-technical teammate this
+tooling exists for. Turning it on is now **option 3 in Start's menu**, and once it is on
+Start stops asking anything at all — no menu, no `Type YES` gate, because that decision was
+made and recorded. `Disable-Worker-Autostart-*` is the rarely-used undo.
+
+macOS uses a per-user LaunchAgent (`~/Library/LaunchAgents/com.socialscheduler.worker.plist`);
+Windows uses an at-logon Scheduled Task (`SocialSchedulerWorker`).
 
 - [x] `RunAtLoad` starts the worker at login; `KeepAlive: {SuccessfulExit: false}` restarts
       it **only** on a non-zero exit. The worker exits 0 on SIGTERM, so `Stop-...command`
@@ -1494,5 +1501,10 @@ advancing on the 30s poll.
 - [ ] **Not done — this is login-scoped, not boot-scoped.** A LaunchAgent runs when the owner
       logs in. If the Mac reboots and sits at the login window, the worker does not run. A
       true boot-scoped daemon needs a `LaunchDaemon` in `/Library/LaunchDaemons` and `sudo`.
-- [ ] **Not done — Windows has no equivalent.** `Start-SocialScheduler-Windows.bat` still
-      hand-starts the worker; Task Scheduler would be the analogue.
+- [x] **Windows parity — same three-option menu**, backed by `schtasks /SC ONLOGON` instead
+      of launchd, with `Stop-...bat` ending the running task and
+      `Disable-Worker-Autostart-Windows.bat` removing it. **Every Windows script in this
+      repo remains UNTESTED** — written on macOS, no Windows machine available. One real
+      capability gap, not hidden in the code: launchd can also *restart* a crashed worker
+      (`KeepAlive`); `schtasks` has no equivalent flag, so Windows gets start-at-logon only
+      and a crashed worker stays down until the next logon.

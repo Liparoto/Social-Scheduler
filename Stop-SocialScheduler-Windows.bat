@@ -39,6 +39,23 @@ if exist "%RUN_DIR%\worker.pid" (
   if defined WORKER_PID (
     echo Stopping the worker...
     taskkill /PID !WORKER_PID! /T /F >NUL 2>&1
+)
+
+REM The autostart Scheduled Task, when it is registered. Task Scheduler owns that process,
+REM so there is no worker.pid for it and the block above cannot see it -- without this,
+REM Stop would report success while the worker kept running and publishing.
+REM
+REM /End stops the running instance but LEAVES the task registered, so it still starts at
+REM the next logon. Deleting the task is Disable-Worker-Autostart-Windows.bat's job, not
+REM Stop's.
+REM
+REM WARNING - UNTESTED: written on macOS. Mirrors the tested macOS behaviour.
+schtasks /Query /TN "SocialSchedulerWorker" >NUL 2>&1
+if not errorlevel 1 (
+  echo Stopping the worker ^(autostart task^)...
+  schtasks /End /TN "SocialSchedulerWorker" >NUL 2>&1
+  taskkill /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq run-worker-autostart*" /T /F >NUL 2>&1
+  set "STOPPED_ANY=1"
     if not errorlevel 1 set "STOPPED_ANY=1"
   )
 )

@@ -32,5 +32,5 @@ if launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
 fi
 
 echo "✅ Autostart disabled and the worker stopped."
-echo "   Start it by hand again with Start-SocialScheduler-Mac.command."
+echo "   Start-SocialScheduler-Mac.command will offer to turn it back on."
 echo
