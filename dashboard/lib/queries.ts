@@ -20,6 +20,7 @@ import type {
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
+import { planUnmerge, type UnmergeCandidate, type UnmergeProblem } from "./unmerge-plan";
 import { expandTarget } from "./story-fanout";
 import type { BulkEditContext } from "./bulk-edit-context";
 import type { PeriodWindow } from "./periods";
@@ -858,6 +859,57 @@ function loadMergeCandidate(
 }
 
 /**
+ * Everything planUnmerge needs about one post, in two cheap queries plus two EXISTS probes.
+ * Not exported: the plan layer is the only consumer, and it must stay the only place that
+ * decides what these booleans MEAN.
+ */
+function loadUnmergeCandidate(
+  db: ReturnType<typeof getDb>,
+  postId: number
+): UnmergeCandidate | undefined {
+  const post = db
+    .prepare("SELECT id, post_type, status FROM posts WHERE id = ?")
+    .get(postId) as { id: number; post_type: string; status: string } | undefined;
+  if (!post) return undefined;
+
+  const slides = db
+    .prepare(
+      `SELECT pa.asset_id, a.media_kind
+         FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+        WHERE pa.post_id = ? ORDER BY pa.sort_order ASC`
+    )
+    .all(postId) as { asset_id: number; media_kind: string }[];
+
+  // Same live-send definition deletePost and loadMergeCandidate use: 'posted' means it exists
+  // on the platform, 'publishing' means the worker is mid-flight with it right now.
+  const live = db
+    .prepare(
+      `SELECT 1 FROM publications
+        WHERE post_id = ? AND status IN ('posted','publishing') LIMIT 1`
+    )
+    .get(postId);
+
+  // Deliberately a SEPARATE probe from `live`, not folded into one IN (...) list: a queued
+  // send gets its own 409 with its own message, because unlike a published one it is
+  // something the owner can actually resolve (cancel or hold it in queue control).
+  const queued = db
+    .prepare(
+      `SELECT 1 FROM publications
+        WHERE post_id = ? AND status IN ('scheduled','pending_approval') LIMIT 1`
+    )
+    .get(postId);
+
+  return {
+    post_id: post.id,
+    post_type: post.post_type,
+    status: post.status,
+    has_live_publication: live !== undefined,
+    has_queued_publication: queued !== undefined,
+    slides,
+  };
+}
+
+/**
  * The distinct platforms the merged post could end up going to — planMerge caps the carousel
  * at the STRICTEST of these (Instagram 10, Threads 20).
  *
@@ -1015,6 +1067,148 @@ export function mergePostsIntoCarousel(
   // isolation — and under a concurrent writer it would surface as an opaque SQLITE_BUSY
   // mid-merge rather than a clean result. deletePost avoids this by folding its guard into
   // the DELETE itself; a multi-statement plan-then-write can't, so it takes the lock up front.
+  return tx.immediate();
+}
+
+/**
+ * Split one carousel into separate posts — the return trip for mergePostsIntoCarousel.
+ *
+ * The ORIGINAL post survives and keeps slide 1, along with its id, its publications, and the
+ * metrics hanging off them. Each remaining slide becomes a NEW draft post carrying a COPY of
+ * the original's caption, caption variants, channel targets (surface included), tags, and
+ * season links. Copies, not moves: editing one afterwards does not change the others, which
+ * is what the confirm modal's "each keeps" promises.
+ *
+ * **Assets are shared, never copied.** They are deduped by content hash, so every resulting
+ * post references the same `assets` row. Nothing is written to /data, and no asset row is
+ * created, changed, or deleted by this function.
+ *
+ * **Each post's `post_type` is derived from its OWN asset's media_kind** (a video slide
+ * becomes a 'reel'), never from asset count. This deliberately does NOT go through
+ * createDraftPost, which derives post_type from count alone and would leave a video slide as
+ * an unpublishable 'single'.
+ *
+ * Returns the plan's own problem (with its HTTP status) on rejection, having written nothing.
+ * `post_ids[0]` is always `postId`.
+ */
+export function unmergeCarousel(
+  postId: number
+): { ok: true; post_ids: number[] } | { ok: false; problem: UnmergeProblem } {
+  const db = getDb();
+  const tx = db.transaction(():
+    | { ok: true; post_ids: number[] }
+    | { ok: false; problem: UnmergeProblem } => {
+    const plan = planUnmerge(loadUnmergeCandidate(db, postId));
+    // Rejected: return before a single write happens. (The transaction commits empty.)
+    if (!plan.ok) return { ok: false, problem: plan.problem };
+
+    const now = nowIso();
+    const [first, ...rest] = plan.parts;
+
+    // Read the source ONCE, before anything is written. Re-reading per child would also
+    // start picking up rows the loop itself just inserted.
+    const source = db
+      .prepare(
+        `SELECT caption, first_comment, content_kind, content_status, cooldown_days, created_by
+           FROM posts WHERE id = ?`
+      )
+      .get(postId) as {
+      caption: string | null;
+      first_comment: string | null;
+      content_kind: string;
+      content_status: string;
+      cooldown_days: number | null;
+      created_by: string | null;
+    };
+    const variants = db
+      .prepare("SELECT platform, body, sort_order FROM caption_variants WHERE post_id = ?")
+      .all(postId) as { platform: string | null; body: string; sort_order: number }[];
+    const targets = db
+      .prepare("SELECT channel_id, surface FROM post_targets WHERE post_id = ?")
+      .all(postId) as { channel_id: number; surface: string }[];
+    const tags = db
+      .prepare("SELECT tag_id FROM post_tags WHERE post_id = ?")
+      .all(postId) as { tag_id: number }[];
+    const periods = db
+      .prepare("SELECT period_id, mode FROM post_periods WHERE post_id = ?")
+      .all(postId) as { period_id: number; mode: string }[];
+
+    // post_assets carries no data worth preserving — (id, post_id, asset_id, sort_order), and
+    // nothing references its id. UNIQUE (post_id, sort_order) is checked per-row and
+    // IMMEDIATELY, and the original's sort_order values are not guaranteed contiguous from
+    // zero, so rather than reasoning about which rows can safely stay, every row is deleted
+    // and the one slide the original keeps is rebuilt at 0. Same resolution
+    // mergePostsIntoCarousel uses, for the same reason.
+    db.prepare("DELETE FROM post_assets WHERE post_id = ?").run(postId);
+    db.prepare("INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, 0)").run(
+      postId,
+      first.asset_id
+    );
+    // Retyped from slide 1's OWN media_kind — not assumed to be 'single'. Everything else on
+    // the original (status, caption, variants, targets, tags, periods, publications) is
+    // deliberately untouched.
+    db.prepare("UPDATE posts SET post_type = ?, updated_at = ? WHERE id = ?").run(
+      first.post_type,
+      now,
+      postId
+    );
+
+    const insertPost = db.prepare(
+      `INSERT INTO posts (caption, first_comment, post_type, status, content_kind,
+                          content_status, cooldown_days, created_by, updated_at)
+       VALUES (@caption, @first_comment, @post_type, 'draft', @content_kind,
+               @content_status, @cooldown_days, @created_by, @now)`
+    );
+    const insertSlide = db.prepare(
+      "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, 0)"
+    );
+    const insertVariant = db.prepare(
+      "INSERT INTO caption_variants (post_id, platform, body, sort_order) VALUES (?, ?, ?, ?)"
+    );
+    const insertTarget = db.prepare(
+      "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?, ?, ?)"
+    );
+    const insertTag = db.prepare("INSERT INTO post_tags (post_id, tag_id) VALUES (?, ?)");
+    const insertPeriod = db.prepare(
+      "INSERT INTO post_periods (post_id, period_id, mode) VALUES (?, ?, ?)"
+    );
+
+    const created: number[] = [];
+    for (const part of rest) {
+      // status is hardcoded 'draft' in the statement above: a brand-new post has no
+      // publications, and 'draft' is what that means. Copying the original's status would
+      // claim a send history this post does not have.
+      const newId = Number(
+        insertPost.run({
+          caption: source.caption,
+          first_comment: source.first_comment,
+          post_type: part.post_type,
+          content_kind: source.content_kind,
+          content_status: source.content_status,
+          cooldown_days: source.cooldown_days,
+          created_by: source.created_by,
+          now,
+        }).lastInsertRowid
+      );
+      insertSlide.run(newId, part.asset_id);
+      // posts.caption and caption_variants always move together: the worker reads variants in
+      // preference to posts.caption, so copying one without the other would publish text the
+      // post record says isn't there.
+      for (const v of variants) insertVariant.run(newId, v.platform, v.body, v.sort_order);
+      for (const t of targets) insertTarget.run(newId, t.channel_id, t.surface);
+      for (const t of tags) insertTag.run(newId, t.tag_id);
+      for (const p of periods) insertPeriod.run(newId, p.period_id, p.mode);
+      created.push(newId);
+    }
+
+    return { ok: true, post_ids: [postId, ...created] };
+  });
+  // .immediate() takes the write lock at BEGIN instead of on the first write statement. This
+  // function reads the rows it validates (loadUnmergeCandidate) and then writes based on what
+  // it read, so a deferred transaction would hold together only thanks to WAL snapshot
+  // isolation — and under a concurrent writer it would surface as an opaque SQLITE_BUSY
+  // partway through the split rather than a clean rejection. Same reasoning as
+  // mergePostsIntoCarousel.
   return tx.immediate();
 }
 
