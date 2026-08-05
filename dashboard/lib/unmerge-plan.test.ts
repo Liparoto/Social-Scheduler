@@ -181,3 +181,149 @@ test("derivePostType never produces 'story' — a Story is a target surface, not
   assert.equal(derivePostType("story"), "single");
   assert.equal(derivePostType(""), "single");
 });
+
+// ---- planExtractSlides: pull selected slides out, leave the rest a carousel --------
+
+import { planExtractSlides } from "./unmerge-plan.ts";
+
+function four(): UnmergeCandidate {
+  return cand({
+    slides: [
+      { asset_id: 10, media_kind: "image" },
+      { asset_id: 20, media_kind: "image" },
+      { asset_id: 30, media_kind: "image" },
+      { asset_id: 40, media_kind: "image" },
+    ],
+  });
+}
+
+test("extracting one slide leaves the rest a carousel", () => {
+  const r = planExtractSlides(four(), [20]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(r.extracted, [{ asset_id: 20, post_type: "single" }]);
+  assert.deepEqual(r.keeperAssetIds, [10, 30, 40], "keepers hold their relative order");
+  assert.equal(r.originalType, "carousel", "3 slides left is still a carousel");
+});
+
+test("keepers keep their relative order when a middle slide is pulled", () => {
+  const r = planExtractSlides(four(), [30]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(r.keeperAssetIds, [10, 20, 40]);
+});
+
+test("extracting several slides yields one post each, in carousel order", () => {
+  const r = planExtractSlides(four(), [40, 20]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(
+    r.extracted.map((p) => p.asset_id),
+    [20, 40],
+    "carousel order, not the order they were ticked"
+  );
+  assert.deepEqual(r.keeperAssetIds, [10, 30]);
+  assert.equal(r.originalType, "carousel");
+});
+
+test("leaving exactly one slide retypes the original as a single", () => {
+  const r = planExtractSlides(four(), [20, 30, 40]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(r.keeperAssetIds, [10]);
+  assert.equal(r.originalType, "single", "a 1-slide carousel would die at publish");
+});
+
+test("leaving exactly one VIDEO slide retypes the original as a reel", () => {
+  const c = cand({
+    slides: [
+      { asset_id: 10, media_kind: "video" },
+      { asset_id: 20, media_kind: "image" },
+      { asset_id: 30, media_kind: "image" },
+    ],
+  });
+  const r = planExtractSlides(c, [20, 30]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.originalType, "reel");
+});
+
+test("an extracted video slide becomes a reel", () => {
+  const c = cand({
+    slides: [
+      { asset_id: 10, media_kind: "image" },
+      { asset_id: 20, media_kind: "video" },
+      { asset_id: 30, media_kind: "image" },
+    ],
+  });
+  const r = planExtractSlides(c, [20]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.deepEqual(r.extracted, [{ asset_id: 20, post_type: "reel" }]);
+});
+
+test("a slide ticked twice is extracted once", () => {
+  // A stale or hand-rolled client could send a duplicate; extracting twice would put the
+  // same asset in two new posts.
+  const r = planExtractSlides(four(), [20, 20]);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.extracted.length, 1);
+  assert.deepEqual(r.keeperAssetIds, [10, 30, 40]);
+});
+
+test("selecting nothing is refused", () => {
+  const r = planExtractSlides(four(), []);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.status, 400);
+  assert.equal(r.problem.code, "no_slides_selected");
+});
+
+test("a slide that is not in this post is refused", () => {
+  const r = planExtractSlides(four(), [99]);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.status, 400);
+  assert.equal(r.problem.code, "slide_not_in_post");
+});
+
+test("selecting every slide is refused and names the action that does it", () => {
+  const r = planExtractSlides(four(), [10, 20, 30, 40]);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.status, 400);
+  assert.equal(r.problem.code, "extracts_everything");
+  assert.match(r.problem.message, /split into separate posts/i);
+});
+
+test("extraction inherits the shared guards — a published carousel is refused", () => {
+  const r = planExtractSlides(cand({ has_live_publication: true }), [10]);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.code, "already_published");
+});
+
+test("extraction inherits the shared guards — a queued send is refused", () => {
+  const r = planExtractSlides(cand({ has_queued_publication: true }), [10]);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.code, "send_queued");
+});
+
+test("extraction inherits the shared guards — a single post is refused", () => {
+  const c = cand({ post_type: "single", slides: [{ asset_id: 10, media_kind: "image" }] });
+  const r = planExtractSlides(c, [10]);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.code, "not_a_carousel");
+});
+
+test("shared guards run BEFORE the selection checks", () => {
+  // A published carousel with an empty selection must report the published problem — the
+  // one the owner can never resolve — not the one they can fix by ticking a box.
+  const r = planExtractSlides(cand({ has_live_publication: true }), []);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.problem.code, "already_published");
+});
