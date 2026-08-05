@@ -191,10 +191,31 @@ if [ "$MODE" = "live" ]; then
   echo "$DEADLINE" > "$RUN_DIR/worker.deadline"
 
   # The watchdog. Sleeps, then stops the worker and clears its bookkeeping.
+  #
+  # It must only ever act on ITS OWN worker. `sleep` is naive about wall clock — macOS
+  # suspends it while the Mac is asleep — so a watchdog routinely wakes LONG after the
+  # deadline recorded in worker.deadline, by which time the owner may have stopped and
+  # restarted everything. Acting unconditionally at that point does real damage: it
+  # deletes the CURRENT worker's pid files, leaving a worker that publishes for real
+  # while Stop can no longer find it (it reports success and kills nothing), and it
+  # signals a 12-hour-old PID number that may since have been recycled onto an
+  # unrelated process.
+  #
+  # Guard: worker.pid must still name this watchdog's own worker. If it names anything
+  # else — or is gone — another launch has taken over and this watchdog is obsolete, so
+  # it exits quietly and touches nothing.
   (
     sleep "$AUTO_SECS"
-    kill "$WORKER_PID" 2>/dev/null
-    rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+    still_ours="$(cat "$RUN_DIR/worker.pid" 2>/dev/null | tr -d '[:space:]')"
+    if [ "$still_ours" = "$WORKER_PID" ]; then
+      # The files are ours, so clean them up either way. Only SIGNAL the PID if it is
+      # still actually a worker — across a long sleep the number can belong to someone
+      # else, and killing a stranger's process is worse than leaving ours running.
+      if ps -p "$WORKER_PID" -o command= 2>/dev/null | grep -q "worker\.run"; then
+        kill "$WORKER_PID" 2>/dev/null
+      fi
+      rm -f "$RUN_DIR/worker.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+    fi
   ) >/dev/null 2>&1 &
   WATCHDOG_PID=$!
   disown
