@@ -266,9 +266,21 @@ Pure, no SQLite, following the existing harness in `dashboard/test/`.
 
 ## 8. Kill switch and dry run
 
-Neither applies. This operation touches only the local SQLite file, makes no Graph API call, and
-creates nothing the worker will act on — every child is a `draft` with no publications. There is
-nothing here for `KILL_SWITCH` to stop or for `DRY_RUN` to simulate.
+Neither applies to the split operation itself. It makes no Graph API call and writes only to the
+local SQLite file, so there is nothing here for `KILL_SWITCH` to stop or for `DRY_RUN` to
+simulate.
+
+They do matter to what the split produces, though. Each child's `status` is hardcoded to
+`draft`, but `posts.status` does not govern automation — `migrations/0002_content_model.sql`
+says so explicitly, and `worker/autofill.py` selects candidates on `p.content_status = 'ready'`
+without ever reading `posts.status`. What actually gates autofill is `content_status`, and step 4
+copies the original's `content_status` verbatim to every child, along with its feed
+`post_targets`. So splitting a `ready` carousel produces N−1 posts that are exactly as
+autofill-eligible as the original was, from the moment the transaction commits. This is
+intentional, not an oversight: the whole point of the operation is that each child comes out as a
+fully-formed post, not a stub that has to be re-readied by hand. It is only harmless today because
+`autofill_enabled` is `0` on both of the owner's channels — the moment that flag is turned on for
+evergreen recycling, splitting a `ready` carousel starts feeding the worker immediately.
 
 ---
 

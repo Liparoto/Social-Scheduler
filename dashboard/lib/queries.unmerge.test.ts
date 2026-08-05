@@ -352,6 +352,55 @@ test("a missing post is 404", async () => {
   assert.equal(res.problem.status, 404);
 });
 
+test("a failure partway through child creation rolls back — the original keeps every slide", async () => {
+  // unmergeCarousel destroys before it creates: it deletes ALL of the original's post_assets
+  // rows and rebuilds slide 1 before the loop that inserts the children even starts. Every
+  // other test here exercises the all-succeed path, so nothing pins the fact that a failure
+  // during that loop actually rolls the destructive part back too. Today that holds only
+  // because better-sqlite3's db.transaction() issues ROLLBACK when the wrapped function
+  // throws — an invariant a future "skip a bad child" try/catch could silently break.
+  const { q, db, mkAsset, mkCarousel } = await setup();
+  const assets = [mkAsset(1), mkAsset(2), mkAsset(3), mkAsset(4)];
+  const original = mkCarousel(assets);
+  const before = db
+    .prepare("SELECT asset_id, sort_order FROM post_assets WHERE post_id = ? ORDER BY sort_order")
+    .all(original);
+  const postsBefore = (db.prepare("SELECT COUNT(*) c FROM posts").get() as { c: number }).c;
+
+  // Fires on the very first INSERT into posts — which is the first child the loop tries to
+  // create — and aborts it. A TEMP trigger lives only on this connection, but every test in
+  // this file shares that one connection (see the module comment at the top), so it must be
+  // dropped before this test returns or it would blow up every later INSERT INTO posts.
+  db.exec(
+    "CREATE TEMP TRIGGER unmerge_boom AFTER INSERT ON posts BEGIN SELECT RAISE(ABORT, 'boom'); END;"
+  );
+  try {
+    assert.throws(() => q.unmergeCarousel(original));
+  } finally {
+    db.exec("DROP TRIGGER unmerge_boom");
+  }
+
+  assert.deepEqual(
+    db
+      .prepare(
+        "SELECT asset_id, sort_order FROM post_assets WHERE post_id = ? ORDER BY sort_order"
+      )
+      .all(original),
+    before,
+    "every slide is back, in its original sort_order — not just one"
+  );
+  assert.equal(
+    q.getPost(original)?.post_type,
+    "carousel",
+    "the retype to the derived single/reel type was rolled back too"
+  );
+  assert.equal(
+    (db.prepare("SELECT COUNT(*) c FROM posts").get() as { c: number }).c,
+    postsBefore,
+    "no child post survived the rollback"
+  );
+});
+
 test("the database has no broken references afterwards", async () => {
   const { q, db, mkAsset, mkChannel, mkTag } = await setup();
   const original = q.createDraftPost({

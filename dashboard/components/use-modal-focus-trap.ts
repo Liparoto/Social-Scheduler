@@ -10,7 +10,7 @@ import { useEffect, useRef } from "react";
 // drifted without it. It is the superset, and it is safe as the shared default: a native
 // video player's controls are focusable, so leaving it out would let Tab walk out of a
 // lightbox showing a video. Modals with no <video> match nothing extra.
-export const FOCUSABLE_SELECTOR =
+const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
 
 /**
@@ -18,7 +18,8 @@ export const FOCUSABLE_SELECTOR =
  * inside the panel, close on Escape, lock body scroll while open, and put focus back where
  * it was on close.
  *
- * Extracted from media-lightbox.tsx and merge-modal.tsx, which had it verbatim twice.
+ * Extracted from media-lightbox.tsx and merge-modal.tsx, which had it near-identically twice
+ * — the two copies had drifted apart on whether `video[controls]` was included.
  *
  * `onClose` and `onKeyDown` are read through refs rather than closed over, so the listener
  * installs ONCE on mount and never needs re-binding when the caller re-renders with new

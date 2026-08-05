@@ -428,10 +428,16 @@ export function PostEditor({
           <button
             type="button"
             onClick={() => setUnmergeOpen(true)}
-            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken"
+            disabled={isDirty || slideOrder.isDirty}
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
           >
             Split into separate posts…
           </button>
+          {isDirty || slideOrder.isDirty ? (
+            <p className="mt-2 text-xs text-status-failed">
+              Save your changes first — splitting copies what&apos;s saved.
+            </p>
+          ) : null}
         </section>
       ) : null}
       {unmergeOpen ? (
