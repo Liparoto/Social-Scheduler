@@ -15,6 +15,7 @@ import type {
   Tag,
 } from "@/lib/types";
 import { channelColor } from "@/lib/format";
+import { isPostDirty } from "@/lib/post-editor-dirty";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
@@ -35,10 +36,9 @@ const segBtn = (active: boolean) =>
     active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
 
-/** Stable comparable form of a target set — channel AND surface, order-independent. */
-function targetKeys(targets: PostTarget[]): string[] {
-  return targets.map((t) => `${t.channel_id}:${t.surface}`).sort();
-}
+// targetKeys and the dirty check itself live in lib/post-editor-dirty.ts so they can be
+// unit-tested — the guard is what stops "Post now" and "Split into separate posts" acting on
+// stale, already-saved values, and it was silently missing two fields before it had tests.
 
 export function PostEditor({
   post,
@@ -129,19 +129,20 @@ export function PostEditor({
   // fields that actually feed a publish (captions, targets, tags, content status)
   // against the props this component was initialised with, so a scroll-and-click from
   // "fix a typo" straight to "Post now" gets caught instead of shipping the typo.
-  const normalizedCaptions = (list: { platform: string; body: string }[]) =>
-    JSON.stringify(
-      list
-        .filter((v) => v.body.trim())
-        .map((v) => ({ platform: v.platform || null, body: v.body.trim() }))
-    );
-  const isDirty =
-    normalizedCaptions(captions) !== normalizedCaptions(initialCaptions) ||
-    JSON.stringify(targetKeys(effectiveTargets)) !==
-      JSON.stringify(targetKeys(initialTargets)) ||
-    JSON.stringify([...tagIds].sort((a, b) => a - b)) !==
-      JSON.stringify([...initialTagIds].sort((a, b) => a - b)) ||
-    status !== post.content_status;
+  const isDirty = isPostDirty({
+    captions,
+    initialCaptions,
+    targets: effectiveTargets,
+    initialTargets,
+    tagIds,
+    initialTagIds,
+    status,
+    initialStatus: post.content_status,
+    kind,
+    initialKind: post.content_kind,
+    cooldown,
+    initialCooldownDays: post.cooldown_days,
+  });
 
   async function save() {
     setError(null);
