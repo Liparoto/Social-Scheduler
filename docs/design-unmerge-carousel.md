@@ -164,9 +164,11 @@ partway through the split rather than a clean rejection. `.immediate()` takes th
 
 ## 5. Guards
 
-All of them live in `dashboard/lib/unmerge-plan.ts`, which imports nothing but `./platforms` —
-no database, no `server-only`, no Node built-ins — so the whole chain is exhaustively unit
-testable without SQLite. This mirrors `lib/merge-plan.ts` exactly.
+All of them live in `dashboard/lib/unmerge-plan.ts`, which imports only a type — no database,
+no `server-only`, no Node built-ins, not even `./platforms` — so the whole chain is
+exhaustively unit testable without SQLite. This mirrors `lib/merge-plan.ts`, which does import
+`./platforms` for the carousel size cap; splitting has no cap to consult, because it only ever
+produces posts with one asset.
 
 Checked in this order, so the message the owner sees is always the most specific one that
 applies:
