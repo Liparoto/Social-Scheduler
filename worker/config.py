@@ -14,6 +14,23 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# The variables that were ALREADY in the real environment when this process started.
+#
+# An explicitly-set variable is a deliberate instruction from whoever launched the
+# worker, so it outranks .env for the life of the process. Without this, the
+# override=True reload below silently clobbered it on the very first loop, and
+#
+#     DRY_RUN=1 .venv/bin/python -m worker.run --once
+#
+# became a LIVE run against .env's DRY_RUN=0 — it opened a tunnel and created a real
+# Meta container. That is the opposite of what the command says, and it is the command
+# this project's own docs told you to use to check things safely.
+#
+# This does not weaken live toggling. The launcher never exports the switches — it only
+# reads .env to decide what to print — so in the normal path DRY_RUN/KILL_SWITCH are
+# absent from the environment and .env stays authoritative, reload after reload.
+_LAUNCH_ENV_KEYS = frozenset(os.environ)
+
 
 def _as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
@@ -27,6 +44,9 @@ def load_env(override: bool = False) -> None:
     Minimal, stdlib-only (mirrors migrate.py) so the worker has no hard dependency
     on python-dotenv just to read a flag. With override=True, .env wins over the
     current environment — used each loop so live edits to the switches take effect.
+
+    EXCEPT for variables that were set in the environment at launch: those always win,
+    even with override=True. See _LAUNCH_ENV_KEYS for why.
     """
     env_path = REPO_ROOT / ".env"
     if not env_path.exists():
@@ -38,6 +58,9 @@ def load_env(override: bool = False) -> None:
         key, _, val = line.partition("=")
         key, val = key.strip(), val.strip()
         if not key:
+            continue
+        if key in _LAUNCH_ENV_KEYS:
+            # Explicit at launch — never overwritten, not even by override=True.
             continue
         if override or key not in os.environ:
             os.environ[key] = val
