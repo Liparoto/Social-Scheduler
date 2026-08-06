@@ -114,9 +114,34 @@ def _to_columns(insights: dict) -> dict:
     return out
 
 
+# Per-media-type extras, on top of metrics.REQUESTED_METRICS. Verified one name at a time
+# against real media on the live account, 2026-08-05.
+#
+# These CANNOT be folded into the shared base list: Instagram 400s the entire call when
+# one metric is invalid for the media type, so asking an image for a Reels metric would
+# lose every metric for that post, not just the one that does not apply.
+REELS_EXTRA_METRICS = ["ig_reels_avg_watch_time", "ig_reels_video_view_total_time"]
+# Rejected by Reels, accepted by feed images and carousels — the split runs both ways.
+FEED_EXTRA_METRICS = ["profile_visits", "follows"]
+
+
+def instagram_metrics_for(media) -> list[str]:
+    """The metric list valid for this specific post.
+
+    Keyed on media_product_type first because that is what separates a Reel from a feed
+    post; media_type ('VIDEO') does not, since a feed video is not a Reel.
+    """
+    extras = (
+        REELS_EXTRA_METRICS
+        if (media["media_product_type"] or "").upper() == "REELS"
+        else FEED_EXTRA_METRICS
+    )
+    return [*REQUESTED_METRICS, *extras]
+
+
 def _fetch_instagram(client, media, channel, config):
     return client.get_media_insights(
-        media["remote_post_id"], channel["access_token"], REQUESTED_METRICS
+        media["remote_post_id"], channel["access_token"], instagram_metrics_for(media)
     )
 
 

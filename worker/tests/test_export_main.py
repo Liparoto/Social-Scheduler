@@ -155,7 +155,9 @@ def test_export_of_an_empty_database_still_produces_a_valid_workbook(config, tmp
 
     book = load_workbook(out_dir / "SocialScheduler-Export.xlsx")
 
-    assert book.sheetnames == ["Posts", "Sends", "Metrics", "Assets", "Channels"]
+    assert book.sheetnames == [
+        "Posts", "Sends", "Metrics", "Assets", "Channels", "Channel groups",
+    ]
     assert result.copied == 0
     assert json.loads((out_dir / "export.json").read_text())["posts"] == []
 

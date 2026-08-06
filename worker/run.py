@@ -218,6 +218,13 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
 
     run_account_metrics(conn, config, client, now, logger=logger, client_for=client_for)
     run_media_metrics(conn, config, client, now, logger=logger, client_for=client_for)
+
+    # Cache leaderboard thumbnails last: it is the least important job here, and the one
+    # whose failure matters least — a missing thumbnail is decoration, a missing metric
+    # is data.
+    from .thumbnails import run_thumbnails
+
+    run_thumbnails(conn, config, client, now, logger=logger, client_for=client_for)
     return processed
 
 

@@ -152,6 +152,7 @@ def write_json(bundle: ExportBundle, out_dir: Path) -> Path:
         "metrics": [asdict(m) for m in bundle.metrics],
         "assets": [asdict(a) for a in bundle.assets],
         "channels": [asdict(c) for c in bundle.channels],
+        "channel_groups": [asdict(g) for g in bundle.channel_groups],
     }
     path = out_dir / "export.json"
     # ensure_ascii=False keeps captions readable if someone opens this in a text editor.
@@ -228,6 +229,12 @@ CHANNELS_HEADERS = [
     "channel_id", "platform", "account_name", "business_label", "timezone", "is_active",
     "requires_approval", "autofill_enabled", "cadence_config", "min_queue_depth",
     "target_queue_depth", "reuse_min_age_days", "remote_account_id", "linked_page_id",
+    "group_id",
+]
+
+GROUPS_HEADERS = [
+    "group_id", "name", "timezone", "is_active", "autofill_enabled", "cadence_config",
+    "min_queue_depth", "target_queue_depth", "reuse_min_age_days",
 ]
 
 
@@ -324,9 +331,21 @@ def write_workbook(
             c.channel_id, c.platform, c.account_name, c.business_label, c.timezone,
             c.is_active, c.requires_approval, c.autofill_enabled, c.cadence_config,
             c.min_queue_depth, c.target_queue_depth, c.reuse_min_age_days,
-            c.remote_account_id, c.linked_page_id,
+            c.remote_account_id, c.linked_page_id, c.group_id,
         ]
         for c in bundle.channels
+    ])
+
+    # Its own sheet rather than columns folded into Channels: a group's cadence and queue
+    # depths belong to the GROUP, and repeating them on every member would read as
+    # per-channel settings that could be edited independently. They cannot.
+    _add_sheet(book, "Channel groups", GROUPS_HEADERS, [
+        [
+            g.group_id, g.name, g.timezone, g.is_active, g.autofill_enabled,
+            g.cadence_config, g.min_queue_depth, g.target_queue_depth,
+            g.reuse_min_age_days,
+        ]
+        for g in bundle.channel_groups
     ])
 
     # Captions are long; wrapping keeps the Posts tab scannable.
@@ -389,6 +408,7 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         f"  {len(bundle.metrics)} metric snapshot(s)",
         f"  {len(bundle.assets)} asset(s) on record",
         f"  {len(bundle.channels)} channel(s)",
+        f"  {len(bundle.channel_groups)} channel group(s)",
         f"  {copy_result.copied} image file(s) copied",
         "",
         "A NOTE ON SECURITY",

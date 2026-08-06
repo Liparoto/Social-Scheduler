@@ -17,8 +17,19 @@ from .clients import SUPPORTED_PLATFORMS
 from .config import Config
 
 # Metrics requested from the IG media insights endpoint. We store whatever comes back;
-# missing ones are simply null. (Available metrics vary by media type / API version.)
-REQUESTED_METRICS = ["reach", "likes", "comments", "saved", "shares"]
+# missing ones are simply null.
+#
+# This list is the SAFE BASE: every name here was verified on 2026-08-05 against a real
+# Reel, image and carousel on the live account, and works on all three. That matters more
+# than it sounds — Instagram rejects the WHOLE call with HTTP 400 if any single metric is
+# invalid for that media type, so one Reels-only name in this list would wipe out metrics
+# for every image post. Per-media-type extras therefore live in media_metrics.py, which
+# knows the media type; this list must stay universally valid.
+#
+# `views` replaced `video_views`/`plays`, both of which now 400 on every media type
+# including Reels. It maps to the impressions column via COLUMN_MAP. Adding it does not
+# disturb auto-fill, which ranks on reach + saves only (see autofill.select_candidates).
+REQUESTED_METRICS = ["reach", "likes", "comments", "saved", "shares", "views"]
 
 # Story media supports a DIFFERENT set, and rejects the feed list outright (HTTP 400,
 # not partial results) — asking for likes/comments/saved/impressions on a story fails

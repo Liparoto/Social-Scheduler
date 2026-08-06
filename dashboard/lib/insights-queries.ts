@@ -83,6 +83,7 @@ export function getChannelPosts(channelId: number, limit = 500): PostRow[] {
       SELECT
         rm.id, rm.remote_post_id, rm.permalink, rm.caption, rm.thumbnail_url,
         rm.media_type, rm.media_product_type, rm.published_at, rm.publication_id,
+        rm.thumbnail_path,
         mm.reach, mm.likes, mm.comments, mm.saves, mm.shares, mm.impressions
       FROM remote_media rm
       LEFT JOIN media_metrics mm ON mm.id = (

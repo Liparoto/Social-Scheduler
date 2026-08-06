@@ -178,6 +178,11 @@ CHANNEL_COLUMNS: tuple[str, ...] = (
     "reuse_min_age_days",
     "remote_account_id",
     "linked_page_id",
+    # Which group this channel auto-fills as part of. Without it a restored backup
+    # silently returns every channel to solo auto-fill: the group rows would come back
+    # (below) with nothing pointing at them, which looks like configuration that exists
+    # but does nothing. Not a credential, so the allow-list has no reason to omit it.
+    "group_id",
 )
 
 CAPTION_PREVIEW_CHARS = 60
@@ -269,6 +274,29 @@ class ExportedChannel:
     reuse_min_age_days: int
     remote_account_id: str | None
     linked_page_id: str | None
+    group_id: int | None
+
+
+@dataclass
+class ExportedChannelGroup:
+    """A named set of channels that auto-fills as ONE unit.
+
+    Backed up as its own record because it owns real scheduling configuration — one
+    cadence, one queue depth, one reuse window — that is NOT recoverable from the
+    channels pointing at it. Losing it turns a coordinated group back into independent
+    channels that each pick their own content on their own days, which is precisely the
+    behaviour the group exists to prevent.
+    """
+
+    group_id: int
+    name: str
+    timezone: str
+    is_active: bool
+    autofill_enabled: bool
+    cadence_config: str | None
+    min_queue_depth: int
+    target_queue_depth: int
+    reuse_min_age_days: int
 
 
 @dataclass
@@ -279,6 +307,29 @@ class ExportBundle:
     metrics: list[ExportedMetric]
     assets: list[ExportedAsset]
     channels: list[ExportedChannel]
+    channel_groups: list[ExportedChannelGroup]
+
+
+def collect_channel_groups(conn: sqlite3.Connection) -> list[ExportedChannelGroup]:
+    """Every channel group. No allow-list needed — a group holds no credentials at all."""
+    return [
+        ExportedChannelGroup(
+            group_id=row["id"],
+            name=row["name"],
+            timezone=row["timezone"],
+            is_active=bool(row["is_active"]),
+            autofill_enabled=bool(row["autofill_enabled"]),
+            cadence_config=row["cadence_config"],
+            min_queue_depth=row["min_queue_depth"],
+            target_queue_depth=row["target_queue_depth"],
+            reuse_min_age_days=row["reuse_min_age_days"],
+        )
+        for row in conn.execute(
+            "SELECT id, name, timezone, is_active, autofill_enabled, cadence_config,"
+            "       min_queue_depth, target_queue_depth, reuse_min_age_days"
+            "  FROM channel_groups ORDER BY id"
+        )
+    ]
 
 
 def collect_channels(conn: sqlite3.Connection) -> list[ExportedChannel]:
@@ -299,6 +350,7 @@ def collect_channels(conn: sqlite3.Connection) -> list[ExportedChannel]:
             reuse_min_age_days=row["reuse_min_age_days"],
             remote_account_id=row["remote_account_id"],
             linked_page_id=row["linked_page_id"],
+            group_id=row["group_id"],
         )
         for row in conn.execute(f"SELECT {columns} FROM channels ORDER BY id")
     ]
@@ -440,4 +492,5 @@ def collect_all(conn: sqlite3.Connection, generated_at: str) -> ExportBundle:
         metrics=collect_metrics(conn),
         assets=collect_assets(conn),
         channels=collect_channels(conn),
+        channel_groups=collect_channel_groups(conn),
     )

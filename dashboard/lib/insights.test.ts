@@ -17,7 +17,8 @@ const day = (d: string, values: Partial<DayRow> = {}): DayRow => ({
 });
 
 const post = (p: Partial<PostRow> = {}): PostRow => ({
-  id: 1, remote_post_id: "r1", permalink: null, caption: null, thumbnail_url: null,
+  id: 1, remote_post_id: "r1", permalink: null, caption: null,
+  thumbnail_url: null, thumbnail_path: null,
   media_type: "IMAGE", media_product_type: "FEED", published_at: "2026-08-01T17:00:00+00:00",
   publication_id: null, reach: null, likes: null, comments: null, saves: null,
   shares: null, impressions: null,

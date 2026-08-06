@@ -365,3 +365,70 @@ def test_collect_all_is_read_only_under_query_only(db_path):
 
     assert bundle.posts == []
     conn.close()
+
+
+# ---- channel groups ------------------------------------------------------------------
+# A group owns real scheduling configuration — one cadence, one queue depth, one reuse
+# window — that is NOT recoverable from the channels pointing at it. Before this was
+# collected, a restored backup silently returned every grouped channel to solo auto-fill:
+# each would then pick its own content on its own days, which is exactly what grouping
+# exists to prevent.
+
+def test_channel_groups_are_backed_up(conn):
+    gid = conn.execute(
+        "INSERT INTO channel_groups (name, timezone, autofill_enabled, cadence_config,"
+        "  min_queue_depth, target_queue_depth, reuse_min_age_days)"
+        " VALUES ('Personal', 'America/Los_Angeles', 1, '{\"mon\":1}', 2, 5, 90)"
+    ).lastrowid
+    conn.commit()
+
+    bundle = collect_all(conn, GENERATED_AT)
+
+    assert len(bundle.channel_groups) == 1
+    group = bundle.channel_groups[0]
+    assert group.group_id == gid
+    assert group.name == "Personal"
+    assert group.timezone == "America/Los_Angeles"
+    assert group.autofill_enabled is True
+    assert group.cadence_config == '{"mon":1}'
+    assert (group.min_queue_depth, group.target_queue_depth) == (2, 5)
+    assert group.reuse_min_age_days == 90
+
+
+def test_a_channels_group_membership_is_backed_up(conn):
+    """The group rows alone are not enough — without group_id every channel comes back
+    ungrouped, and the restored groups would exist with nothing pointing at them."""
+    gid = conn.execute(
+        "INSERT INTO channel_groups (name) VALUES ('Personal')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO channels (platform, account_name, group_id)"
+        " VALUES ('instagram', 'Grouped', ?)", (gid,),
+    )
+    conn.execute(
+        "INSERT INTO channels (platform, account_name) VALUES ('threads', 'Solo')"
+    )
+    conn.commit()
+
+    channels = {c.account_name: c.group_id for c in collect_all(conn, GENERATED_AT).channels}
+
+    assert channels["Grouped"] == gid
+    assert channels["Solo"] is None, "an ungrouped channel must stay ungrouped"
+
+
+def test_group_export_still_carries_no_credentials(conn):
+    """The channel allow-list exists to keep tokens out of a file people email around.
+    Widening it for group_id must not have widened it for anything else."""
+    conn.execute(
+        "INSERT INTO channels (platform, account_name, access_token, token_expires_at)"
+        " VALUES ('instagram', 'IG', 'SECRET-TOKEN', '2027-01-01')"
+    )
+    conn.commit()
+
+    from dataclasses import asdict
+
+    dumped = str([asdict(c) for c in collect_all(conn, GENERATED_AT).channels])
+
+    assert "SECRET-TOKEN" not in dumped
+    assert "access_token" not in dumped
+    assert "token_expires_at" not in dumped

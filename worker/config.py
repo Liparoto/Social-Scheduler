@@ -165,6 +165,10 @@ class Config:
     # captions and deleted posts — without it the mirror drifts from reality and never
     # recovers. 200 is two pages: cheap enough to run every cycle.
     media_sync_refresh_posts: int = 200
+    # Thumbnails are cached to local disk because Meta's CDN links expire (see
+    # migration 0019). Bounded per cycle so a first sync of a large account spreads the
+    # downloads out instead of fetching a thousand images in one go.
+    thumbnail_max_per_cycle: int = 120
 
     # Account-insight history. Meta caps a SINGLE insights request at roughly 30 days, so
     # a longer history is walked in chunks of that size — hence two settings rather than
@@ -264,6 +268,7 @@ class Config:
             media_sync_max_posts=int(os.environ.get("MEDIA_SYNC_MAX_POSTS", "2000")),
             media_sync_page_size=int(os.environ.get("MEDIA_SYNC_PAGE_SIZE", "100")),
             media_sync_refresh_posts=int(os.environ.get("MEDIA_SYNC_REFRESH_POSTS", "200")),
+            thumbnail_max_per_cycle=int(os.environ.get("THUMBNAIL_MAX_PER_CYCLE", "120")),
             account_backfill_days=int(os.environ.get("ACCOUNT_BACKFILL_DAYS", "365")),
             account_series_window_days=int(
                 os.environ.get("ACCOUNT_SERIES_WINDOW_DAYS", "30")

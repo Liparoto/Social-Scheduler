@@ -10,9 +10,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from worker.media_metrics import (
+    FEED_EXTRA_METRICS, REELS_EXTRA_METRICS, instagram_metrics_for,
     media_needing_metrics, run_media_metrics, sync_channel_media_metrics,
 )
 from worker.media_sync import CallBudget
+from worker.metrics import REQUESTED_METRICS
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
 
@@ -80,6 +82,67 @@ def _metric_rows(conn):
         "SELECT mm.*, rm.remote_post_id FROM media_metrics mm "
         "JOIN remote_media rm ON rm.id = mm.remote_media_id"
     ).fetchall()
+
+
+# -- which metrics a given post may be asked for --------------------------------------
+#
+# Instagram rejects the WHOLE call with 400 when one metric is invalid for the media type,
+# so a name in the wrong list does not degrade that metric — it loses every metric for
+# that post. All names below were verified one at a time against real media on the live
+# account (2026-08-05).
+
+def test_every_post_type_asks_for_views():
+    """`views` replaced video_views and plays, which now 400 on every media type — Reels
+    included. Without it a Reel has no view count at all, which is what prompted this."""
+    assert "views" in REQUESTED_METRICS
+    for product_type in ("REELS", "FEED", None):
+        assert "views" in instagram_metrics_for(
+            {"media_product_type": product_type, "media_type": "VIDEO"}
+        )
+
+
+def test_the_retired_names_are_never_requested():
+    """video_views and plays 400 on everything now. Requesting either would take the
+    whole call down with it."""
+    for media in ({"media_product_type": "REELS"}, {"media_product_type": "FEED"}):
+        asked = instagram_metrics_for({**media, "media_type": "VIDEO"})
+        assert "video_views" not in asked and "plays" not in asked
+
+
+def test_a_reel_gets_the_watch_time_metrics():
+    asked = instagram_metrics_for({"media_product_type": "REELS", "media_type": "VIDEO"})
+    assert set(REELS_EXTRA_METRICS) <= set(asked)
+
+
+def test_a_reel_is_never_asked_for_feed_only_metrics():
+    """profile_visits and follows are rejected by Reels — the split runs both ways."""
+    asked = instagram_metrics_for({"media_product_type": "REELS", "media_type": "VIDEO"})
+    assert not set(FEED_EXTRA_METRICS) & set(asked)
+
+
+def test_a_feed_post_is_never_asked_for_reels_metrics(  ):
+    """The expensive direction: one Reels-only name here would wipe out metrics for
+    every image and carousel on the account."""
+    for media_type in ("IMAGE", "CAROUSEL_ALBUM"):
+        asked = instagram_metrics_for(
+            {"media_product_type": "FEED", "media_type": media_type}
+        )
+        assert not set(REELS_EXTRA_METRICS) & set(asked)
+        assert set(FEED_EXTRA_METRICS) <= set(asked)
+
+
+def test_a_feed_video_is_not_treated_as_a_reel():
+    """media_type='VIDEO' does not make it a Reel — media_product_type does. Keying on
+    the wrong field would send Reels metrics to an ordinary feed video and 400."""
+    asked = instagram_metrics_for({"media_product_type": "FEED", "media_type": "VIDEO"})
+    assert not set(REELS_EXTRA_METRICS) & set(asked)
+
+
+def test_an_unknown_product_type_falls_back_to_the_feed_set():
+    """Safer default: the feed extras are valid for more media types than the Reels ones,
+    and a wrong guess here costs every metric on the post."""
+    asked = instagram_metrics_for({"media_product_type": None, "media_type": "IMAGE"})
+    assert not set(REELS_EXTRA_METRICS) & set(asked)
 
 
 # -- due selection -------------------------------------------------------------------

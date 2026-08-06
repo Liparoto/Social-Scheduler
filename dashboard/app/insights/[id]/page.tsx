@@ -58,10 +58,16 @@ const GAPS: Record<string, string> = {
 // says why it is missing.
 const POST_COLUMNS: Record<
   string,
-  { key: "reach" | "likes" | "comments" | "saves" | "shares"; label: string }[]
+  {
+    key: "reach" | "impressions" | "likes" | "comments" | "saves" | "shares";
+    label: string;
+  }[]
 > = {
   instagram: [
     { key: "reach", label: "Reach" },
+    // The impressions column holds Instagram's `views` — the name that replaced the
+    // retired impressions/plays/video_views, and the headline number on a Reel.
+    { key: "impressions", label: "Views" },
     { key: "likes", label: "Likes" },
     { key: "comments", label: "Comments" },
     { key: "saves", label: "Saves" },
@@ -375,18 +381,20 @@ export default async function ChannelInsightsPage({
                     <tr key={post.id} className="align-middle">
                       <td className="py-2.5 pr-4">
                         <div className="flex items-center gap-3">
-                          {/* Meta's CDN thumbnail URLs expire, and Threads returns none
-                              at all. The fallback is a plain tinted square rather than
-                              truncated text — the kind is already named by the badge
-                              beside it, so "IMAG" would just be noise. */}
+                          {/* Served from OUR cached copy, never hotlinked: the platform's
+                              thumbnail URLs are short-lived signed CDN links, so linking
+                              them directly turns this column into broken images within
+                              weeks. Nothing cached yet (or a link that expired before the
+                              worker reached it) falls back to a plain tinted square — the
+                              kind is already named by the badge beside it. */}
                           <span
                             className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-surface-sunken"
                             aria-hidden
                           >
-                            {post.thumbnail_url ? (
+                            {post.thumbnail_path ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
-                                src={post.thumbnail_url}
+                                src={`/api/insights/media/${post.id}/thumbnail`}
                                 alt=""
                                 className="h-full w-full object-cover"
                                 loading="lazy"

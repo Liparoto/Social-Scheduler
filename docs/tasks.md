@@ -1728,3 +1728,44 @@ demographic breakdowns. Suites: **651 worker + 394 dashboard**, 0 lint errors.
 - [ ] **Reels `video_views`** is never requested — the shared post-metric list omits it,
       and Instagram 400s the whole call if one name is invalid, so adding it needs a probe.
 - [ ] Meta's CDN thumbnail URLs expire; there is no local proxy for posts we did not publish.
+
+---
+
+## Phase — backlog sweep  ·  2026-08-05
+
+Four items handled together after the Insights work, per owner request.
+
+- [x] **Backups silently lost channel-group config.** `CHANNEL_COLUMNS` omitted `group_id`
+      and `channel_groups` was never collected, so a restore returned every grouped channel
+      to solo auto-fill — each then picking its own content on its own days, the exact
+      thing grouping prevents. Now collected as its own record plus a "Channel groups" tab.
+      The allow-list still excludes credentials; a test asserts no token can reach the file.
+      Verified on the live install: "Liparoto Meta" round-trips with its full cadence.
+- [x] **Reels had no view count.** The plan was to add `video_views` — probing first showed
+      `video_views` AND `plays` now 400 on *every* media type. `views` is the replacement
+      and works everywhere. Metric sets also differ BY MEDIA TYPE (`ig_reels_*` 400s on an
+      image; `profile_visits`/`follows` 400 on a Reel), and Instagram rejects the whole call
+      for one bad name — so the request list is now per-type, with the shared base kept
+      universally valid. Views is surfaced as a sortable leaderboard column.
+- [x] **Leaderboard thumbnails were hotlinked to expiring CDN links.** Now cached locally
+      and served from our disk, mirroring avatars/0012. Migration `0019` adds
+      `thumbnail_path` + `thumbnail_fetched_at`; the second column is what stops a post
+      whose link already expired from being re-downloaded every cycle forever.
+      **Downscaled with `sips`** (macOS built-in, no new dependency): the first real run
+      stored Meta's originals at **115 MB for 118 images** — `thumbnail_url` is frequently
+      the full-size media. Now 6.0 MB for 120.
+- [x] **`createDraftPost` ignored `media_kind`.** post_type came from asset COUNT alone, so
+      a lone video became `single`. `/api/posts/draft` already worked around it by passing
+      the type explicitly, but `createDraftPostsBulk` does not — bulk-importing a video wrote
+      the wrong type. Fixed at the derivation so no caller has to know.
+
+**Verified:** 692 worker + 401 dashboard tests, 0 lint errors, clean typecheck. Live install
+re-synced: 146/146 posts carry views, the Reel reads 293 views, 120 thumbnails cached.
+
+### Still open (unchanged)
+- [ ] Facebook Pages insights — skipped by decision; no Page connected to probe against.
+- [ ] Autostart is login-scoped, not boot-scoped (works against "fire with the Mac off").
+- [ ] `/media` overstates reclaimable space (`listAssetsWithUsage` ignores `cover_asset_id`).
+- [ ] Media → post links dead-end on reused media (`MIN(post_id)` is arbitrary).
+- [ ] BPP recycling — now unblocked: `media_metrics` ranks every post, ours or not.
+- [ ] Approval-workflow UI (flag exists, no UI; no channel uses it).

@@ -1,4 +1,5 @@
 import "server-only";
+import type DatabaseType from "better-sqlite3";
 import { getDb, nowIso } from "./db";
 import type {
   Asset,
@@ -707,10 +708,35 @@ export interface CreateDraftInput extends ContentModelInput {
  * Create a post + ordered assets with NO publications (a reusable draft).
  * Content-model fields are optional — existing callers keep today's defaults.
  */
+/**
+ * The post type implied by a set of assets, when the caller did not state one.
+ *
+ * Asset COUNT alone is not enough, which is what this used to use: a lone video became
+ * "single", so a bulk import of a video produced a post the publisher cannot send as a
+ * Reel. `/api/posts/draft` had already worked around it by passing post_type explicitly,
+ * but createDraftPostsBulk does not — that path is where the wrong type actually reached
+ * the database.
+ *
+ * Reading media_kind fixes it at the derivation instead of at each caller, so the next
+ * caller does not have to know.
+ */
+function derivePostType(db: DatabaseType.Database, assetIds: number[]): PostType {
+  // No assets: left as "single" deliberately rather than guessed at "text". A text post
+  // always states its type (see /api/posts/draft), so anything reaching here with no
+  // assets is an incomplete draft, and changing its type is a separate decision from
+  // fixing the video case.
+  if (assetIds.length === 0) return "single";
+  if (assetIds.length > 1) return "carousel";
+
+  const row = db
+    .prepare("SELECT media_kind FROM assets WHERE id = ?")
+    .get(assetIds[0]) as { media_kind: string } | undefined;
+  return row?.media_kind === "video" ? "reel" : "single";
+}
+
 export function createDraftPost(input: CreateDraftInput): number {
   const db = getDb();
-  const postType: PostType =
-    input.post_type ?? (input.asset_ids.length > 1 ? "carousel" : "single");
+  const postType: PostType = input.post_type ?? derivePostType(db, input.asset_ids);
   const tx = db.transaction((data: CreateDraftInput) => {
     const info = db
       .prepare(

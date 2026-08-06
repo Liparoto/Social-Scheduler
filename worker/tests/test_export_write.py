@@ -8,10 +8,10 @@ from worker.export.write import copy_images
 GENERATED_AT = "2026-07-24T19:30:00+00:00"
 
 
-def _bundle(posts):
+def _bundle(posts, channels=None, channel_groups=None):
     return ExportBundle(
         generated_at=GENERATED_AT, posts=posts, sends=[], metrics=[],
-        assets=[], channels=[],
+        assets=[], channels=channels or [], channel_groups=channel_groups or [],
     )
 
 
@@ -277,7 +277,7 @@ def _channel():
         business_label=None, timezone="UTC", is_active=True, requires_approval=False,
         autofill_enabled=False, cadence_config=None, min_queue_depth=0,
         target_queue_depth=0, reuse_min_age_days=180, remote_account_id="178414",
-        linked_page_id=None,
+        linked_page_id=None, group_id=None,
     )
 
 
@@ -354,12 +354,14 @@ def _rows(sheet):
     return [dict(zip(header, row)) for row in values[1:]]
 
 
-def test_write_workbook_creates_all_five_tabs(tmp_path):
+def test_write_workbook_creates_every_tab(tmp_path):
     path = write_workbook(_bundle([]), tmp_path, missing_asset_ids=set())
     book = load_workbook(path)
 
     assert path.name == "SocialScheduler-Export.xlsx"
-    assert book.sheetnames == ["Posts", "Sends", "Metrics", "Assets", "Channels"]
+    assert book.sheetnames == [
+        "Posts", "Sends", "Metrics", "Assets", "Channels", "Channel groups",
+    ]
 
 
 def test_write_workbook_writes_headers_even_for_an_empty_database(tmp_path):

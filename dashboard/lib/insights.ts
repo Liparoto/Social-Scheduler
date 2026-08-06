@@ -207,6 +207,9 @@ export interface PostRow {
   permalink: string | null;
   caption: string | null;
   thumbnail_url: string | null;
+  /** Store-relative path to OUR cached copy. Null until the worker has fetched one —
+   *  and permanently null when the CDN link expired before we got to it. */
+  thumbnail_path: string | null;
   media_type: string | null;
   media_product_type: string | null;
   published_at: string | null;
@@ -221,6 +224,9 @@ export interface PostRow {
 
 export const POST_SORTS = [
   { key: "reach", label: "Reach" },
+  // Stored in the impressions column: Instagram's `views` replaced the retired
+  // `impressions`/`plays`/`video_views` names, and it is the headline number for a Reel.
+  { key: "impressions", label: "Views" },
   { key: "likes", label: "Likes" },
   { key: "comments", label: "Comments" },
   { key: "saves", label: "Saves" },
