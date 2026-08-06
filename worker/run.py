@@ -55,6 +55,24 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
     # (alive != publishing). The dashboard reads this to know a queued refresh will be picked up.
     db.write_heartbeat(conn, now.isoformat())
 
+    # Recover anything a previous worker claimed and never finished, BEFORE the kill
+    # switch can return early. This writes no posts — it only moves an abandoned row out
+    # of 'publishing', where nothing would ever look at it again. Running it above the
+    # switch is deliberate: flipping the kill switch mid-send is one of the ways a row
+    # gets stranded, so that is precisely when the operator needs to be told.
+    stale = db.recover_stale_claims(
+        conn, now.isoformat(), config.publish_claim_lease_seconds
+    )
+    if stale and logger:
+        # WARNING, not info: each of these is a scheduled post that did not go out, and
+        # may or may not be live on the platform. It should never scroll past unnoticed.
+        for row in stale:
+            logger.warning(
+                "[publication %s] recovered from an abandoned publish and marked FAILED "
+                "— check channel %s on the platform before retrying; it may already be live.",
+                row["id"], row["channel_id"],
+            )
+
     if kill_switch_active():
         if logger:
             logger.warning("KILL_SWITCH active — publishing nothing this cycle.")

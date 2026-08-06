@@ -7,6 +7,7 @@ is per-connection and must be set each time). Row factory returns dict-like rows
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -98,6 +99,66 @@ def claim_publication(conn: sqlite3.Connection, publication_id: int, now_iso: st
     )
     conn.commit()
     return cur.rowcount == 1
+
+
+STALE_CLAIM_ERROR = (
+    "Worker stopped while this was publishing. It may or may not have reached the "
+    "platform — check the account before retrying, or a retry could post it twice."
+)
+
+
+def recover_stale_claims(
+    conn: sqlite3.Connection, now_iso: str, lease_seconds: int
+) -> list[sqlite3.Row]:
+    """Surface publications abandoned mid-send. Returns the rows it recovered.
+
+    claim_publication moves a row to 'publishing' before any work starts, which is what
+    stops two daemons publishing it. But nothing moves it back: fetch_due_publications
+    only ever selects 'scheduled', so a worker that dies between the claim and the final
+    status write leaves that row parked at 'publishing' forever — never retried, never
+    reported. A scheduled post silently never happens, which is exactly the outcome this
+    project says must never be silent.
+
+    That is not hypothetical. A crash, a power cut, or the `kill -9` that
+    Stop-SocialScheduler-Mac.command escalates to will all do it.
+
+    **Recovered to 'failed', deliberately NOT to 'scheduled'.** The dangerous case is a
+    worker that died *after* the platform accepted the post but *before* it could write
+    the result: the post is already live, and this row is the only thing that does not
+    know. Re-queueing it would publish it a second time — the very failure claiming
+    exists to prevent. Marking it failed makes it visible and leaves the decision to a
+    human, who can use the dashboard's Retry once they have looked at the account.
+
+    The lease must comfortably exceed the longest legitimate publish or this becomes the
+    double-post bug it is meant to prevent. A Reel is the worst case: 90 status polls at
+    10s each, plus tunnel startup. See Config.publish_claim_lease_seconds.
+    """
+    cutoff = (
+        datetime.fromisoformat(now_iso) - timedelta(seconds=lease_seconds)
+    ).isoformat()
+    # Selected before the UPDATE so the caller can log exactly what was recovered; a bare
+    # count would say something went wrong without saying which post.
+    stale = conn.execute(
+        """
+        SELECT * FROM publications
+        WHERE status = 'publishing'
+          AND COALESCE(updated_at, created_at) <= ?
+        """,
+        (cutoff,),
+    ).fetchall()
+    if not stale:
+        return []
+    conn.execute(
+        """
+        UPDATE publications
+        SET status = 'failed', last_error = ?, next_retry_at = NULL, updated_at = ?
+        WHERE status = 'publishing'
+          AND COALESCE(updated_at, created_at) <= ?
+        """,
+        (STALE_CLAIM_ERROR, now_iso, cutoff),
+    )
+    conn.commit()
+    return stale
 
 
 def update_publication(conn: sqlite3.Connection, publication_id: int, **fields) -> None:

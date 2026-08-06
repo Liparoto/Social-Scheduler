@@ -101,6 +101,20 @@ class Config:
     # gives no transcode SLA. Revise from real observations.
     reels_status_poll_interval: int = 10
     reels_status_poll_max_tries: int = 90
+    # How long a claimed publication may sit at 'publishing' before the worker treats it
+    # as abandoned and marks it failed (see db.recover_stale_claims).
+    #
+    # This number is a safety margin, not a preference. Too SHORT and a publish still
+    # legitimately in flight gets recovered and can be sent twice — the exact bug
+    # claiming exists to prevent. Too long only delays visibility of a genuine crash.
+    # So it is set well above the worst legitimate case and erring long is correct.
+    #
+    # Worst case today is a Reel: reels_status_poll_interval (10s) x
+    # reels_status_poll_max_tries (90) = 900s of transcode polling, plus
+    # tunnel_ready_timeout (60s) and container creation — call it ~17 minutes. 1800s is
+    # comfortably clear of that while still surfacing a stranded post the same day.
+    # RAISE THIS if the Reels poll budget is ever increased.
+    publish_claim_lease_seconds: int = 1800
     # Metrics fetching: only refresh posts published within this window, and no more
     # often than this interval per publication (keeps API usage sane).
     metrics_max_age_days: int = 30
@@ -216,6 +230,9 @@ class Config:
             graph_base=os.environ.get("META_GRAPH_BASE", "https://graph.facebook.com"),
             default_timezone=os.environ.get("DEFAULT_TIMEZONE", "UTC"),
             poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "30")),
+            publish_claim_lease_seconds=int(
+                os.environ.get("PUBLISH_CLAIM_LEASE_SECONDS", "1800")
+            ),
             metrics_max_age_days=int(os.environ.get("METRICS_MAX_AGE_DAYS", "30")),
             metrics_min_interval_hours=int(os.environ.get("METRICS_MIN_INTERVAL_HOURS", "6")),
             fb_post_insight_metrics=os.environ.get(
