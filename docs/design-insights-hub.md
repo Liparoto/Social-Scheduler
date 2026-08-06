@@ -2,8 +2,10 @@
 
 Account-wide and per-post metrics for every connected profile, in one dashboard section.
 
-Status: Instagram and Threads shipped 2026-08-05. Facebook Pages deferred — see
-`docs/tasks.md` for the verified results and the open items.
+Status: Instagram and Threads shipped 2026-08-05. Facebook Pages skipped by decision on
+the same date — no Page is connected to this install, so its metric names cannot be probed
+against a live account. See `docs/tasks.md` for the verified results, the open items, and
+what to do if a Page is added later.
 
 ---
 

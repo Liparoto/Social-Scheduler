@@ -1717,8 +1717,13 @@ days of account history, 154/154 posts with metrics (17 reused, 0 API calls wast
 demographic breakdowns. Suites: **651 worker + 394 dashboard**, 0 lint errors.
 
 ### Not done
-- [ ] **Facebook Pages** — every adapter registers `facebook: None`. Needs its own probe
-      first; Meta retired a batch of Page metrics on 2026-06-15.
+- **Facebook Pages — skipped by decision (2026-08-05), not pending work.** There is no
+  Facebook Page connected to this install, so its metric names could not be probed against
+  a live account, and Meta retired a batch of Page metrics on 2026-06-15. Building it
+  blind would ship guessed names that 400 — the exact failure the probe exists to prevent.
+  Every adapter registers `facebook: None` deliberately, and the hub says so on screen.
+  If a Page is added later: connect it, run `python3 -m worker.insights_probe --channel N`,
+  then wire the adapters using the names it reports.
 - [ ] **Reels `video_views`** is never requested — the shared post-metric list omits it,
       and Instagram 400s the whole call if one name is invalid, so adding it needs a probe.
 - [ ] Meta's CDN thumbnail URLs expire; there is no local proxy for posts we did not publish.
