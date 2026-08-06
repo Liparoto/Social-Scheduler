@@ -201,6 +201,9 @@ export interface PostPublicationRow {
   comments: number | null;
   saves: number | null;
   shares: number | null;
+  /** 1 = gone from the platform, 0 = still there, null = not mirrored (Stories, or
+   *  anything published before syncing began). Null is NOT deletion. */
+  removed_from_platform: number | null;
   channel_id: number;
   channel_name: string;
   channel_platform: string;

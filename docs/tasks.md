@@ -1906,3 +1906,16 @@ three days at 3/day in a test, and single-time cadences still produce one per da
       run two beating run one is the whole case for a BPP. A posted run the worker has not
       reached yet says "metrics not fetched yet" rather than borrowing another run's
       figures and reading as zeros.
+
+- [x] **Surface and deletion state on each run (2026-08-06).** Per-run metrics alone
+      misread two real cases on this account: a **Story** reports reach/views/replies and
+      never likes, so "18 reach, no likes" looked like a feed post that flopped — there are
+      6 story runs here, all with zero likes by design. Story runs are now labelled
+      "story · 24h" and their figures marked final, since a story is gone after a day
+      rather than still climbing; one that expired before the worker reached it says so
+      instead of showing nothing.
+
+      A run whose post was later **removed from the platform** is flagged too, so frozen
+      numbers are not read as current. NULL is deliberately not treated as deletion: a
+      Story never appears on the /media edge and anything published before syncing began
+      has no mirror row, so absence means unknown, not gone.

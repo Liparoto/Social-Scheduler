@@ -112,6 +112,27 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
               Shown only once a run has posted AND has numbers — a scheduled send has
               nothing to report, and a posted one the worker has not reached yet would
               read as zeros if it borrowed another run's figures. */}
+          {/* A Story reports reach, views and replies — never likes, comments or saves.
+              Without saying so, "18 reach" with no likes reads as a feed post that
+              flopped, when it is simply a different surface measured differently. And a
+              Story is gone after 24h by design, so its numbers are final rather than
+              still climbing. */}
+          {send.surface === "story" ? (
+            <span
+              className="rounded-full bg-surface-sunken px-1.5 py-px text-[10px] text-muted"
+              title="Stories expire after 24 hours. Instagram reports reach, views and replies for them — never likes, comments or saves."
+            >
+              story · 24h
+            </span>
+          ) : null}
+          {send.removed_from_platform === 1 ? (
+            <span
+              className="rounded-full px-1.5 py-px text-[10px] text-status-failed"
+              title="This post is no longer on the account. Its numbers are frozen at the last reading and will not update."
+            >
+              removed from platform
+            </span>
+          ) : null}
           {send.status === "posted" && send.is_dry_run !== 1 && send.reach !== null ? (
             <span className="data text-[11px] text-muted">
               {send.reach?.toLocaleString()} reach
@@ -119,9 +140,14 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
               {send.likes !== null ? ` · ${send.likes.toLocaleString()} likes` : ""}
               {send.comments ? ` · ${send.comments.toLocaleString()} comments` : ""}
               {send.saves ? ` · ${send.saves.toLocaleString()} saves` : ""}
+              {send.surface === "story" ? " · final" : ""}
             </span>
           ) : send.status === "posted" && send.is_dry_run !== 1 ? (
-            <span className="text-[11px] text-faint">metrics not fetched yet</span>
+            <span className="text-[11px] text-faint">
+              {send.surface === "story"
+                ? "story expired before metrics were fetched"
+                : "metrics not fetched yet"}
+            </span>
           ) : null}
         </div>
         <div className="flex items-center gap-2">

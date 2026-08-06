@@ -1370,9 +1370,16 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
               --
               -- Per RUN, not per post, and that is the point: reposting only earns its
               -- place if you can see whether run two beat run one.
-              pm.reach, pm.impressions, pm.likes, pm.comments, pm.saves, pm.shares
+              pm.reach, pm.impressions, pm.likes, pm.comments, pm.saves, pm.shares,
+              -- Whether the post this run created is still on the platform. NULL means we
+              -- have no mirror row for it at all — which is the normal case for a Story
+              -- (they are not on the /media edge) and for anything published before this
+              -- install started syncing. Absence is not deletion, and the UI must not
+              -- present it as such.
+              rm.is_deleted AS removed_from_platform
        FROM publications pub
        JOIN channels c ON c.id = pub.channel_id
+       LEFT JOIN remote_media rm ON rm.publication_id = pub.id
        LEFT JOIN post_metrics pm ON pm.id = (
          SELECT id FROM post_metrics WHERE publication_id = pub.id
          ORDER BY fetched_at DESC, id DESC LIMIT 1)
