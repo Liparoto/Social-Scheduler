@@ -1361,8 +1361,21 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
               pub.first_comment_retry_requested,
               c.account_name AS channel_name, c.platform AS channel_platform,
               c.timezone AS channel_timezone, c.color_hue AS channel_color_hue,
-              c.avatar_path AS channel_avatar_path
-       FROM publications pub JOIN channels c ON c.id = pub.channel_id
+              c.avatar_path AS channel_avatar_path,
+              pub.published_at,
+              -- How THIS run did. Latest snapshot per publication, via a correlated
+              -- lookup rather than a join on post_metrics: metrics are a time series, and
+              -- joining them would return one row per refresh and show the same send
+              -- several times over.
+              --
+              -- Per RUN, not per post, and that is the point: reposting only earns its
+              -- place if you can see whether run two beat run one.
+              pm.reach, pm.impressions, pm.likes, pm.comments, pm.saves, pm.shares
+       FROM publications pub
+       JOIN channels c ON c.id = pub.channel_id
+       LEFT JOIN post_metrics pm ON pm.id = (
+         SELECT id FROM post_metrics WHERE publication_id = pub.id
+         ORDER BY fetched_at DESC, id DESC LIMIT 1)
        WHERE pub.post_id = ? ORDER BY pub.scheduled_at ASC`
     )
     .all(postId) as PostPublicationRow[];

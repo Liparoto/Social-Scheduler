@@ -105,6 +105,24 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
           <span className="data text-xs text-ink-soft">
             {formatInTz(send.scheduled_at, send.channel_timezone)} {tzAbbrev(send.channel_timezone)}
           </span>
+          {/* How THIS run did. Per run, not per post: the same content going out twice
+              produces two results, and reposting only earns its place if you can see
+              whether the second run beat the first.
+
+              Shown only once a run has posted AND has numbers — a scheduled send has
+              nothing to report, and a posted one the worker has not reached yet would
+              read as zeros if it borrowed another run's figures. */}
+          {send.status === "posted" && send.is_dry_run !== 1 && send.reach !== null ? (
+            <span className="data text-[11px] text-muted">
+              {send.reach?.toLocaleString()} reach
+              {send.impressions !== null ? ` · ${send.impressions.toLocaleString()} views` : ""}
+              {send.likes !== null ? ` · ${send.likes.toLocaleString()} likes` : ""}
+              {send.comments ? ` · ${send.comments.toLocaleString()} comments` : ""}
+              {send.saves ? ` · ${send.saves.toLocaleString()} saves` : ""}
+            </span>
+          ) : send.status === "posted" && send.is_dry_run !== 1 ? (
+            <span className="text-[11px] text-faint">metrics not fetched yet</span>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={send.status} dryRun={send.is_dry_run === 1} />

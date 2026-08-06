@@ -1897,3 +1897,12 @@ reasons ("top 5% · reach, views, likes").
 
 **Verified:** 738 worker + 401 dashboard tests, 0 lint errors. Six sends queued across
 three days at 3/day in a test, and single-time cadences still produce one per day.
+
+
+- [x] **Per-run metrics on the post page (2026-08-06).** The data was always stored per
+      publication — post 5 has run five times — but nothing showed it, so the same content
+      going out twice looked like one result. Each send now reports its own reach / views /
+      likes / comments / saves, which is the only way to tell whether reposting worked:
+      run two beating run one is the whole case for a BPP. A posted run the worker has not
+      reached yet says "metrics not fetched yet" rather than borrowing another run's
+      figures and reading as zeros.

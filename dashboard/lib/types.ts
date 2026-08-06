@@ -193,6 +193,14 @@ export interface Publication {
 
 export interface PostPublicationRow {
   id: number;
+  published_at: string | null;
+  /** How this particular run did. Null until the worker has fetched metrics for it. */
+  reach: number | null;
+  impressions: number | null;
+  likes: number | null;
+  comments: number | null;
+  saves: number | null;
+  shares: number | null;
   channel_id: number;
   channel_name: string;
   channel_platform: string;
