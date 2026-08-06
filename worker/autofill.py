@@ -38,7 +38,7 @@ from .scheduling import (
     daily_slots, parse_cadence_times, parse_iso, parse_weekly_cadence,
     weekly_date_slots,
 )
-from .time_of_day import band_times, post_bands, resolve_slot_time
+from .time_of_day import band_times, post_allows_band, post_bands, resolve_slot_time
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
 
@@ -638,6 +638,66 @@ def _unit_publication_count(conn, member_ids: list[int]) -> int:
     ).fetchone()
     return row[0] or 0
 
+
+def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
+            due=frozenset()):
+    """Place items into slots, honouring each item's time_of_day bands.
+
+    `slots` is an iterable of (utc_dt, (hour, minute)) — a lazy generator on the first pass and
+    a fixed list on the BPP re-fill, which is why this takes an iterable rather than a list.
+    Returns [(item, utc_dt, (hour, minute), is_bpp)].
+
+    A slot nothing fits is SKIPPED, not consumed: holding a post back must cost an unused slot,
+    never queue depth. Conversely the walk stops the moment nothing remaining can fit any band
+    the cadence covers, so an impossible cadence ends in a few steps instead of grinding
+    through a year of slots that provably cannot be filled.
+
+    `pool`/`due` carry BPP: at a due POSITION the stalest pool post that fits the slot's band
+    wins, and if none fits the slot falls through to normal selection and is NOT flagged —
+    because it isn't a BPP.
+    """
+    remaining = list(items)
+    remaining_pool = list(pool or [])
+    used: set[int] = set()
+    out: list = []
+
+    def fits(item, band):
+        return post_allows_band(bands_by_post.get(item[0]["post_id"], set()), band)
+
+    def take(seq, band):
+        for index, item in enumerate(seq):
+            # A post taken from the OTHER list stays in this one; `used` is what stops it
+            # being placed twice, since the pool and the candidates share a library.
+            if item[0]["post_id"] in used:
+                continue
+            if fits(item, band):
+                return seq.pop(index)
+        return None
+
+    def anything_left():
+        return any(
+            fits(item, band)
+            for item in remaining + remaining_pool
+            for band in covered
+        )
+
+    if not anything_left():
+        return out
+    for slot, hhmm in slots:
+        if len(out) >= need:
+            break
+        band = band_of(hhmm)
+        item = take(remaining_pool, band) if len(out) in due else None
+        is_bpp = item is not None
+        if item is None:
+            item = take(remaining, band)
+        if item is None:
+            continue  # nothing fits this slot — skip it, do not consume it
+        used.add(item[0]["post_id"])
+        out.append((item, slot, hhmm, is_bpp))
+        if not anything_left():
+            break
+    return out
 
 
 def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logger) -> int:

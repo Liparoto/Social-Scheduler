@@ -480,3 +480,98 @@ def test_a_single_time_cadence_still_posts_once_a_day(conn, config):
         ).fetchall()
     ]
     assert len(dates) == len(set(dates)), "one post per day on the single-time cadence"
+
+
+# ---- _assign: band-matching placement ------------------------------------------
+from worker.autofill import _assign  # noqa: E402
+from worker.time_of_day import derive_band  # noqa: E402
+
+_BT = {"morning": (9, 0), "afternoon": (13, 0), "evening": (18, 0)}
+
+
+def _band_of(hm):
+    return derive_band(hm[0], hm[1], _BT)
+
+
+def _item(post_id):
+    """An (row, recipients) pair — _assign only ever reads row["post_id"]."""
+    return ({"post_id": post_id}, [])
+
+
+def _slot(day, hour, minute):
+    return (datetime(2026, 8, day, hour, minute, tzinfo=timezone.utc), (hour, minute))
+
+
+def test_assign_skips_a_slot_no_candidate_fits():
+    # An evening post must not take the 09:00 slot; it waits for 18:00, and 09:00 goes unused.
+    out = _assign(
+        iter([_slot(3, 9, 0), _slot(3, 18, 0)]),
+        [_item(1)], {1: {"evening"}}, _band_of, 2, {"morning", "evening"},
+    )
+    assert [(item[0]["post_id"], hm) for item, _, hm, _ in out] == [(1, (18, 0))]
+
+
+def test_assign_takes_the_highest_ranked_candidate_that_fits():
+    # 1 ranks first but is a morning post, so the evening slot goes to 2.
+    out = _assign(
+        iter([_slot(3, 18, 0)]),
+        [_item(1), _item(2)], {1: {"morning"}, 2: set()}, _band_of, 1,
+        {"morning", "evening"},
+    )
+    assert out[0][0][0]["post_id"] == 2
+
+
+def test_assign_fills_to_need_even_when_most_slots_are_unusable():
+    # Two slots a day, only the evening one usable, three evening posts -> three days out.
+    def slots():
+        for day in range(3, 13):
+            yield _slot(day, 9, 0)
+            yield _slot(day, 18, 0)
+
+    out = _assign(
+        slots(), [_item(1), _item(2), _item(3)],
+        {1: {"evening"}, 2: {"evening"}, 3: {"evening"}}, _band_of, 3,
+        {"morning", "evening"},
+    )
+    assert [item[0]["post_id"] for item, _, _, _ in out] == [1, 2, 3]
+    assert [hm for _, _, hm, _ in out] == [(18, 0), (18, 0), (18, 0)]
+    assert [dt.day for _, dt, _, _ in out] == [3, 4, 5]
+
+
+def test_assign_stops_when_nothing_left_can_fit_any_covered_band():
+    # The generator is capped only so a REGRESSION fails instead of hanging the suite.
+    def nearly_endless():
+        for day in range(1, 5000):
+            yield _slot(3, 9, 0)
+
+    out = _assign(nearly_endless(), [_item(1)], {1: {"evening"}}, _band_of, 5, {"morning"})
+    assert out == []
+
+
+def test_assign_uses_the_pool_at_a_due_position_when_the_band_fits():
+    out = _assign(
+        iter([_slot(3, 18, 0), _slot(4, 18, 0)]),
+        [_item(1), _item(2)], {1: set(), 2: set(), 9: {"evening"}}, _band_of, 2,
+        {"evening"}, pool=[_item(9)], due={0},
+    )
+    assert [(item[0]["post_id"], flag) for item, _, _, flag in out] == [(9, True), (1, False)]
+
+
+def test_assign_falls_back_to_normal_selection_when_the_pool_does_not_fit():
+    # Position 0 is due, but the only pool post is evening-tagged and slot 0 is morning. The
+    # slot is filled normally and must NOT be flagged as recycled — it isn't one.
+    out = _assign(
+        iter([_slot(3, 9, 0), _slot(3, 18, 0)]),
+        [_item(1), _item(2)], {1: set(), 2: set(), 9: {"evening"}}, _band_of, 2,
+        {"morning", "evening"}, pool=[_item(9)], due={0},
+    )
+    assert [(item[0]["post_id"], flag) for item, _, _, flag in out] == [(1, False), (2, False)]
+
+
+def test_assign_never_places_the_same_post_twice():
+    # The pool and the normal list are drawn from the same library, so overlap is routine.
+    out = _assign(
+        iter([_slot(3, 18, 0), _slot(4, 18, 0)]),
+        [_item(9)], {9: set()}, _band_of, 2, {"evening"}, pool=[_item(9)], due={0},
+    )
+    assert [item[0]["post_id"] for item, _, _, _ in out] == [9]
