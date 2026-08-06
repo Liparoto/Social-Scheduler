@@ -361,3 +361,37 @@ def daily_slots(
                     slots.append(utc_dt)
         cursor += timedelta(days=1)
     return slots
+
+
+def iter_slots(cadence: Cadence, tz_name: str, after: datetime, horizon_days: int = 366):
+    """Yield (utc_dt, (hour, minute)) chronologically, strictly after `after`.
+
+    The local (hour, minute) rides along because the caller needs it to derive the slot's band,
+    and recovering it from the UTC instant would mean a second timezone conversion per slot.
+
+    A GENERATOR on purpose: auto-fill cannot know how many slots it needs until it knows how
+    many it can fill, because a slot no remaining candidate's band fits is SKIPPED rather than
+    consumed. Returning a fixed-length list would force the caller to guess.
+    """
+    if cadence.mode == "interval":
+        yield from _iter_interval_slots(cadence, tz_name, after, horizon_days)
+    else:
+        yield from _iter_time_slots(cadence, tz_name, after, horizon_days)
+
+
+def _iter_time_slots(cadence: Cadence, tz_name: str, after: datetime, horizon_days: int):
+    tz = ZoneInfo(tz_name)
+    cursor = after.astimezone(tz).date()
+    for _ in range(horizon_days):
+        # cadence.slots is sorted by time, so a day's slots come out in clock order.
+        for hour, minute, weekdays in cadence.slots:
+            if cursor.weekday() not in weekdays:
+                continue
+            utc_dt = datetime.combine(cursor, dtime(hour, minute), tz).astimezone(UTC)
+            if utc_dt > after:
+                yield utc_dt, (hour, minute)
+        cursor += timedelta(days=1)
+
+
+def _iter_interval_slots(cadence, tz_name, after, horizon_days):
+    return iter(())  # Task 5

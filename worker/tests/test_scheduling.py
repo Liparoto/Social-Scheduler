@@ -259,3 +259,62 @@ def test_candidate_local_times_wraps_midnight():
     times = set(c.candidate_local_times())
     assert (23, 0) in times and (0, 30) in times and (2, 0) in times
     assert (12, 0) not in times
+
+
+# ---- iter_slots (Task 4) --------------------------------------------------------
+
+from worker.scheduling import iter_slots  # noqa: E402
+
+
+def _take(gen, n):
+    """First n items from a generator, without exhausting an endless one."""
+    out = []
+    for item in gen:
+        out.append(item)
+        if len(out) >= n:
+            break
+    return out
+
+
+def test_iter_slots_times_respects_per_time_days():
+    # 12:30 every day; 18:00 only at the weekend. Thu 2026-08-06 -> Thu, Fri, Sat, Sat, Sun.
+    c = parse_cadence(
+        '{"mode":"times","slots":['
+        '{"time":"12:30","days":["mon","tue","wed","thu","fri","sat","sun"]},'
+        '{"time":"18:00","days":["sat","sun"]}]}'
+    )
+    after = datetime(2026, 8, 6, 6, 0, tzinfo=timezone.utc)  # Thursday 06:00
+    got = _take(iter_slots(c, "UTC", after), 5)
+    assert [hm for _, hm in got] == [(12, 30), (12, 30), (12, 30), (18, 0), (12, 30)]
+    assert [dt.day for dt, _ in got] == [6, 7, 8, 8, 9]
+
+
+def test_iter_slots_times_are_strictly_after_the_starting_point():
+    # 12:30 today has already passed at 18:00 — the first slot must be tomorrow, never a send
+    # booked in the past.
+    c = parse_cadence('{"mode":"times","slots":[{"time":"12:30",'
+                      '"days":["mon","tue","wed","thu","fri","sat","sun"]}]}')
+    after = datetime(2026, 8, 6, 18, 0, tzinfo=timezone.utc)
+    first = _take(iter_slots(c, "UTC", after), 1)[0]
+    assert first[0] == datetime(2026, 8, 7, 12, 30, tzinfo=timezone.utc)
+
+
+def test_iter_slots_times_are_local_across_a_dst_boundary():
+    # US DST ends 2026-11-01. 18:00 local stays 18:00 local; its UTC offset shifts by an hour.
+    from zoneinfo import ZoneInfo as _ZI
+
+    c = parse_cadence('{"mode":"times","slots":[{"time":"18:00",'
+                      '"days":["mon","tue","wed","thu","fri","sat","sun"]}]}')
+    after = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
+    got = _take(iter_slots(c, "America/New_York", after), 2)
+    local = [dt.astimezone(_ZI("America/New_York")) for dt, _ in got]
+    assert [(d.hour, d.minute) for d in local] == [(18, 0), (18, 0)]
+    assert got[0][0].hour == 22        # EDT, UTC-4
+    assert got[1][0].hour == 23        # EST, UTC-5
+
+
+def test_iter_slots_times_stops_at_the_horizon():
+    # Mondays only, a 3-day horizon: at most one Monday can appear, often none.
+    c = parse_cadence('{"mode":"times","slots":[{"time":"09:00","days":["mon"]}]}')
+    after = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)   # Tuesday
+    assert list(iter_slots(c, "UTC", after, horizon_days=3)) == []
