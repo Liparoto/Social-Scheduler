@@ -447,6 +447,19 @@ export const STANDOUT_LABELS: Record<string, string> = {
 // saves things, saves rank like anything else; on one where the top decile is a single
 // save, they cannot tell good from ordinary and are skipped.
 const MIN_DISCRIMINATING_CUTOFF = 3;
+
+// How many posts either side form a post's peer group.
+//
+// A post is judged against its CONTEMPORARIES, not against all time. At 1,000 followers a
+// strong post might get 40 likes; at 100,000 an ordinary one gets 400. Ranking both in one
+// pool means nothing from the account's earlier life is ever flagged again — yet that post
+// still performed at a high level for the audience available to it, and is still worth
+// reposting. Judging within an era keeps it a keeper.
+//
+// 20 either side (~41 posts) is roughly a season of posting at a daily cadence: wide enough
+// that the ranking is not noise, narrow enough that the account's scale barely moves across
+// the window.
+const PEER_RADIUS = 20;
 // Defaults only. The live values come from the channel and belong to the owner — see
 // migration 0022 for why a single hardcoded tolerance cannot suit every account.
 export const DEFAULT_STRONG_PCT = 5;
@@ -480,23 +493,48 @@ export function standoutsFor(
   strongPct: number = DEFAULT_STRONG_PCT,
   broadPct: number = DEFAULT_BROAD_PCT,
 ): Map<number, Standout> {
-  const usable: [string, number | null, number | null][] = [];
-  for (const metric of STANDOUT_METRICS) {
-    const values = posts.map((p) => p[metric as keyof PostRow] as number | null);
-    const strong = cutoff(values, strongPct / 100);
-    const broad = cutoff(values, broadPct / 100);
-    if (strong !== null || broad !== null) usable.push([metric, strong, broad]);
-  }
+  // Chronological, so a post's neighbours in the array are its neighbours in time.
+  const ordered = [...posts].sort((a, b) =>
+    (a.published_at ?? "").localeCompare(b.published_at ?? ""),
+  );
 
   const out = new Map<number, Standout>();
-  for (const post of posts) {
+  for (let i = 0; i < ordered.length; i += 1) {
+    const post = ordered[i];
+    // The peer group: this post and the ones around it in time. Cutoffs are recomputed
+    // per post rather than once for the account, which is the whole point — a great post
+    // from when the account was small must stay great.
+    const peers = ordered.slice(
+      Math.max(0, i - PEER_RADIUS),
+      Math.min(ordered.length, i + PEER_RADIUS + 1),
+    );
+    const usable: [string, number | null, number | null, number | null][] = [];
+    for (const metric of STANDOUT_METRICS) {
+      const values = peers.map((p) => p[metric as keyof PostRow] as number | null);
+      const strong = cutoff(values, strongPct / 100);
+      const broad = cutoff(values, broadPct / 100);
+      if (strong !== null || broad !== null) {
+        const sorted = peers
+          .map((p) => p[metric as keyof PostRow] as number | null)
+          .filter((v): v is number => v !== null && v !== undefined)
+          .sort((a, b) => a - b);
+        usable.push([metric, strong, broad, sorted[Math.floor(sorted.length / 2)] ?? null]);
+      }
+    }
+
     const strong: string[] = [];
     const broad: string[] = [];
-    for (const [metric, strongCut, broadCut] of usable) {
+    for (const [metric, strongCut, broadCut, median] of usable) {
       const value = post[metric as keyof PostRow] as number | null;
       if (value === null || value === undefined) continue;
-      if (strongCut !== null && value >= strongCut) strong.push(STANDOUT_LABELS[metric]);
-      if (broadCut !== null && value >= broadCut) broad.push(STANDOUT_LABELS[metric]);
+      // Clear the cutoff AND beat the peer median — see worker/bpp.py for why both.
+      const beatsPeers = median === null || value > median;
+      if (strongCut !== null && value >= strongCut && beatsPeers) {
+        strong.push(STANDOUT_LABELS[metric]);
+      }
+      if (broadCut !== null && value >= broadCut && beatsPeers) {
+        broad.push(STANDOUT_LABELS[metric]);
+      }
     }
     const isCandidate = strong.length > 0 || broad.length >= BROAD_MIN_METRICS;
     // The badge quotes the owner's OWN threshold back at them, so a post flagged under a

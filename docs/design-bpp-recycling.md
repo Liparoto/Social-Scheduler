@@ -63,6 +63,18 @@ average likes" is one metric; "multiple metrics well above average" is the other
 The badge names the metrics: **"top 5% · reach, views, likes"**. Never a score — "saved far
 more than usual" is something you can act on.
 
+**A post is judged against its contemporaries, not against all time.** At 1,000 followers
+a strong post might take 40 likes; at 100,000 an ordinary one takes 400. Ranked in one
+pool, nothing from the account's earlier life is ever flagged again — yet that post
+performed at a high level *for the audience available to it*, which is exactly what makes
+it worth reposting. A keeper stays a keeper. Each post is therefore ranked against the ~40
+posts nearest it in time.
+
+To qualify, a post must clear the threshold **and beat its peer group's median**. Both are
+needed: with 41 peers a "top 5%" cutoff is two posts, and the second is usually
+unremarkable, so a lone outlier would otherwise be missed — while in a flat stretch where
+everyone scored the same, every post would tie the cutoff and be badged "outstanding".
+
 **A metric must be able to separate posts before it can crown one.** Recomputed per
 account, every time: this account's saves have a median of 0 and a top-10% cutoff of 1, so
 "top 10% for saves" would mean "got one save" and would badge a third of the library —

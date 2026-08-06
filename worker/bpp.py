@@ -44,6 +44,15 @@ STANDOUT_METRICS = ("reach", "views", "likes", "comments", "saves", "shares")
 # standouts at all rather than badging noise, which is the honest answer.
 MIN_DISCRIMINATING_CUTOFF = 3
 
+# How many posts either side form a post's peer group.
+#
+# A post is judged against its CONTEMPORARIES, not against all time. At 1,000 followers a
+# strong post might take 40 likes; at 100,000 an ordinary one takes 400. Pooling both means
+# nothing from the account's earlier life is ever flagged again — yet that post performed at
+# a high level for the audience available TO IT, which is what makes it worth reposting.
+# Judging within an era keeps a keeper a keeper.
+PEER_RADIUS = 20
+
 # "Way above average on one metric" and "solidly good on several" are both reasons the
 # owner marks a post, so both qualify. One number could not express that.
 #
@@ -103,7 +112,14 @@ def percentile_cutoff(values: list[int], fraction: float) -> int | None:
         return None
     index = max(int(len(present) * fraction) - 1, 0)
     cutoff = present[index]
-    return cutoff if cutoff >= MIN_DISCRIMINATING_CUTOFF else None
+    if cutoff < MIN_DISCRIMINATING_CUTOFF:
+        return None
+    return cutoff
+
+
+def peer_median(values: list[int]) -> int | None:
+    present = sorted((v for v in values if v is not None))
+    return present[len(present) // 2] if present else None
 
 
 def find_standouts(
@@ -122,24 +138,34 @@ def find_standouts(
     if not posts:
         return []
 
-    usable = {}
-    for metric in STANDOUT_METRICS:
-        values = [p.get(metric) for p in posts]
-        strong = percentile_cutoff(values, strong_pct)
-        broad = percentile_cutoff(values, broad_pct)
-        if strong is not None or broad is not None:
-            usable[metric] = (strong, broad)
+    # Chronological, so a post's neighbours in the list are its neighbours in time.
+    ordered = sorted(posts, key=lambda p: p.get("published_at") or "")
 
     out = []
-    for post in posts:
+    for index, post in enumerate(ordered):
+        peers = ordered[max(0, index - PEER_RADIUS): index + PEER_RADIUS + 1]
+        usable = {}
+        for metric in STANDOUT_METRICS:
+            values = [p.get(metric) for p in peers]
+            strong = percentile_cutoff(values, strong_pct)
+            broad = percentile_cutoff(values, broad_pct)
+            if strong is not None or broad is not None:
+                usable[metric] = (strong, broad, peer_median(values))
         strong_hits, broad_hits = [], []
-        for metric, (strong_cut, broad_cut) in usable.items():
+        for metric, (strong_cut, broad_cut, median) in usable.items():
             value = post.get(metric)
             if value is None:
                 continue
-            if strong_cut is not None and value >= strong_cut:
+            # Must clear the cutoff AND actually beat its peers. Two jobs:
+            #   * a lone outlier still qualifies when the cutoff itself landed on an
+            #     ordinary value (41 peers at "top 5%" means two posts, and the second is
+            #     usually unremarkable);
+            #   * a flat window lets nobody through, instead of badging everyone
+            #     "outstanding" for tying.
+            beats_peers = median is None or value > median
+            if strong_cut is not None and value >= strong_cut and beats_peers:
                 strong_hits.append(metric)
-            if broad_cut is not None and value >= broad_cut:
+            if broad_cut is not None and value >= broad_cut and beats_peers:
                 broad_hits.append(metric)
         out.append(Standout(
             post["id"], tuple(strong_hits), tuple(broad_hits),

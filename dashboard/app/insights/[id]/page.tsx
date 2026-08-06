@@ -406,12 +406,38 @@ export default async function ChannelInsightsPage({
                 <thead>
                   <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-faint">
                     <th className="pb-2 font-medium">Post</th>
+                    {/* The headers ARE the sort control. The pills above do the same job,
+                        but clicking a column is where people look for it first. */}
                     {columns.map((c) => (
                       <th key={c.key} className="pb-2 text-right font-medium">
-                        {c.label}
+                        <Link
+                          href={withParam("sort", c.key)}
+                          className={`inline-flex items-center gap-0.5 hover:text-ink-soft ${
+                            sortKey === c.key ? "text-brand-strong" : ""
+                          }`}
+                          aria-sort={sortKey === c.key ? "descending" : "none"}
+                        >
+                          {c.label}
+                          <span aria-hidden className={sortKey === c.key ? "" : "opacity-0"}>
+                            ↓
+                          </span>
+                        </Link>
                       </th>
                     ))}
-                    <th className="pb-2 text-right font-medium">Engagement</th>
+                    <th className="pb-2 text-right font-medium">
+                      <Link
+                        href={withParam("sort", "engagement")}
+                        className={`inline-flex items-center gap-0.5 hover:text-ink-soft ${
+                          sortKey === "engagement" ? "text-brand-strong" : ""
+                        }`}
+                        aria-sort={sortKey === "engagement" ? "descending" : "none"}
+                      >
+                        Engagement
+                        <span aria-hidden className={sortKey === "engagement" ? "" : "opacity-0"}>
+                          ↓
+                        </span>
+                      </Link>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
