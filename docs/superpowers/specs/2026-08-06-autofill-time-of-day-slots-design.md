@@ -1,4 +1,4 @@
-# Design — Auto-fill: time-of-day bands as a filter, and days per posting time
+# Design — Auto-fill cadence: bands as a filter, days per time, and drifting intervals
 
 **Status:** approved 2026-08-06, ready for implementation planning
 **Depends on:** multi-time cadence (`3bcf5db`), the time_of_day tag taxonomy (`0003`), BPP
@@ -7,13 +7,14 @@ recycling (`0020`–`0022`), channel groups (`0013`) — all shipped.
 (`dashboard/app/api/channels/[id]/route.ts:50`, `.../channel-groups/[id]/route.ts:39`) pass
 through untouched. Only its JSON shape changes.
 **Feeds:** an account that posts several times a day can say *when* each kind of content goes
-out, and can post a different number of times on weekends than on weekdays.
+out, can post a different number of times on weekends than on weekdays, and can sweep every
+hour of the day by posting on a drifting interval instead of at fixed times.
 
 ---
 
 ## 1. Purpose
 
-Two gaps, both in auto-fill's cadence.
+Three gaps, all in auto-fill's cadence.
 
 **Time-of-day tags are discarded the moment a second posting time exists.** `3bcf5db` made
 that an explicit decision (`worker/autofill.py:703-712`): with one daily time a post's band
@@ -24,6 +25,11 @@ tagged `evening` should go out in the evening. That is the entire point of the t
 
 **Days-of-week are one shared list.** `cadence_config.days` applies to every time, so "twice a
 day on weekends, once on weekdays" cannot be expressed at all.
+
+A third gap, added to this spec on the same day (§12): the cadence can only express *fixed
+clock times*. "Post every 9 hours 45 minutes" — a drifting interval that eventually sweeps
+every hour of the day — cannot be said at all, and it is the natural way to find out which
+hours an account actually performs at.
 
 ---
 
@@ -55,30 +61,34 @@ treat the post as untagged). §7 is the guard that makes it safe to live with.
 
 ## 3. Cadence shape
 
+A cadence has a **mode**. `times` is the mode described here and is the default when `mode` is
+absent; `interval` is §12. `parse_cadence()` returns one `Cadence` object either way, or
+`None` for "no valid cadence" — the single validity gate `_fill_unit` already keys off.
+
 ```json
-{"slots": [{"time": "12:30", "days": ["mon","tue","wed","thu","fri","sat","sun"]},
+{"mode": "times",
+ "slots": [{"time": "12:30", "days": ["mon","tue","wed","thu","fri","sat","sun"]},
            {"time": "18:00", "days": ["sat","sun"]}]}
 ```
 
 Two posts on Saturday and Sunday, one on every other day.
 
-**Three shapes are read, one is written.** `normalize_cadence()` accepts all of:
+**Three legacy shapes are read, one is written.** `parse_cadence()` accepts all of:
 
-| shape | origin | normalizes to |
+| shape | origin | parses to |
 |---|---|---|
-| `{"slots": [{"time","days"}, …]}` | new | itself |
+| `{"mode":"times", "slots": [{"time","days"}, …]}` | new | itself |
 | `{"days": […], "times": ["09:00","18:00"]}` | `3bcf5db` | one slot per time, all sharing `days` |
 | `{"days": […], "time": "18:00"}` | original; **this install's live row** | a single slot |
 
-The form always writes `slots`, so the stored shape stops depending on how the owner happens
-to have configured it. Nothing rewrites a stored config until the owner presses Save — the
-live `{"days":[…7…],"time":"12:30"}` row keeps working, read as one 12:30 slot on all seven
-days.
+The form always writes the new shape, so the stored config stops depending on how the owner
+happens to have configured it. Nothing rewrites a stored config until the owner presses Save —
+the live `{"days":[…7…],"time":"12:30"}` row keeps working, read as one 12:30 slot on all
+seven days.
 
 Normalization rules: slots sharing an identical time are merged by unioning their days (two
 sends booked for the same minute would collide on one slot); the result is sorted by time; a
-slot with no days, or an unparseable time, is dropped; an empty result means "no valid
-cadence" and `_fill_unit` skips the unit exactly as it does today.
+slot with no days, or an unparseable time, is dropped; no valid slots means no valid cadence.
 
 ---
 
@@ -127,7 +137,7 @@ Slots are walked in chronological order. Each slot takes the **highest-ranked un
 that fits its band**; ranking itself (never-posted → performance → staleness → age, per
 `select_candidates` / `group_rank`) is untouched.
 
-**A slot nothing fits is skipped, not wasted.** Generation is lazy: `iter_cadence_slots` yields
+**A slot nothing fits is skipped, not wasted.** Generation is lazy: `iter_slots` yields
 slots one at a time and auto-fill keeps consuming until `need` posts are *placed*, the
 candidate pool is exhausted, or a 366-day horizon runs out. So the strict rule costs the owner
 unused slots, never queue depth — with an evening time set and 17 evening posts, the queue
@@ -138,6 +148,19 @@ as soon as no remaining candidate fits any covered band — checked before the f
 again after each placement — rather than grinding through 366 days of slots that provably
 cannot be filled. The candidates left over at that point are exactly what §7 reports on.
 
+Covered bands come from `Cadence.candidate_local_times()`, which yields the times a slot could
+land on: in `times` mode its slot times, in `interval` mode every minute inside the allowed
+window. `autofill` maps those through `derive_band` and takes the set. This keeps
+`scheduling.py` free of any band concept while giving both modes one definition of "covered".
+
+**Candidates are fetched uncapped.** Today the solo path fetches only `need` candidates
+(`eligible_candidates(conn, ch, now, need)`). Under band filtering that is a bug: if the top
+`need` ranked posts all sit in a band the cadence doesn't cover, auto-fill would place nothing
+while hundreds of usable posts sat further down the ranking. Both paths now pass `limit=None`
+and the *slots* do the limiting — which is already how the group and BPP paths work. The cost
+is one full eligibility pass per unit per cycle instead of a truncated one; on this install
+that is 111 posts.
+
 ---
 
 ## 6. Slot generation
@@ -146,14 +169,14 @@ cannot be filled. The candidates left over at that point are exactly what §7 re
 is why `derive_band` lives in `time_of_day.py` and the caller joins the two.
 
 ```python
-def iter_cadence_slots(slot_defs, tz_name, after, horizon_days=366):
+def iter_slots(cadence, tz_name, after, horizon_days=366):
     """Yield (utc_dt, (hour, minute)) in chronological order, strictly after `after`."""
 ```
 
-`slot_defs` is `[(hour, minute, weekdays:set[int]), …]` from `normalize_cadence`. It walks
-local dates from `after`, and for each date emits every slot whose `weekdays` include that
-weekday, in time order, skipping any whose UTC instant is not strictly after `after` (so a
-time already past today does not book a send in the past).
+One entry point; it dispatches on `cadence.mode` to the times walker or the interval walker
+(§12). In `times` mode it walks local dates from `after`, and for each date emits every slot
+whose weekdays include that weekday, in time order, skipping any whose UTC instant is not
+strictly after `after` (so a time already past today does not book a send in the past).
 
 The local `(hour, minute)` is yielded alongside the UTC instant because the caller needs it to
 look up the band, and recovering it from the UTC datetime across a DST boundary is a needless
@@ -211,6 +234,15 @@ and nowhere to put it".
 
 ## 8. Form
 
+The form opens on a **mode switch** — two radio options, mutually exclusive per channel or
+group, because a cadence is one thing or the other:
+
+```
+Post   (•) At set times     ( ) Every…
+```
+
+### Mode: At set times
+
 The shared "Post on" row is removed. Each posting time becomes a row carrying its own days:
 
 ```
@@ -229,6 +261,29 @@ Posting times
   place of listing all seven days.
 - The line stating "Time-of-day tags are ignored while more than one time is set"
   (`autofill-config.tsx:171-177`) is removed — it documents the behaviour being deleted.
+
+### Mode: Every…
+
+```
+Post every  [ 9 ] h  [45] m     between [08:00] and [21:00]
+                                on  M T W T F S S
+```
+
+- Hours and minutes are two inputs, not a raw minute count — nobody thinks in `585`.
+- Minutes floor at **15** in total; the field refuses less rather than accepting a value the
+  worker would fill a queue with minutes apart.
+- One day picker for the whole cadence (there is only one stream of sends to skip days from).
+- Summary line becomes `Every 9h 45m, 08:00–21:00, daily · keep ≥3, fill to 8`.
+- Below the inputs, the drift is spelled out rather than left to be inferred: *"Send times
+  drift by 9h 45m each post, so over time you'll post at every hour between 08:00 and 21:00."*
+  A round interval like `24h 0m` says instead: *"A whole number of days — this always lands at
+  the same time. Use 'At set times' unless you meant to drift."*
+
+### Both modes
+
+The coverage warning (§7) sits below whichever panel is active and is computed identically.
+Switching modes does **not** discard the other mode's settings until Save, so a mis-click is
+recoverable.
 
 The dashboard reads `TOD_MORNING` / `TOD_AFTERNOON` / `TOD_EVENING` through the existing
 file-then-`process.env` helper at `dashboard/lib/config.ts:34` and passes them as a prop. The
@@ -265,13 +320,13 @@ cycle and never a send at the wrong time.
 
 | file | change |
 |---|---|
-| `worker/scheduling.py` | add `normalize_cadence`, `iter_cadence_slots`; delete `parse_weekly_cadence`, `parse_cadence_times`, `weekly_date_slots`, `daily_slots` |
+| `worker/scheduling.py` | add `Cadence`, `parse_cadence`, `iter_slots` (both modes); delete `parse_weekly_cadence`, `parse_cadence_times`, `weekly_date_slots`, `daily_slots` |
 | `worker/time_of_day.py` | add `derive_band`, `post_allows_band`; delete `resolve_slot_time` |
-| `worker/autofill.py` | `_fill_unit` slot/candidate matching loop; `_apply_bpp` + `_merge_bpp_slots` take slots and a band-fit predicate; held-back logging |
+| `worker/autofill.py` | `_assign` (band-matching placement, pool/due aware); `_fill_unit` rewired + uncapped candidate fetch; `_apply_bpp` two-pass; `_merge_bpp_slots` deleted (folded into `_assign`); held-back logging |
 | `dashboard/lib/config.ts` | expose the three `TOD_*` values |
-| `dashboard/lib/queries.ts` | ready-post counts per `time_of_day` tag, per channel and per group |
+| `dashboard/lib/queries.ts` | ready-post counts per `time_of_day` tag, for a set of channel ids |
 | `dashboard/app/channels/page.tsx`, `dashboard/components/channel-groups.tsx` | pass band times + band counts down |
-| `dashboard/components/autofill-config.tsx` | per-time day pickers, derived band labels, coverage warning, new summary |
+| `dashboard/components/autofill-config.tsx` | mode switch, per-time day pickers, interval + window inputs, derived band labels, coverage warning, new summary |
 
 ---
 
@@ -279,9 +334,16 @@ cycle and never a send at the wrong time.
 
 **Worker unit** — `derive_band` (exact hits, the 11:00 tie, 02:00 and 23:00, non-default
 `TOD_*` values); `post_allows_band` (untagged, `anytime`, single band, two bands);
-`normalize_cadence` (all three shapes, same-time merge, empty/garbage → `[]`);
-`iter_cadence_slots` (per-time days so a weekend-only time never appears midweek, strictly-after
+`parse_cadence` (all three legacy shapes, both modes, same-time merge, empty/garbage → `None`);
+`iter_slots` in times mode (per-time days so a weekend-only time never appears midweek, strictly-after
 on the first day, DST boundary in `America/New_York`, ordering across times).
+
+**Interval mode unit** — the drift is preserved across a skipped step (the §12 worked example,
+asserted step by step — this is the one behaviour a naive implementation gets wrong); a wrapping
+window `22:00–02:00` yields both sides of midnight; an unchecked weekday is skipped without
+resetting the phase; `every_minutes <= 0` → `None`; the step-count horizon terminates when the
+window can never be satisfied; `candidate_local_times()` over a `08:00–12:00` window covers
+morning and afternoon but not evening.
 
 **Worker end-to-end** — an `evening`-tagged post is never placed on a 12:30 slot; with an
 evening time added it *is*; a cadence covering no band a candidate holds fills nothing from
@@ -291,7 +353,8 @@ selection and is not flagged recycled. `3bcf5db`'s lesson applies directly here 
 real bug was found only by the end-to-end test, because a config shape can be valid to the slot
 helper and invisible to auto-fill.
 
-**Dashboard** — `normalize`/summary rendering, and per-time day toggling.
+**Dashboard** — cadence parse/serialize round-trip for both modes and all three legacy
+shapes, summary-line rendering, per-time day toggling, and the 15-minute interval floor.
 
 **Browser** — against a **scratch DB copy on port 3940**, never the live one: this form writes
 a cadence, and a bad save would silently change what the live install posts. Per
@@ -303,7 +366,77 @@ is running this code.
 
 ---
 
-## 12. After it ships
+## 12. Interval mode — post every N, drifting
+
+Added 2026-08-06 at the owner's request, in the same pass because it touches the same three
+things (`parse_cadence`, `iter_slots`, the form) and doing it later would mean rebuilding the
+form twice.
+
+```json
+{"mode": "interval", "every_minutes": 585,
+ "window": {"from": "08:00", "to": "21:00"},
+ "days": ["mon","tue","wed","thu","fri","sat","sun"]}
+```
+
+`585` is 9h45m. The point of a non-round interval is that the send time **drifts**: 09:00,
+18:45, 04:30, 14:15 … so over a few weeks the account has posted at every hour and the metrics
+can say which ones worked. A round `1440` would just be "daily at a fixed time" spelled
+differently.
+
+**This composes with §2 rather than competing with it.** An interval slot still lands at a
+definite clock time, so it still derives a band, so band filtering applies unchanged — an
+`evening`-tagged post simply waits for a drifted slot that happens to land in the evening.
+Nothing in §5 needs a special case.
+
+### Drift, precisely
+
+The cursor starts at `after` (the last future send, else `now`) and advances by
+`every_minutes` each step. A step is **yielded** only when its local time is inside the window
+*and* its local weekday is in `days`; otherwise it is skipped. Crucially the cursor advances
+from where the skipped step **would have been**, never from the last yielded slot — otherwise
+every skip would reset the phase and the drift would collapse back onto the window edge,
+which is exactly the "nudge it into the window" behaviour the owner rejected.
+
+Worked example, `every_minutes=585`, window `08:00–21:00`, starting Mon 09:00:
+
+| step | local | outcome |
+|---|---|---|
+| 1 | Mon 18:45 | yielded |
+| 2 | Tue 04:30 | **skipped** — before 08:00 |
+| 3 | Tue 14:15 | yielded |
+| 4 | Wed 00:00 | **skipped** — before 08:00 |
+| 5 | Wed 09:45 | yielded |
+
+The phase is preserved across the two skips: step 5 is 09:45, not 08:00.
+
+### Window
+
+`from`/`to` are local `HH:MM`, inclusive of both ends. When `from > to` the window **wraps
+midnight** (`22:00–02:00` means 22:00–23:59 plus 00:00–02:00) — supported because an
+unsupported wrap yields *nothing at all*, which would look like a broken cadence rather than a
+rejected setting. A window is required in this mode; its absence means `00:00–23:59`, the
+unrestricted 24-hour sweep.
+
+### Validity and bounds
+
+- `every_minutes` must be `> 0`, else the cadence is invalid (`parse_cadence` → `None`) and
+  `_fill_unit` skips the unit, exactly as a malformed `times` cadence does.
+- The walk is bounded by the same 366-day horizon, expressed as a step count:
+  `ceil(366 * 1440 / every_minutes)`. A pathologically small interval therefore cannot spin
+  forever; it just fills its `need` slots minutes apart, which is the owner's business.
+- The form enforces a **15-minute floor** and offers hours + minutes as two inputs, so
+  "every 9 hours 45 minutes" is typed as `9` and `45` rather than `585`.
+
+### Covered bands
+
+`candidate_local_times()` yields **every minute inside the window** in this mode, so §5's
+covered-band set and §7's warning work identically. A window of `08:00–12:00` covers morning
+and afternoon only, and the form will say that evening-tagged posts have nowhere to go — the
+same warning, computed the same way, for a completely different cadence shape.
+
+---
+
+## 13. After it ships
 
 Add an **18:00** time to the *Liparoto Meta* group's auto-fill. Until then the rule chosen here
 keeps 18 posts out of rotation while the queue goes on looking healthy. The form warning and
