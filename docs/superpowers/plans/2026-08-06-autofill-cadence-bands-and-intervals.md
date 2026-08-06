@@ -41,8 +41,10 @@
 ## Task 1: Band derivation and the band filter
 
 **Files:**
-- Modify: `worker/time_of_day.py` (delete `resolve_slot_time` at lines 45-54; add two functions)
+- Modify: `worker/time_of_day.py` (add two functions)
 - Test: `worker/tests/test_time_of_day.py`
+
+**Do not delete `resolve_slot_time` in this task.** `worker/autofill.py:41` imports it and `_fill_unit` still calls it until Task 7. Removing it here would break the import of `worker.autofill` — and therefore every test in `test_autofill.py` — for five tasks. Task 7 deletes it together with everything else it supersedes, in one step, so every intermediate state stays green.
 
 **Interfaces:**
 - Consumes: existing `BAND_ORDER`, `band_times(config)` from this module.
@@ -103,9 +105,9 @@ def test_post_allows_band_two_specific_bands_mean_either():
     assert post_allows_band({"morning", "evening"}, "afternoon") is False
 ```
 
-- [ ] **Step 2: Delete the three `resolve_slot_time` tests**
+- [ ] **Step 2: Leave the existing `resolve_slot_time` tests alone**
 
-Remove `test_resolve_earliest_specific_band_wins` and `test_resolve_anytime_and_untagged_use_cadence_time` from `worker/tests/test_time_of_day.py`. Their behaviour is replaced by the `post_allows_band` tests above — under the new rule a band no longer resolves to a time at all.
+`test_resolve_earliest_specific_band_wins` and `test_resolve_anytime_and_untagged_use_cadence_time` stay green for now and are deleted in Task 7 alongside the function itself. Do not touch them here.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -117,7 +119,7 @@ Expected: `ImportError: cannot import name 'derive_band' from 'worker.time_of_da
 
 - [ ] **Step 4: Implement**
 
-In `worker/time_of_day.py`, **delete** `resolve_slot_time` entirely and add:
+In `worker/time_of_day.py`, leave `resolve_slot_time` exactly where it is (Task 7 removes it) and add:
 
 ```python
 def derive_band(hour: int, minute: int, band_times_map: dict[str, tuple[int, int]]) -> str:
@@ -152,16 +154,7 @@ def post_allows_band(bands: set[str], slot_band: str) -> bool:
     return not specific or slot_band in specific
 ```
 
-Also update the module docstring's first paragraph — it currently describes a band resolving to a slot *time*, which is the behaviour being deleted:
-
-```python
-"""Time-of-day bands: which slots a post's time_of_day tag(s) permit.
-
-A cadence TIME carries a band (`derive_band`), and a post's tags say which bands it will
-accept (`post_allows_band`). morning/afternoon/evening are the specific bands; `anytime` (and
-no time_of_day tag at all) place no constraint, so such a post fits any slot.
-"""
-```
+Leave the module docstring alone for now — it still describes `resolve_slot_time` accurately, and Task 7 rewrites it when that function goes.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -169,7 +162,11 @@ no time_of_day tag at all) place no constraint, so such a post fits any slot.
 source .venv/bin/activate && pytest worker/tests/test_time_of_day.py -v
 ```
 
-Expected: PASS. Other suites will still fail (`autofill.py` imports `resolve_slot_time`) — that is fixed in Task 7.
+Expected: PASS. Then confirm nothing else broke — this task is purely additive, so the whole suite must still be green:
+
+```bash
+source .venv/bin/activate && pytest worker/tests/ -q
+```
 
 - [ ] **Step 6: Commit**
 
@@ -1024,7 +1021,7 @@ def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
     return out
 ```
 
-Update the import at `worker/autofill.py:41` so `post_allows_band` is available (the full import rewrite happens in Task 7; for now just add it):
+Add `post_allows_band` to the existing import at `worker/autofill.py:41`, keeping `resolve_slot_time` — `_fill_unit` still calls it until Task 7:
 
 ```python
 from .time_of_day import band_times, post_allows_band, post_bands, resolve_slot_time
@@ -1182,6 +1179,19 @@ grep -n "weekly_date_slots\|daily_slots\|parse_cadence_times\|parse_weekly_caden
 ```
 
 Delete those tests and the imports that pull the deleted names in. `test_weekly_slots_*` stays.
+
+In `worker/time_of_day.py`, delete `resolve_slot_time` (deferred from Task 1 so the intermediate tasks stayed green) and replace the module docstring's first paragraph, which still describes a band resolving to a slot *time*:
+
+```python
+"""Time-of-day bands: which slots a post's time_of_day tag(s) permit.
+
+A cadence TIME carries a band (`derive_band`), and a post's tags say which bands it will
+accept (`post_allows_band`). morning/afternoon/evening are the specific bands; `anytime` (and
+no time_of_day tag at all) place no constraint, so such a post fits any slot.
+"""
+```
+
+In `worker/tests/test_time_of_day.py`, delete `test_resolve_earliest_specific_band_wins` and `test_resolve_anytime_and_untagged_use_cadence_time`, and drop `resolve_slot_time` from the import block.
 
 In `worker/autofill.py`, delete `_merge_bpp_slots` in full — `_assign`'s `pool`/`due` handling replaces it. Delete any test that names it.
 
