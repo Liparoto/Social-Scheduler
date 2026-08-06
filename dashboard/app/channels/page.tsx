@@ -26,6 +26,7 @@ export default function ChannelsPage() {
     min_queue_depth: g.min_queue_depth,
     target_queue_depth: g.target_queue_depth,
     reuse_min_age_days: g.reuse_min_age_days,
+    bpp_every_n_slots: g.bpp_every_n_slots,
     members: getGroupMembers(g.id).map((m) => ({
       id: m.id,
       account_name: m.account_name,
@@ -178,6 +179,7 @@ export default function ChannelsPage() {
                     minQueueDepth={c.min_queue_depth}
                     targetQueueDepth={c.target_queue_depth}
                     reuseMinAgeDays={c.reuse_min_age_days}
+                    bppEveryNSlots={c.bpp_every_n_slots ?? 0}
                   />
                 ) : (
                   <p className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3 text-xs text-muted">

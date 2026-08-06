@@ -15,6 +15,7 @@ interface Props {
   minQueueDepth: number;
   targetQueueDepth: number;
   reuseMinAgeDays: number;
+  bppEveryNSlots: number;
 }
 
 function parseCadence(raw: string | null): { days: string[]; time: string } {
@@ -41,6 +42,7 @@ export function AutofillConfig(props: Props) {
   const [minDepth, setMinDepth] = useState(props.minQueueDepth);
   const [target, setTarget] = useState(props.targetQueueDepth);
   const [reuseDays, setReuseDays] = useState(props.reuseMinAgeDays);
+  const [bpp, setBpp] = useState(props.bppEveryNSlots);
   const [pending, startT] = useTransition();
   const [saved, setSaved] = useState(false);
 
@@ -59,6 +61,7 @@ export function AutofillConfig(props: Props) {
         min_queue_depth: minDepth,
         target_queue_depth: target,
         reuse_min_age_days: reuseDays,
+        bpp_every_n_slots: bpp,
       }),
     });
     setSaved(true);
@@ -149,7 +152,26 @@ export function AutofillConfig(props: Props) {
                 className={`${field} w-20`}
               />
             </label>
+            <label className="text-xs text-ink-soft">
+              <span className="mb-1 block">Repost a winner every</span>
+              <input
+                type="number"
+                min={0}
+                value={bpp}
+                onChange={(e) => setBpp(Number(e.target.value))}
+                className={`${field} w-20`}
+              />
+            </label>
           </div>
+
+          {/* Says what the number DOES, in slots, because "4" on its own is ambiguous —
+              and states the 0 case, since off is the default and the reader needs to know
+              they are looking at the off state rather than an unset one. */}
+          <p className="-mt-1 text-[11px] text-muted">
+            {bpp > 0
+              ? `1 in every ${bpp} auto-filled slots goes to a past post that performed well, instead of something new. Everything else — reuse window, cooldowns, seasons — still applies.`
+              : "0 = off. Auto-fill always picks unposted content first, so proven posts only come back once the library runs dry."}
+          </p>
 
           <div className="flex items-center gap-3">
             <button

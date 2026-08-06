@@ -16,6 +16,7 @@ export interface GroupRow {
   min_queue_depth: number;
   target_queue_depth: number;
   reuse_min_age_days: number;
+  bpp_every_n_slots: number;
   members: { id: number; account_name: string; platform: string }[];
 }
 
@@ -117,6 +118,7 @@ export function ChannelGroups({
               minQueueDepth={g.min_queue_depth}
               targetQueueDepth={g.target_queue_depth}
               reuseMinAgeDays={g.reuse_min_age_days}
+                    bppEveryNSlots={g.bpp_every_n_slots ?? 0}
             />
           </div>
         ))}

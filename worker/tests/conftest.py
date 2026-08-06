@@ -4,6 +4,7 @@ a Config pointed at it, a fake Graph client, and a helper to insert a publicatio
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,16 +17,38 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
 
 
-@pytest.fixture
-def db_path(tmp_path) -> Path:
-    """A fresh DB built from ALL migrations in order (mirrors migrate.py — no drift)."""
-    p = tmp_path / "test.db"
-    conn = sqlite3.connect(str(p))
+@pytest.fixture(scope="session")
+def _schema_template(tmp_path_factory) -> Path:
+    """Build the schema ONCE per session, from all migrations in order.
+
+    Every test needs a fresh database, and the obvious way to get one is to replay every
+    migration per test. That is O(migrations x tests), and it stopped being free: at 20
+    migrations it cost ~2.7s of setup for EACH test — about 13 minutes across the suite,
+    almost all of it re-running identical DDL.
+
+    Building the template once and copying the file per test keeps each test's database
+    genuinely fresh and identical to migrate.py's output (still no drift — the same
+    scripts in the same order), while paying for it a single time.
+    """
+    path = tmp_path_factory.mktemp("schema") / "template.db"
+    conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA foreign_keys = ON;")
     for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql"), key=lambda f: f.name):
         conn.executescript(sql_file.read_text())
     conn.commit()
     conn.close()
+    return path
+
+
+@pytest.fixture
+def db_path(tmp_path, _schema_template) -> Path:
+    """A fresh DB for one test: a byte copy of the session's migrated schema.
+
+    A copy, never a shared handle — tests write, and sharing one file would let them see
+    each other's rows.
+    """
+    p = tmp_path / "test.db"
+    shutil.copyfile(_schema_template, p)
     return p
 
 

@@ -1769,3 +1769,61 @@ re-synced: 146/146 posts carry views, the Reel reads 293 views, 120 thumbnails c
 - [ ] Media → post links dead-end on reused media (`MIN(post_id)` is arbitrary).
 - [ ] BPP recycling — now unblocked: `media_metrics` ranks every post, ours or not.
 - [ ] Approval-workflow UI (flag exists, no UI; no channel uses it).
+
+---
+
+## Phase — BPP recycling  ·  2026-08-05
+
+Design: `docs/design-bpp-recycling.md`. Built autonomously overnight at the owner's
+request, so the judgement calls are written down there rather than asked.
+
+### What was actually wrong
+Auto-fill already ranked by performance — its docstring said so. Two things stopped that
+mattering, and both had to be fixed for the feature to mean anything:
+
+- [x] **The tier gate made it unreachable.** Never-posted content outranks everything, and
+      this install has **100 unposted against 11 posted**, so the performance term could not
+      influence a slot for roughly three months. `bpp_every_n_slots` now hands a share of
+      slots to proven performers, deterministically (`(publications + index) % N`), never
+      randomly — a random share clusters and cannot be explained afterwards.
+- [x] **`reach + saves` was raw reach in disguise.** Measured live: `saves` peaks at 2
+      against a mean reach of 303. Replaced with engagement rate (interactions / reach) and
+      a minimum-reach floor of 50, below which a post has NO score rather than a small one
+      — otherwise 1 like on a reach of 3 scores 33% and wins forever.
+
+### Safety
+- [x] **Off by default (0).** It changes what publishes to a live account and was built
+      unattended; it stays inert until switched on. Suggested first value: 4.
+- [x] A recycle slot changes only WHICH eligible candidate is chosen, never WHETHER one is
+      eligible — reuse window, cooldown, one-time, periods, capability and caption limits
+      all still apply. Proven on the live data: nothing recycled because all 11 published
+      posts were inside the group's 90-day reuse window.
+- [x] No post can be queued twice in one batch (both pools draw from one library).
+- [x] A recycle slot with nothing proven falls back to normal selection and is NOT badged.
+- [x] `publications.is_recycled` records the reason, badged in the queue — "why is this old
+      post going out again?" is exactly what this feature prompts.
+
+### Caught by verifying against the real install
+- [x] **The group path crashed.** `group_rank` is a separate query from
+      `select_candidates`, and only the latter had the new columns — so reading `bpp_rate`
+      off a group row raised IndexError on the publish path. The tests covered only solo
+      channels; the owner's install is a group. Both queries now carry the score, and the
+      group path has its own tests.
+- [x] **Test suite was 13 minutes.** Not caused by this feature but exposed by it: the
+      fixture replayed every migration for every test (O(migrations x tests), ~2.7s of
+      setup each). Now built once per session and copied. **786s -> 193s.**
+- [x] `test_migration_0013` asserted the exact column set of `channel_groups`; relaxed to a
+      subset, since later migrations legitimately add columns.
+
+**Verified:** 723 worker + 401 dashboard tests, 0 lint errors, clean typecheck. On a copy
+of the live database with two proven posts aged past the reuse window, both were recycled
+into slots and delivered to every group member at one shared time.
+
+### Follow-up
+- [ ] **Link library posts to their original Instagram posts.** Only 11 of 111 library
+      posts have metrics, because metrics attach to publications THIS tool made — the other
+      146 real posts sit in `remote_media` unlinked. Automatic matching was tried and
+      rejected: captions match for 6 of 111 (the Apple Notes import left bare 🔺
+      placeholders) and thumbnails are downscaled re-encodes, so no hash agrees. A manual
+      "link this post to that one" UI would unlock the whole history and needs the owner's
+      judgement per post.

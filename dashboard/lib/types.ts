@@ -67,6 +67,7 @@ export interface Channel {
   min_queue_depth: number;
   target_queue_depth: number;
   reuse_min_age_days: number;
+  bpp_every_n_slots: number;
   is_active: number;
   group_id: number | null;
   created_at: string;
@@ -90,6 +91,7 @@ export interface ChannelGroup {
   min_queue_depth: number;
   target_queue_depth: number;
   reuse_min_age_days: number;
+  bpp_every_n_slots: number;
   is_active: number;
   created_at: string;
   updated_at: string | null;
@@ -133,6 +135,7 @@ export interface Post {
   content_status: ContentStatus;
   cooldown_days: number | null;
   created_by: string | null;
+  is_recycled: number;
   created_at: string;
   updated_at: string | null;
 }
@@ -181,6 +184,7 @@ export interface Publication {
   /** NULL for a feed send (all assets, in order); the single slide for a story send. */
   asset_id: number | null;
   created_by: string | null;
+  is_recycled: number;
   created_at: string;
   updated_at: string | null;
 }

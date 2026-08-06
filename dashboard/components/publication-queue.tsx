@@ -214,6 +214,17 @@ export function PublicationQueue({
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-1.5">
                       <StatusBadge status={p.status} dryRun={p.is_dry_run === 1} />
+                      {/* Answers "why is this old post going out again?" at the point the
+                          question gets asked. Auto-fill normally sends unposted content
+                          first, so a repeat with no explanation reads as a bug. */}
+                      {p.is_recycled === 1 ? (
+                        <span
+                          className="inline-flex items-center rounded-full bg-brand-weak px-2 py-0.5 text-[10px] font-medium text-brand-strong"
+                          title="Auto-fill picked this again because it performed well"
+                        >
+                          top performer
+                        </span>
+                      ) : null}
                       {p.is_held === 1 ? (
                         <span
                           className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium"

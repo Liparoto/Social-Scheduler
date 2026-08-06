@@ -12,7 +12,11 @@ def cols(conn, table):
 
 
 def test_channel_groups_table_exists_with_autofill_fields(conn):
-    assert cols(conn, "channel_groups") == {
+    # Subset, not equality: the fixture applies EVERY migration, so a later one adding a
+    # column to channel_groups (0020 added bpp_every_n_slots) is expected and correct.
+    # This test is about what 0013 created, and an equality check turns every legitimate
+    # future addition into a failure here.
+    assert cols(conn, "channel_groups") >= {
         "id", "name", "timezone", "autofill_enabled", "cadence_config",
         "min_queue_depth", "target_queue_depth", "reuse_min_age_days",
         "is_active", "created_at", "updated_at",

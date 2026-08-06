@@ -51,6 +51,10 @@ export async function PATCH(
   if ("min_queue_depth" in body) fields.min_queue_depth = Number(body.min_queue_depth) || 0;
   if ("target_queue_depth" in body) fields.target_queue_depth = Number(body.target_queue_depth) || 0;
   if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
+  // Math.max(0, …) rather than a bare Number: this value divides slot positions,
+  // and a negative would silently mean "off" while reading as if it were on.
+  if ("bpp_every_n_slots" in body)
+    fields.bpp_every_n_slots = Math.max(0, Math.trunc(Number(body.bpp_every_n_slots) || 0));
   if ("color_hue" in body) fields.color_hue = body.color_hue ?? null;
 
   // group_id goes through setChannelGroup() rather than the generic field writer,

@@ -117,6 +117,7 @@ export function updateChannel(
     min_queue_depth: number;
     target_queue_depth: number;
     reuse_min_age_days: number;
+    bpp_every_n_slots: number;
     color_hue: number | null;
   }>
 ): void {
@@ -247,6 +248,7 @@ export function updateChannelGroup(
     min_queue_depth: number;
     target_queue_depth: number;
     reuse_min_age_days: number;
+    bpp_every_n_slots: number;
     is_active: number;
   }>
 ): void {
