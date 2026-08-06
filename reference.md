@@ -620,3 +620,103 @@ The full video pipeline was proven end to end against the live Instagram API.
 Conversion relocates `moov` to the front as a side effect, so any file that goes through it
 satisfies Meta's container requirement regardless of how the camera wrote it. An in-spec video
 that skips conversion could still carry a trailing `moov`; that path remains untested.
+
+## Verified: account-level insights, probed live (2026-08-05)
+
+Established by running `python3 -m worker.insights_probe` against the live Liparoto
+Instagram and Threads accounts — **one metric name per request**, so a rejection names the
+specific metric rather than failing a batch. Not from docs, which are behind reality.
+
+### `impressions` is GONE on Instagram
+
+```
+GET <ig-user-id>/insights?metric=impressions            -> 400  (period=day series)
+GET <ig-user-id>/insights?metric=impressions&metric_type=total_value -> 400
+```
+
+This is the 2026-06-15 deprecation landing. **`views` is the replacement** and returns a
+real number (613 where `reach` returned 207). Any code still asking for account-level
+`impressions` gets a 400 that kills the whole call — which is exactly why per-metric
+probing exists.
+
+### Two envelopes, and a metric can work in one but not the other
+
+| Metric | `period=day` series | `metric_type=total_value` |
+|---|---|---|
+| `reach` | works | works |
+| `follower_count` | works | n/a (use the node field) |
+| `profile_views` | accepted, returns NO data | works (9) |
+| `website_clicks` | accepted, returns NO data | works (0) |
+| `impressions` | **400** | **400** |
+| `views`, `accounts_engaged`, `total_interactions`, `likes`, `comments`, `saves`, `shares`, `replies`, `profile_links_taps` | — | work |
+| `email_contacts`, `get_directions_clicks`, `phone_call_clicks`, `text_message_clicks` | **400** | — |
+
+"Accepted but returns no data" is a third state distinct from both success and 400, and it
+is the trap: the call succeeds, so naive code records a null and reports zero forever.
+
+`follows_and_unfollows` is accepted and returns `None` — present in the API, no value.
+
+**Follower/following/media counts come from the account NODE** (`?fields=followers_count,
+follows_count,media_count`), not from insights. Those field names have never been renamed,
+which is why the hub reads growth from there rather than from `follower_count` insights.
+
+### Demographics work fully, on both platforms
+
+All three IG audiences × all four breakdowns returned data:
+`follower_demographics`, `engaged_audience_demographics`, `reached_audience_demographics`
+× `age`, `gender`, `city`, `country`. Threads supports `follower_demographics` × the same
+four. City and country cap at **45 buckets**; age returns 6-7; gender returns 3 (`F`/`M`/`U`).
+
+Requires `period=lifetime` + `metric_type=total_value` + `timeframe`. The response nests
+three levels deep — `data[].total_value.breakdowns[].results[].dimension_values[]` — and
+`dimension_values` is a LIST because compound breakdowns exist.
+
+The documented "needs 100+ followers" floor was NOT exercised: both accounts are well past
+it (IG 13,727 · Threads 1,938). Empty-result handling there remains unverified against a
+real small account, and is treated as a normal state rather than an error.
+
+### Threads
+
+`views`, `likes`, `replies`, `reposts`, `quotes`, `followers_count` all work.
+**`shares` returns HTTP 500**, not 400 — a server error rather than a clean rejection, so
+it must not be read as "temporarily unavailable, retry later". `clicks` is accepted and
+returns `None`. Neither belongs in the configured metric set.
+
+### Scale finding
+
+The Liparoto IG account holds **988 media**. A full historical backfill is therefore ~10
+pages of media listing plus ~1 insights call per post. Rate limiting on the sync job is a
+real constraint, not a precaution — hence reading `X-Business-Use-Case-Usage` off every
+response (`GraphClient._record_usage`) rather than guessing a safe call rate.
+
+### Account insight day-bucketing — the two envelopes cross-checked (2026-08-05)
+
+The `since`/`until` semantics are not what the field names suggest, and getting them wrong
+shifts every chart by a day without erroring. Settled by making the two envelopes agree:
+
+```
+SERIES  since=2026-07-29 until=2026-08-06   ->  points with end_time 07-29 .. 08-05
+        end_time=2026-08-04T07:00:00+0000   ->  reach 157
+TOTAL   since=2026-08-04 until=2026-08-04   ->  {}          <- EMPTY, not an error
+TOTAL   since=2026-08-04 until=2026-08-05   ->  reach 157   <- same value as the series point
+```
+
+Three consequences:
+
+1. **A single day is `[D, D+1)`, never `since=D&until=D`.** The same-day form returns an
+   empty dict rather than an error, so code written that way records nulls forever and
+   looks like a platform limitation instead of a bug.
+2. **The series returns points whose `end_time` falls in `[since, until)`** — so
+   consecutive chunks must abut (`window_end = window_start`), with no overlap and no gap.
+3. **`end_time` marks the START of the local day, despite the name.** 07:00Z is midnight
+   Pacific for this account, and the point stamped `2026-08-04T07:00Z` carries the same
+   value as the total for day 2026-08-04.
+
+`_day_from_end_time` therefore adds **12 hours** before taking the UTC date, rather than
+using that date directly. The midpoint of the local day cannot be pushed across a date
+boundary by either a positive or negative UTC offset; the naive form happens to be right
+for a Pacific account and is silently wrong east of Greenwich.
+
+Also confirmed: with no `since`/`until` at all, the total envelope returns a MULTI-day
+window (reach 208 against a best single day of 189), so it must never be recorded as
+"today".

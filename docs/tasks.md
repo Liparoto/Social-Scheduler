@@ -1654,3 +1654,71 @@ this downloads an executable that then gets run.
 vendored binary and **nothing on PATH**, bytes fetched back through the public
 `trycloudflare.com` URL, clean teardown. **Windows remains untested** — no Windows machine
 available, same caveat as every other Windows script here.
+
+---
+
+## Phase — Insights hub (account-wide metrics)  ·  2026-08-05
+
+Design: `docs/design-insights-hub.md`. Instagram and Threads shipped; Facebook Pages
+deferred to its own phase.
+
+### Schema — `0018_insights_hub.sql`
+- [x] `remote_media` — every post ON the account, ours or not, with a nullable
+      `publication_id` linking back when it happens to be one we sent.
+- [x] `media_metrics`, `account_metrics` (one row per channel per UTC day, upserted),
+      `audience_demographics` (long/narrow, so a new platform bucket needs no migration).
+- [x] `channels` gains sync bookkeeping + an `insights_refresh_requested` handshake.
+- [x] `post_metrics` deliberately untouched — autofill depends on it.
+
+### Worker
+- [x] `worker/insights_probe.py` — asks the LIVE account which metric names work, one per
+      request. Read-only, manual, prints the `.env` lines to copy.
+- [x] `worker/media_sync.py` — mirrors the account's media list. Bounded by age/count,
+      re-walks a refresh window so edits and deletions are seen, flags removed posts
+      rather than deleting them.
+- [x] `worker/account_metrics.py` — daily series + demographics, chunked backfill.
+- [x] `worker/media_metrics.py` — per-post insights, reusing a fresh `post_metrics`
+      snapshot instead of paying Meta twice for the same reading.
+- [x] All three are read-only, run under `DRY_RUN`, obey the kill switch, and share a
+      per-cycle call budget that also watches Meta's `X-Business-Use-Case-Usage` header.
+
+### Dashboard
+- [x] `/insights` — one card per account. No cross-account totals: reach cannot be summed
+      without double-counting people who follow both.
+- [x] `/insights/[id]` — KPI row, 365-day reach ribbon, trend chart, content leaderboard,
+      audience, best-time grid. Every control is a URL param, so the whole page stays a
+      server component with no client bundle.
+- [x] Charts hand-rolled in SVG (`components/charts.tsx`), themed entirely through CSS
+      custom properties, tooltips via native `<title>`.
+
+### What live probing changed (docs were wrong; see reference.md)
+- [x] **`impressions` is dead on Instagram** — 400 in both envelopes. `views` replaces it.
+- [x] **A single day is `[D, D+1)`** — `since=D&until=D` returns `{}` silently.
+- [x] **`end_time` marks the START of the local day**, so a bucket is labelled by
+      `end_time + 12h` (robust for any UTC offset, unlike taking the date directly).
+- [x] **Threads `shares` returns HTTP 500**, `clicks` is always null — neither is real.
+
+### Bugs caught before shipping
+- [x] Incremental sync stopped at the newest known post, so no existing post was ever
+      re-examined — caption edits and deletions would never have been seen.
+- [x] Deletion flagging used "oldest post found" as its search floor, which moves UP past
+      a deleted post. The floor now derives from why the walk stopped.
+- [x] The backfill "has history?" check ran AFTER the job's own first insert, collapsing a
+      365-day backfill to 30 days.
+- [x] UTC vs account-local day: at 01:00 UTC the follower snapshot landed on tomorrow's
+      row. The account's local day is now read from Meta's own newest bucket.
+- [x] Per-post `LIMIT` was derived from the API call budget, silently capping the
+      copy-across path that exists to conserve it.
+- [x] KPI row showed a 2-day sum under a "30 days" heading beside a true 30-day figure.
+      Coverage is now stated, and deltas withheld unless both windows are complete.
+
+**Verified against the live account:** 146 Instagram posts + 8 Threads posts synced, 365
+days of account history, 154/154 posts with metrics (17 reused, 0 API calls wasted), 16
+demographic breakdowns. Suites: **651 worker + 394 dashboard**, 0 lint errors.
+
+### Not done
+- [ ] **Facebook Pages** — every adapter registers `facebook: None`. Needs its own probe
+      first; Meta retired a batch of Page metrics on 2026-06-15.
+- [ ] **Reels `video_views`** is never requested — the shared post-metric list omits it,
+      and Instagram 400s the whole call if one name is invalid, so adding it needs a probe.
+- [ ] Meta's CDN thumbnail URLs expire; there is no local proxy for posts we did not publish.

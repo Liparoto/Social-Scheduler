@@ -26,6 +26,13 @@ class GraphAPIError(Exception):
 
 
 class GraphClient:
+    # Meta reports rate-limit consumption in a response HEADER, not the body, and the
+    # numbers are percentages of a quota it never publishes. Reading it is the only
+    # honest way to back off — the same rule content_publishing_limit follows for
+    # publishing: never hardcode a limit Meta will disagree with.
+    BUC_HEADER = "X-Business-Use-Case-Usage"
+    APP_USAGE_HEADER = "X-App-Usage"
+
     def __init__(
         self,
         graph_version: str,
@@ -36,8 +43,61 @@ class GraphClient:
         self.base = f"{base_url.rstrip('/')}/{graph_version}"
         self.session = session or requests.Session()
         self.timeout = timeout
+        # Percentage (0-100) of the rate-limit quota consumed as of the last response,
+        # and seconds until access returns if we are already throttled. None until a
+        # response actually carries the header — "unknown", which callers must not
+        # mistake for "plenty left".
+        self.last_usage_pct: int | None = None
+        self.retry_after_seconds: int = 0
 
     # -- low-level helpers ---------------------------------------------------------
+    def _record_usage(self, resp) -> None:
+        """Parse Meta's rate-limit headers off a response.
+
+        Called before the ok/not-ok check on purpose: a 429 is exactly the response whose
+        headers matter most, and skipping it there would blind the backoff at the one
+        moment it is needed.
+
+        Two header shapes, because Meta uses both:
+          X-Business-Use-Case-Usage: {"<id>": [{"call_count": N, "total_cputime": N,
+                                                "total_time": N,
+                                                "estimated_time_to_regain_access": N}]}
+          X-App-Usage:               {"call_count": N, "total_cputime": N, "total_time": N}
+        Each number is a PERCENTAGE of its own quota, so the binding constraint is the
+        highest of them, not their sum.
+
+        This is BOOKKEEPING, and bookkeeping must never break the call it rides along
+        with: a malformed header, or a response object carrying no headers at all,
+        leaves usage unknown and is otherwise ignored. Telemetry must never raise into
+        the caller's path.
+        """
+        headers = getattr(resp, "headers", None) or {}
+        raw = headers.get(self.BUC_HEADER) or headers.get(self.APP_USAGE_HEADER)
+        if not raw:
+            return
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+        entries: list[dict] = []
+        if isinstance(parsed, dict):
+            for value in parsed.values():
+                if isinstance(value, list):
+                    entries.extend(v for v in value if isinstance(v, dict))
+            # X-App-Usage is the flat shape: the dict IS the entry.
+            if not entries and any(k in parsed for k in ("call_count", "total_time")):
+                entries = [parsed]
+        for entry in entries:
+            for key in ("call_count", "total_cputime", "total_time"):
+                value = entry.get(key)
+                if isinstance(value, (int, float)):
+                    pct = int(value)
+                    if self.last_usage_pct is None or pct > self.last_usage_pct:
+                        self.last_usage_pct = pct
+            wait = entry.get("estimated_time_to_regain_access")
+            if isinstance(wait, (int, float)) and wait > self.retry_after_seconds:
+                self.retry_after_seconds = int(wait)
+
     def _post(self, path: str, data: dict) -> dict:
         try:
             resp = self.session.post(f"{self.base}/{path}", data=data, timeout=self.timeout)
@@ -55,8 +115,25 @@ class GraphClient:
             resp = self.session.get(f"{self.base}/{path}", params=params, timeout=self.timeout)
         except requests.RequestException as exc:
             raise GraphAPIError(f"GET {path} -> request failed: {redact(str(exc))}") from None
+        self._record_usage(resp)
         if not resp.ok:
             raise GraphAPIError(f"GET {path} -> {resp.status_code}: {redact(resp.text)}")
+        return resp.json()
+
+    def _get_url(self, url: str) -> dict:
+        """GET a fully-formed URL, for following a `paging.next` link verbatim.
+
+        Rebuilding the next page from cursors means re-deriving fields, limit and every
+        other param correctly; Meta already handed us a URL that encodes all of it. The
+        URL carries the access_token, so a failure is redacted like any other.
+        """
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise GraphAPIError(f"GET (paged) -> request failed: {redact(str(exc))}") from None
+        self._record_usage(resp)
+        if not resp.ok:
+            raise GraphAPIError(f"GET (paged) -> {resp.status_code}: {redact(resp.text)}")
         return resp.json()
 
     # -- publishing flow -----------------------------------------------------------
@@ -234,6 +311,181 @@ class GraphClient:
             cfg.get("quota_total"),
             cfg.get("quota_duration"),
         )
+
+    # -- account-level reads (the Insights hub) ----------------------------------------
+    # Everything below is READ-ONLY. None of it publishes, so these run even under
+    # DRY_RUN — a fresh clone gets a populated hub before it ever posts for real.
+
+    # Fields requested for each post in the account's media list. media_product_type
+    # distinguishes FEED / REELS / STORY, which media_type alone does not.
+    MEDIA_FIELDS = (
+        "id,media_type,media_product_type,permalink,caption,"
+        "thumbnail_url,media_url,timestamp,like_count,comments_count"
+    )
+
+    def get_user_media(
+        self,
+        account_id: str,
+        token: str,
+        *,
+        limit: int = 100,
+        fields: str | None = None,
+        next_url: str | None = None,
+    ) -> tuple[list[dict], str | None]:
+        """One page of the account's own media. Returns (items, next_page_url).
+
+        This is what makes the hub account-wide rather than scheduler-wide: it lists
+        every post on the account, including ones published from the phone and ones
+        that predate this install.
+
+        Pass the returned next_page_url back as `next_url` to walk backwards through
+        history; None means the last page. 100 is Meta's per-page maximum.
+        """
+        if next_url:
+            data = self._get_url(next_url)
+        else:
+            data = self._get(
+                f"{account_id}/media",
+                {
+                    "fields": fields or self.MEDIA_FIELDS,
+                    "limit": limit,
+                    "access_token": token,
+                },
+            )
+        items = data.get("data") or []
+        return items, (data.get("paging") or {}).get("next")
+
+    def get_account_profile(self, account_id: str, token: str, fields: str) -> dict:
+        """Snapshot fields off the account node itself (followers_count, media_count...).
+
+        These are plain node fields, NOT insights — they are the one part of the account
+        picture Meta has never renamed, which is why follower counts are read here rather
+        than from the insights endpoint.
+        """
+        return self._get(account_id, {"fields": fields, "access_token": token})
+
+    def get_account_insights_series(
+        self,
+        account_id: str,
+        token: str,
+        metrics: list[str],
+        *,
+        period: str = "day",
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict[str, list[tuple[str, int]]]:
+        """Day-by-day account insights. Returns {metric: [(end_time, value), ...]}.
+
+        With since/until, one request returns the whole range as a `values` array — which
+        is what makes historical backfill affordable. Meta caps a single call at roughly
+        30 days, so callers walk the window in chunks rather than asking for two years.
+        """
+        params: dict = {
+            "metric": ",".join(metrics),
+            "period": period,
+            "access_token": token,
+        }
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        data = self._get(f"{account_id}/insights", params)
+        out: dict[str, list[tuple[str, int]]] = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            if not name:
+                continue
+            out[name] = [
+                (v.get("end_time"), v.get("value"))
+                for v in (item.get("values") or [])
+                if v.get("end_time") is not None
+            ]
+        return out
+
+    def get_account_insights_total(
+        self,
+        account_id: str,
+        token: str,
+        metrics: list[str],
+        *,
+        period: str = "day",
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict[str, int | None]:
+        """Account insights that require metric_type=total_value.
+
+        Meta split its newer account metrics (accounts_engaged, total_interactions,
+        views, likes, saves...) into a different response envelope that returns ONE
+        total for the period instead of a per-day series, and rejects the call outright
+        if metric_type is missing. Hence two methods rather than one with a flag: the
+        caller has to know which shape it is getting, because the meaning differs.
+        """
+        params: dict = {
+            "metric": ",".join(metrics),
+            "period": period,
+            "metric_type": "total_value",
+            "access_token": token,
+        }
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        data = self._get(f"{account_id}/insights", params)
+        out: dict[str, int | None] = {}
+        for item in data.get("data", []):
+            name = item.get("name")
+            if name:
+                out[name] = (item.get("total_value") or {}).get("value")
+        return out
+
+    def get_audience_demographics(
+        self,
+        account_id: str,
+        token: str,
+        metric: str,
+        breakdown: str,
+        *,
+        timeframe: str = "this_month",
+    ) -> dict[str, int]:
+        """One demographic breakdown. Returns {dimension: value}, e.g. {"25-34": 412}.
+
+        Meta returns NOTHING for accounts under 100 followers. That is a documented,
+        normal state — callers must render it as "not enough followers yet", never as an
+        error and never as zeros.
+        """
+        data = self._get(
+            f"{account_id}/insights",
+            {
+                "metric": metric,
+                "period": "lifetime",
+                "metric_type": "total_value",
+                "breakdown": breakdown,
+                "timeframe": timeframe,
+                "access_token": token,
+            },
+        )
+        return self._parse_breakdown(data)
+
+    @staticmethod
+    def _parse_breakdown(data: dict) -> dict[str, int]:
+        """Flatten Meta's nested breakdown envelope to {dimension: value}.
+
+        The shape is three levels deeper than it needs to be:
+          data[0].total_value.breakdowns[0].results[]
+              = {"dimension_values": ["25-34"], "value": 412}
+        dimension_values is a LIST because a breakdown can be compound ("age,gender"
+        yields ["25-34", "F"]); joining with " · " keeps one flat key either way.
+        """
+        out: dict[str, int] = {}
+        for item in data.get("data", []):
+            total = item.get("total_value") or {}
+            for breakdown in total.get("breakdowns") or []:
+                for result in breakdown.get("results") or []:
+                    dims = result.get("dimension_values") or []
+                    value = result.get("value")
+                    if dims and value is not None:
+                        out[" · ".join(str(d) for d in dims)] = value
+        return out
 
     # -- Facebook Page publishing ---------------------------------------------------
     # A Page post is simpler than IG: no container to poll. A single photo publishes in
@@ -465,6 +717,76 @@ class GraphClient:
                 values = item.get("values") or [{}]
                 out[name] = values[0].get("value")
         return out
+
+    # -- Threads account-level reads ---------------------------------------------------
+    # Separate methods rather than reusing the Instagram ones: Threads uses a different
+    # host, a different API version, DIFFERENT EDGE NAMES (/threads, /threads_insights
+    # rather than /media, /insights) and its own response envelope. Sharing a method and
+    # branching inside it would hide four incompatibilities behind one signature.
+
+    THREADS_MEDIA_FIELDS = (
+        "id,media_type,permalink,text,timestamp,thumbnail_url,is_quote_post"
+    )
+
+    def get_threads_user_media(
+        self,
+        user_id: str,
+        token: str,
+        *,
+        limit: int = 100,
+        fields: str | None = None,
+        next_url: str | None = None,
+    ) -> tuple[list[dict], str | None]:
+        """One page of the account's Threads posts. Returns (items, next_page_url)."""
+        if next_url:
+            data = self._get_url(next_url)
+        else:
+            data = self._get(
+                f"{user_id}/threads",
+                {
+                    "fields": fields or self.THREADS_MEDIA_FIELDS,
+                    "limit": limit,
+                    "access_token": token,
+                },
+            )
+        items = data.get("data") or []
+        return items, (data.get("paging") or {}).get("next")
+
+    def get_threads_user_insights(
+        self,
+        user_id: str,
+        token: str,
+        metrics: list[str],
+        *,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict:
+        """Account-level Threads insights (views, likes, replies, followers_count...).
+
+        Reuses _parse_threads_insights because the account edge returns the same
+        two-envelope shape the per-post edge does — total_value for lifetime metrics,
+        values[] for windowed ones.
+        """
+        params: dict = {"metric": ",".join(metrics), "access_token": token}
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        return self._parse_threads_insights(self._get(f"{user_id}/threads_insights", params))
+
+    def get_threads_audience_demographics(
+        self, user_id: str, token: str, breakdown: str
+    ) -> dict[str, int]:
+        """Threads follower demographics for one breakdown (country, city, age, gender)."""
+        data = self._get(
+            f"{user_id}/threads_insights",
+            {
+                "metric": "follower_demographics",
+                "breakdown": breakdown,
+                "access_token": token,
+            },
+        )
+        return self._parse_breakdown(data)
 
     # -- profile photos ----------------------------------------------------------------
     # Each lookup distinguishes "no photo" (None) from "the request failed" (raises).

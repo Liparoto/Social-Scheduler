@@ -10,6 +10,7 @@ const NAV = [
   { href: "/compose", label: "Compose", hint: "New post" },
   { href: "/import", label: "Import", hint: "Bulk add images" },
   { href: "/library", label: "Library", hint: "Posts & bulk schedule" },
+  { href: "/insights", label: "Insights", hint: "How accounts perform" },
   { href: "/media", label: "Media", hint: "Stored files & cleanup" },
   { href: "/periods", label: "Periods", hint: "In-season windows" },
   { href: "/channels", label: "Channels", hint: "Accounts & config" },

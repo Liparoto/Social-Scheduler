@@ -113,6 +113,66 @@ class Config:
     # renames insight metrics without warning, so this is configurable rather than
     # hardcoded into the fetch call.
     threads_insight_metrics: str = "views,likes,replies,reposts,quotes"
+    # -- Insights hub -----------------------------------------------------------------
+    # Every default below was established by probing the LIVE api on 2026-08-05
+    # (python3 -m worker.insights_probe), not from docs. See reference.md, "account-level
+    # insights, probed live". Configurable for the same reason fb_post_insight_metrics is:
+    # Meta renames these without notice, and a retired name 400s the whole call.
+    #
+    # Instagram account insights come in two envelopes and a metric can work in one but
+    # not the other, so they are two separate settings rather than one list.
+    # NOTE: `impressions` is absent on purpose — it now returns 400 in BOTH envelopes.
+    # Use `views`. Re-run the probe before adding any name here.
+    ig_account_series_metrics: str = "reach,follower_count"
+    ig_account_total_metrics: str = (
+        "views,reach,profile_views,accounts_engaged,total_interactions,"
+        "likes,comments,saves,shares,replies,website_clicks,profile_links_taps"
+    )
+    # Which audiences to break down, and how. All twelve combinations were verified.
+    ig_demographic_metrics: str = (
+        "follower_demographics,engaged_audience_demographics,reached_audience_demographics"
+    )
+    ig_demographic_breakdowns: str = "age,gender,city,country"
+    # Threads: `shares` is excluded because it returns HTTP 500 (a server error, not a
+    # clean rejection, so it must not be retried as if transient), and `clicks` because it
+    # is accepted but always None.
+    threads_account_metrics: str = "views,likes,replies,reposts,quotes,followers_count"
+    threads_demographic_breakdowns: str = "age,gender,city,country"
+
+    # Historical backfill bounds. The first sync walks back until it hits EITHER limit —
+    # whichever comes first — so a large account cannot turn its first run into an
+    # unbounded crawl. The Liparoto IG account holds 988 media, so 2000 is headroom
+    # rather than a real ceiling for a typical install.
+    media_sync_max_age_days: int = 730
+    media_sync_max_posts: int = 2000
+    media_sync_page_size: int = 100          # Meta's per-page maximum
+    # Once the backfill is done, each cycle re-walks this many posts off the top rather
+    # than only looking for strictly-newer ones. That refresh is what catches edited
+    # captions and deleted posts — without it the mirror drifts from reality and never
+    # recovers. 200 is two pages: cheap enough to run every cycle.
+    media_sync_refresh_posts: int = 200
+
+    # Account-insight history. Meta caps a SINGLE insights request at roughly 30 days, so
+    # a longer history is walked in chunks of that size — hence two settings rather than
+    # one. The full backfill runs only on a channel's first sync; afterwards each cycle
+    # refreshes one recent window.
+    account_backfill_days: int = 365
+    account_series_window_days: int = 30
+
+    # How often each job runs. Demographics move slowly and cost one call per
+    # audience/breakdown pair (twelve on Instagram), so they get their own daily cadence
+    # rather than riding the 6-hour cycle.
+    insights_sync_interval_hours: int = 6
+    demographics_sync_interval_hours: int = 24
+
+    # Rate limiting. A backfill of ~1000 posts cannot run in one cycle, so each cycle
+    # takes a bounded bite and stops. The usage ceiling is a percentage read from Meta's
+    # own X-Business-Use-Case-Usage header (see GraphClient._record_usage) — when we are
+    # past it, the job stops early and resumes next cycle rather than pushing into a
+    # throttle that would also block publishing.
+    insights_max_calls_per_cycle: int = 200
+    insights_usage_pct_ceiling: int = 80
+
     # Threads versions its Graph API independently of the Instagram/Facebook epoch
     # (currently v1.0, vs graph_version's v25.0+), so it cannot share graph_version.
     # Configurable rather than hardcoded — same reasoning as threads_insight_metrics:
@@ -165,6 +225,42 @@ class Config:
                 "THREADS_INSIGHT_METRICS", "views,likes,replies,reposts,quotes"
             ),
             threads_api_version=os.environ.get("THREADS_API_VERSION", "v1.0"),
+            ig_account_series_metrics=os.environ.get(
+                "IG_ACCOUNT_SERIES_METRICS", cls.ig_account_series_metrics
+            ),
+            ig_account_total_metrics=os.environ.get(
+                "IG_ACCOUNT_TOTAL_METRICS", cls.ig_account_total_metrics
+            ),
+            ig_demographic_metrics=os.environ.get(
+                "IG_DEMOGRAPHIC_METRICS", cls.ig_demographic_metrics
+            ),
+            ig_demographic_breakdowns=os.environ.get(
+                "IG_DEMOGRAPHIC_BREAKDOWNS", cls.ig_demographic_breakdowns
+            ),
+            threads_account_metrics=os.environ.get(
+                "THREADS_ACCOUNT_METRICS", cls.threads_account_metrics
+            ),
+            threads_demographic_breakdowns=os.environ.get(
+                "THREADS_DEMOGRAPHIC_BREAKDOWNS", cls.threads_demographic_breakdowns
+            ),
+            media_sync_max_age_days=int(os.environ.get("MEDIA_SYNC_MAX_AGE_DAYS", "730")),
+            media_sync_max_posts=int(os.environ.get("MEDIA_SYNC_MAX_POSTS", "2000")),
+            media_sync_page_size=int(os.environ.get("MEDIA_SYNC_PAGE_SIZE", "100")),
+            media_sync_refresh_posts=int(os.environ.get("MEDIA_SYNC_REFRESH_POSTS", "200")),
+            account_backfill_days=int(os.environ.get("ACCOUNT_BACKFILL_DAYS", "365")),
+            account_series_window_days=int(
+                os.environ.get("ACCOUNT_SERIES_WINDOW_DAYS", "30")
+            ),
+            insights_sync_interval_hours=int(
+                os.environ.get("INSIGHTS_SYNC_INTERVAL_HOURS", "6")
+            ),
+            demographics_sync_interval_hours=int(
+                os.environ.get("DEMOGRAPHICS_SYNC_INTERVAL_HOURS", "24")
+            ),
+            insights_max_calls_per_cycle=int(
+                os.environ.get("INSIGHTS_MAX_CALLS_PER_CYCLE", "200")
+            ),
+            insights_usage_pct_ceiling=int(os.environ.get("INSIGHTS_USAGE_PCT_CEILING", "80")),
             asset_port=int(os.environ.get("ASSET_PORT", "8787")),
             cloudflared_path=os.environ.get("CLOUDFLARED_PATH", "cloudflared"),
             tunnel_provider=os.environ.get("TUNNEL_PROVIDER", "cloudflared"),

@@ -183,6 +183,23 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
     from .avatars import run_avatars
 
     run_avatars(conn, config, client, now, logger=logger, client_for=client_for)
+
+    # Mirror each account's own post list into remote_media, so the Insights hub covers
+    # everything on the account rather than only what this tool published. Read-only, so
+    # like avatars it runs in dry-run mode too, and it goes LAST: publishing this cycle's
+    # due work always matters more than metrics freshness, and this job is the one that
+    # can spend a large number of API calls.
+    from .media_sync import run_media_sync
+
+    run_media_sync(conn, config, client, now, logger=logger, client_for=client_for)
+
+    # Then the account-level series and per-post insights that hang off what it found.
+    # Order matters: a post has to exist in remote_media before it can be given metrics.
+    from .account_metrics import run_account_metrics
+    from .media_metrics import run_media_metrics
+
+    run_account_metrics(conn, config, client, now, logger=logger, client_for=client_for)
+    run_media_metrics(conn, config, client, now, logger=logger, client_for=client_for)
     return processed
 
 
