@@ -1872,3 +1872,28 @@ reasons ("top 5% · reach, views, likes").
       placeholders), thumbnails are re-encodes so hashes cannot match, and created_at is
       import time. A manual "this post is that post" UI unlocks the back catalogue; the
       pool otherwise fills only from new posts going forward.
+
+
+---
+
+## Phase — several posts a day  ·  2026-08-06
+
+- [x] **Cadence accepts multiple times.** `{"days":[...], "times":["09:00","13:00","18:00"]}`
+      alongside the original `{"time": "18:00"}`; both are read, and the form now always
+      writes `times` so the stored shape stops depending on how many were chosen.
+- [x] `scheduling.daily_slots` fills each active day at every time before moving on —
+      morning, afternoon, evening — which is what "three times a day" means. The existing
+      `weekly_date_slots` advances a whole DAY after each placement by design (it exists to
+      spread a queue out), so it can never produce two sends on one date however it is
+      called; multi-time needed its own path rather than a tweak to that one.
+- [x] Time-of-day tags are not consulted while more than one time is set, and the form says
+      so: the cadence already states the times, and letting a post's band override one
+      would collapse two sends onto a minute or leave a booked slot empty.
+- [x] **Caught by the end-to-end test, not the unit tests:** `parse_weekly_cadence` requires
+      a `time` key, and `_fill_unit` treats its None as "no cadence" and skips the channel.
+      A `times`-only config was therefore *valid to the slot helper and invisible to
+      auto-fill* — an account posting three times a day would have silently stopped
+      filling. It now falls back to the first time.
+
+**Verified:** 738 worker + 401 dashboard tests, 0 lint errors. Six sends queued across
+three days at 3/day in a test, and single-time cadences still produce one per day.

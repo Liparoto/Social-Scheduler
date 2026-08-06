@@ -34,7 +34,10 @@ from .clients import PLATFORM_CAPS
 from .config import Config
 from .periods import in_season, local_date, period_from_row
 from .publisher import _select_caption
-from .scheduling import parse_iso, parse_weekly_cadence, weekly_date_slots
+from .scheduling import (
+    daily_slots, parse_cadence_times, parse_iso, parse_weekly_cadence,
+    weekly_date_slots,
+)
 from .time_of_day import band_times, post_bands, resolve_slot_time
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
@@ -696,13 +699,25 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     cadence_hm = (hour, minute)
     bt_map = band_times(config)
     after = parse_iso(last_future) if last_future else now
-    # Each candidate's slot TIME comes from its time_of_day tag; the cadence still
-    # supplies which DAYS (one auto-post per active day).
-    per_candidate_times = [
-        resolve_slot_time(post_bands(conn, row["post_id"]), bt_map, cadence_hm)
-        for row, _ in candidates
-    ]
-    slots = weekly_date_slots(weekdays, settings["timezone"], after, per_candidate_times)
+    day_times = parse_cadence_times(settings["cadence_config"])
+    if len(day_times) > 1:
+        # Several posts a day. Slots are day x time, so a day genuinely carries more than
+        # one send — weekly_date_slots advances a whole day after each placement by
+        # design (it exists to spread a queue out) and can never do this.
+        #
+        # Time-of-day tags are not consulted on this path: the cadence already states the
+        # times, and letting a post's band override one would collapse two sends onto the
+        # same minute or leave a booked slot empty. With a single daily time the band
+        # still decides, exactly as before.
+        slots = daily_slots(weekdays, settings["timezone"], after, day_times, len(candidates))
+    else:
+        # Each candidate's slot TIME comes from its time_of_day tag; the cadence still
+        # supplies which DAYS (one auto-post per active day).
+        per_candidate_times = [
+            resolve_slot_time(post_bands(conn, row["post_id"]), bt_map, cadence_hm)
+            for row, _ in candidates
+        ]
+        slots = weekly_date_slots(weekdays, settings["timezone"], after, per_candidate_times)
 
     # All-or-nothing. sqlite3's default isolation means these inserts sit in an implicit
     # transaction, and run.py catches errors and REUSES this connection — so without the

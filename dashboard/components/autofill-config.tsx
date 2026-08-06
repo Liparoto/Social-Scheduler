@@ -20,12 +20,19 @@ interface Props {
   bppPoolSize: number;
 }
 
-function parseCadence(raw: string | null): { days: string[]; time: string } {
+/** Accepts both cadence shapes: the original single `time`, and `times` for accounts
+ *  posting several times a day. Always hands back a list, so the form has one model. */
+function parseCadence(raw: string | null): { days: string[]; times: string[] } {
   try {
     const c = JSON.parse(raw || "");
-    return { days: Array.isArray(c.days) ? c.days : [], time: c.time || "18:00" };
+    const times = Array.isArray(c.times) && c.times.length
+      ? c.times
+      : c.time
+        ? [c.time]
+        : ["18:00"];
+    return { days: Array.isArray(c.days) ? c.days : [], times };
   } catch {
-    return { days: [], time: "18:00" };
+    return { days: [], times: ["18:00"] };
   }
 }
 
@@ -40,7 +47,7 @@ export function AutofillConfig(props: Props) {
   const initial = parseCadence(props.cadenceConfig);
   const [enabled, setEnabled] = useState(props.enabled);
   const [days, setDays] = useState<string[]>(initial.days);
-  const [time, setTime] = useState(initial.time);
+  const [times, setTimes] = useState<string[]>(initial.times);
   const [minDepth, setMinDepth] = useState(props.minQueueDepth);
   const [target, setTarget] = useState(props.targetQueueDepth);
   const [reuseDays, setReuseDays] = useState(props.reuseMinAgeDays);
@@ -59,7 +66,9 @@ export function AutofillConfig(props: Props) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         autofill_enabled: enabled,
-        cadence_config: JSON.stringify({ days, time }),
+        // Written as `times` even when there is one, so the stored shape stops depending
+        // on how many the owner happens to have chosen. Readers accept both.
+        cadence_config: JSON.stringify({ days, times: times.filter(Boolean).sort() }),
         min_queue_depth: minDepth,
         target_queue_depth: target,
         reuse_min_age_days: reuseDays,
@@ -71,7 +80,7 @@ export function AutofillConfig(props: Props) {
   }
 
   const summary = enabled
-    ? `${days.length ? days.map((d) => d[0].toUpperCase() + d.slice(1)).join("/") : "no days"} @ ${time} · keep ≥${minDepth}, fill to ${target}`
+    ? `${days.length ? days.map((d) => d[0].toUpperCase() + d.slice(1)).join("/") : "no days"} @ ${times.join(", ")} · keep ≥${minDepth}, fill to ${target}`
     : "Off";
 
   const field = "rounded-md border border-border bg-surface px-2 py-1 text-sm text-ink focus:border-brand";
@@ -120,10 +129,53 @@ export function AutofillConfig(props: Props) {
           </div>
 
           <div className="flex flex-wrap gap-3">
-            <label className="text-xs text-ink-soft">
-              <span className="mb-1 block">Time</span>
-              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={field} />
-            </label>
+            {/* One row per posting time. An account posting 2-4 times a day sets several;
+                everyone else sees exactly what they saw before, one time with no extra
+                controls to reason about. */}
+            <div className="text-xs text-ink-soft">
+              <span className="mb-1 block">
+                {times.length > 1 ? `Times (${times.length} a day)` : "Time"}
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {times.map((t, i) => (
+                  <span key={i} className="inline-flex items-center gap-1">
+                    <input
+                      type="time"
+                      value={t}
+                      onChange={(e) =>
+                        setTimes(times.map((x, j) => (j === i ? e.target.value : x)))
+                      }
+                      className={field}
+                    />
+                    {times.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => setTimes(times.filter((_, j) => j !== i))}
+                        className="text-faint hover:text-status-failed"
+                        aria-label={`Remove the ${t} slot`}
+                        title="Remove this time"
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setTimes([...times, "12:00"])}
+                  className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:border-border-strong hover:text-ink-soft"
+                >
+                  + Add a time
+                </button>
+              </div>
+              {times.length > 1 ? (
+                <p className="mt-1 text-[11px] text-muted">
+                  <span className="data">{times.length}</span> posts on each active day.
+                  Time-of-day tags are ignored while more than one time is set — the
+                  cadence decides.
+                </p>
+              ) : null}
+            </div>
             <label className="text-xs text-ink-soft">
               <span className="mb-1 block">Refill below</span>
               <input

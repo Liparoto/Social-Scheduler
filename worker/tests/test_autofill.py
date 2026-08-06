@@ -427,3 +427,56 @@ def test_a_post_targeted_at_both_surfaces_is_still_autofilled_for_the_feed(conn)
     conn.commit()
 
     assert p in [r["post_id"] for r in select_candidates(conn, ch, NOW)]
+
+
+# ---- several posts a day ------------------------------------------------------------
+
+def test_autofill_can_queue_more_than_one_post_a_day(conn, config):
+    """A channel posting three times a day must get three sends on one date. The
+    single-time path advances a whole day after each placement, so this needs the
+    multi-time cadence to take effect end to end — not just in the slot helper."""
+    cid = conn.execute(
+        """INSERT INTO channels
+             (platform, account_name, timezone, autofill_enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days, remote_account_id,
+              access_token)
+           VALUES ('instagram','Chan','UTC',1, ?, 3, 6, 30, 'acct1','tok')""",
+        ('{"days":["mon","tue","wed","thu","fri","sat","sun"],'
+         '"times":["09:00","13:00","18:00"]}',),
+    ).lastrowid
+    for _ in range(8):
+        make_post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, config, NOW)
+
+    dates = [
+        r["scheduled_at"][:10]
+        for r in conn.execute(
+            "SELECT scheduled_at FROM publications WHERE channel_id=? ORDER BY scheduled_at",
+            (cid,),
+        ).fetchall()
+    ]
+    assert len(dates) == 6
+    busiest = max(dates.count(d) for d in set(dates))
+    assert busiest > 1, f"expected several sends on one day, got {dates}"
+
+
+def test_a_single_time_cadence_still_posts_once_a_day(conn, config):
+    """The existing behaviour must be untouched — spreading a queue out is the point of
+    the original path."""
+    cid = make_channel(conn, cadence='{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}',
+                       min_depth=3, target=5, tz="UTC")
+    for _ in range(6):
+        make_post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, config, NOW)
+
+    dates = [
+        r["scheduled_at"][:10]
+        for r in conn.execute(
+            "SELECT scheduled_at FROM publications WHERE channel_id=?", (cid,)
+        ).fetchall()
+    ]
+    assert len(dates) == len(set(dates)), "one post per day on the single-time cadence"

@@ -80,3 +80,74 @@ def test_weekly_date_slots_skips_past_time_on_first_day():
     # Must be strictly after `after`; 09:00 Monday already passed -> lands Wednesday.
     assert slots[0] > after
     assert _local_hm(slots[0], tz) == (9, 0)
+
+
+# ---- several posts a day ------------------------------------------------------------
+#
+# weekly_date_slots advances a whole day after each placement by design — it exists to
+# spread a queue out — so it can never produce two sends on one date however it is called.
+# An account posting 2-4 times a day needs its own path.
+
+from worker.scheduling import daily_slots, parse_cadence_times  # noqa: E402
+
+
+def test_a_single_time_cadence_still_parses():
+    """Most installs hold the original shape and must keep working untouched."""
+    assert parse_cadence_times('{"days":["mon"],"time":"18:00"}') == [(18, 0)]
+
+
+def test_several_times_parse_in_order():
+    cfg = '{"days":["mon"],"times":["18:00","09:00","13:00"]}'
+    assert parse_cadence_times(cfg) == [(9, 0), (13, 0), (18, 0)]
+
+
+def test_duplicate_times_collapse():
+    """Two posts booked for the same minute would collide on one slot."""
+    assert parse_cadence_times('{"days":["mon"],"times":["09:00","09:00"]}') == [(9, 0)]
+
+
+def test_a_nonsense_time_is_dropped_not_fatal():
+    cfg = '{"days":["mon"],"times":["09:00","banana","25:00","13:70"]}'
+    assert parse_cadence_times(cfg) == [(9, 0)]
+
+
+def test_missing_or_broken_config_yields_nothing():
+    assert parse_cadence_times(None) == []
+    assert parse_cadence_times("not json") == []
+    assert parse_cadence_times('{"days":["mon"]}') == []
+
+
+def test_slots_fill_each_day_before_moving_on():
+    """Morning-then-afternoon-then-evening, not every morning first — which is what
+    'three times a day' is understood to mean."""
+    after = datetime(2026, 8, 6, 7, 0, tzinfo=timezone.utc)
+    slots = daily_slots({0, 1, 2, 3, 4, 5, 6}, "UTC", after, [(9, 0), (13, 0), (18, 0)], 5)
+    assert [s.isoformat() for s in slots] == [
+        "2026-08-06T09:00:00+00:00",
+        "2026-08-06T13:00:00+00:00",
+        "2026-08-06T18:00:00+00:00",
+        "2026-08-07T09:00:00+00:00",
+        "2026-08-07T13:00:00+00:00",
+    ]
+
+
+def test_a_time_already_past_today_is_skipped_not_booked_in_the_past():
+    after = datetime(2026, 8, 6, 14, 0, tzinfo=timezone.utc)
+    slots = daily_slots({0, 1, 2, 3, 4, 5, 6}, "UTC", after, [(9, 0), (18, 0)], 2)
+    assert slots[0].isoformat() == "2026-08-06T18:00:00+00:00"
+    assert slots[1].isoformat() == "2026-08-07T09:00:00+00:00"
+
+
+def test_inactive_weekdays_are_skipped_entirely():
+    after = datetime(2026, 8, 6, 0, 0, tzinfo=timezone.utc)   # Thursday
+    slots = daily_slots({0}, "UTC", after, [(9, 0), (18, 0)], 3)   # Mondays only
+    assert [s.date().isoformat() for s in slots] == [
+        "2026-08-10", "2026-08-10", "2026-08-17",
+    ]
+
+
+def test_no_times_or_no_days_produces_nothing():
+    after = datetime(2026, 8, 6, 0, 0, tzinfo=timezone.utc)
+    assert daily_slots(set(), "UTC", after, [(9, 0)], 3) == []
+    assert daily_slots({0}, "UTC", after, [], 3) == []
+    assert daily_slots({0}, "UTC", after, [(9, 0)], 0) == []

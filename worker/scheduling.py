@@ -35,7 +35,18 @@ def parse_weekly_cadence(cadence_config: str | None) -> tuple[set[int], int, int
         cfg = json.loads(cadence_config)
         days = cfg["days"]
         wanted = {WEEKDAYS[d.lower()] for d in days}
-        hh, mm = (int(x) for x in cfg["time"].split(":"))
+        # A multi-time cadence ({"times": [...]}) has no "time" key. Falling back to its
+        # FIRST time keeps this function's contract — and, more importantly, keeps such a
+        # config VALID: _fill_unit treats a None here as "no cadence" and skips the
+        # channel entirely, so without this an account posting three times a day would
+        # silently stop auto-filling altogether.
+        raw_time = cfg.get("time")
+        if raw_time is None:
+            times = cfg.get("times") or []
+            raw_time = times[0] if times else None
+        if raw_time is None:
+            return None
+        hh, mm = (int(x) for x in str(raw_time).split(":"))
         if not wanted or not (0 <= hh < 24 and 0 <= mm < 60):
             return None
         return wanted, hh, mm
@@ -98,5 +109,79 @@ def weekly_date_slots(
                 i += 1
                 cursor += timedelta(days=1)  # one auto-post per active day
                 continue
+        cursor += timedelta(days=1)
+    return slots
+
+
+def parse_cadence_times(cadence_config: str | None) -> list[tuple[int, int]]:
+    """Every posting time in a cadence, in order. [] when the config is absent/invalid.
+
+    Two accepted shapes, because the single-time one predates this and is still what most
+    installs hold:
+
+        {"days": [...], "time":  "18:00"}                  -> [(18, 0)]
+        {"days": [...], "times": ["09:00", "13:00"]}       -> [(9, 0), (13, 0)]
+
+    `times` wins when both are present. Sorted and de-duplicated: two posts booked for the
+    same minute would collide on one slot, and the order they were typed in is not
+    something anybody means.
+    """
+    if not cadence_config:
+        return []
+    try:
+        cfg = json.loads(cadence_config)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    raw = cfg.get("times")
+    if not raw:
+        single = cfg.get("time")
+        raw = [single] if single else []
+    out: set[tuple[int, int]] = set()
+    for entry in raw:
+        try:
+            hh, mm = (int(x) for x in str(entry).split(":"))
+        except (ValueError, AttributeError):
+            continue
+        if 0 <= hh < 24 and 0 <= mm < 60:
+            out.add((hh, mm))
+    return sorted(out)
+
+
+def daily_slots(
+    weekdays: set[int],
+    tz_name: str,
+    after: datetime,
+    day_times: list[tuple[int, int]],
+    count: int,
+) -> list[datetime]:
+    """`count` slots, filling each active day at every time in `day_times`.
+
+    This is the multiple-posts-per-day path. weekly_date_slots deliberately advances a
+    whole day after placing one post — it exists to spread a queue out — so it can never
+    produce two sends on the same date however it is called.
+
+    Times are taken in order within a day before moving to the next, so a queue fills
+    morning-then-afternoon-then-evening rather than filling every morning first, which is
+    what "three times a day" is understood to mean.
+    """
+    if not weekdays or not day_times or count <= 0:
+        return []
+    tz = ZoneInfo(tz_name)
+    cursor = after.astimezone(tz).date()
+    slots: list[datetime] = []
+    # Enough days to satisfy `count` even if only one weekday is active, plus slack for a
+    # partly-elapsed first day.
+    for _ in range(count * 7 + 8):
+        if len(slots) >= count:
+            break
+        if cursor.weekday() in weekdays:
+            for hh, mm in day_times:
+                if len(slots) >= count:
+                    break
+                utc_dt = datetime.combine(cursor, dtime(hh, mm), tz).astimezone(UTC)
+                # Strictly after `after` so a cadence time already past today does not
+                # book a send in the past on the first day.
+                if utc_dt > after:
+                    slots.append(utc_dt)
         cursor += timedelta(days=1)
     return slots
