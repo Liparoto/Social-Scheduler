@@ -61,13 +61,21 @@ everything (dashboard deps, the worker's Python environment, **and** `cloudflare
 Cloudflare program that lets Meta fetch your media at publish time). Nothing to install by hand
 and no Cloudflare account: it downloads into `data/bin/`, and if you already have your own copy
 it uses that instead. Every run it re-checks the database so new updates apply automatically.
-Then it asks what you want to do:
 
-- **1) Compose only** — opens the dashboard at `http://localhost:3939`; the worker never runs, so
-  **nothing can post**. This is the default and is always safe.
-- **2) Go live** — opens the dashboard **and** starts the worker that publishes due posts. While
-  `DRY_RUN=1` (the shipped default) the worker only *logs* what it would post. If you've set
-  `DRY_RUN=0`, it asks you to type **YES** first — otherwise it quietly stays in Compose only.
+There is no menu — starting SocialScheduler starts the whole thing: the dashboard at
+`http://localhost:3939` to compose in, and the worker that publishes what you've scheduled.
+**Whether anything can actually post is decided by `.env`, not by anything you click:**
+
+- **`DRY_RUN=1`** (the shipped default) — the worker logs exactly what it *would* publish and
+  posts **nothing**. A fresh install starts here, so it is safe to run before you've read a thing.
+- **`DRY_RUN=0`** — it publishes for real.
+- **`KILL_SWITCH=1`** — the emergency stop. The worker keeps running but publishes nothing,
+  whatever `DRY_RUN` says. Use this when you want everything to go quiet *now*.
+
+The worker is also registered to **start on its own every time you log in**, so it survives a
+reboot — the one thing double-clicking can't do, since after a restart nobody is there to click
+anything. To remove that, double-click **`Disable-Worker-Autostart-Mac.command`** (or
+`...-Windows.bat`).
 
 Once it's running, the launcher **closes its own window** — the dashboard and worker keep
 running in the background, so nothing is left cluttering your screen and nothing dies if you
@@ -80,12 +88,16 @@ close a window by accident.
 Double-clicking Start again while it's already running just reopens the browser tab — it won't
 start a second copy, so it doubles as an "is it on?" check.
 
-If you chose **Go live**, the worker also **stops itself after 12 hours** so it can't keep
-publishing unattended if you forget about it. Change that with `WORKER_AUTO_STOP_HOURS` in your
-`.env`. The dashboard has no timer — it publishes nothing, so it runs until you stop it.
+Stop ends both the dashboard and the worker — but only **until your next login**, since the
+worker stays registered to autostart. To keep it from coming back, either set `KILL_SWITCH=1` in
+`.env` (it starts but publishes nothing) or run the `Disable-Worker-Autostart` script for your
+platform, which removes the autostart entirely.
 
-Logs are in `data/logs/` — `dashboard.log` and `worker-daemon.out`. Requires **Node.js**
-(nodejs.org) and **Python 3** (python.org); the launcher tells you if either is missing.
+Logs are in `data/logs/`. **`worker.log`** is the one to read — the worker's real, rotating log.
+`dashboard.log` covers the dashboard; `worker-launchd.out` and `worker-daemon.out` only catch
+crash output from before logging starts, so they're usually empty and are the place to look if
+the worker won't start at all. Requires **Node.js** (nodejs.org) and **Python 3** (python.org);
+the launcher tells you if either is missing.
 
 **Update to the latest code (keeps all your data):**
 - **macOS:** double-click **`Update-Mac.command`** · **Windows:** **`Update-Windows.bat`**.
@@ -101,11 +113,15 @@ or it isn't a git checkout, it stops with a plain explanation and changes nothin
 - **Windows:** double-click **`Export-Windows.bat`** — same export, into
   `%USERPROFILE%\Documents\SocialScheduler Exports\`, opened in File Explorer when done.
 
-**Manual (for developers):**
+**Manual (for developers):** these steps skip the launcher, so nothing is set up for you.
 1. Copy `.env.example` → `.env` and fill in your own Meta app + per-channel credentials.
 2. `python3 migrate.py` to build/update the local database.
 3. `cd dashboard && npm install && npm run dev` for the dashboard.
-4. For publishing, run the worker: `python3 -m worker.run` (see below).
+4. `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` for the worker's
+   dependencies. Use the venv's Python from here on — the system one has none of them.
+5. `.venv/bin/python -m worker.cloudflared_setup` to fetch `cloudflared`, which real
+   publishing needs. Skip it if you already have your own on `PATH`.
+6. For publishing, run the worker: `.venv/bin/python -m worker.run` (see below).
 
 ## Going live (first real post)
 Do a **dry-run** first (`DRY_RUN=1` in `.env`), then follow **`docs/meta-setup.md`** to connect
