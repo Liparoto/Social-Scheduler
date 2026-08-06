@@ -209,3 +209,53 @@ def test_parse_cadence_returns_none_when_nothing_is_usable():
 def test_candidate_local_times_in_times_mode_is_just_its_times():
     c = parse_cadence('{"days":["mon"],"times":["09:00","18:00"]}')
     assert sorted(c.candidate_local_times()) == [(9, 0), (18, 0)]
+
+
+def test_parse_cadence_interval_mode():
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":585,'
+        '"window":{"from":"08:00","to":"21:00"},"days":["mon","tue"]}'
+    )
+    assert c.mode == "interval"
+    assert c.every_minutes == 585           # 9h45m
+    assert c.window == ((8, 0), (21, 0))
+    assert c.days == frozenset({0, 1})
+
+
+def test_parse_cadence_interval_defaults_to_the_unrestricted_sweep():
+    # No window and no days is a legitimate choice — the full 24-hour, 7-day drift — so the
+    # absent keys widen rather than invalidate.
+    c = parse_cadence('{"mode":"interval","every_minutes":60}')
+    assert c.window == ((0, 0), (23, 59))
+    assert c.days == frozenset({0, 1, 2, 3, 4, 5, 6})
+
+
+def test_parse_cadence_interval_rejects_a_non_positive_or_missing_interval():
+    assert parse_cadence('{"mode":"interval","every_minutes":0}') is None
+    assert parse_cadence('{"mode":"interval","every_minutes":-5}') is None
+    assert parse_cadence('{"mode":"interval"}') is None
+    assert parse_cadence('{"mode":"interval","every_minutes":"soon"}') is None
+
+
+def test_parse_cadence_interval_rejects_an_explicitly_empty_day_list():
+    # Absent days means "every day"; an empty list means the owner unchecked all seven, which
+    # is a cadence that can never fire.
+    assert parse_cadence('{"mode":"interval","every_minutes":60,"days":[]}') is None
+
+
+def test_candidate_local_times_covers_the_window_only():
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":60,"window":{"from":"08:00","to":"12:00"}}'
+    )
+    times = set(c.candidate_local_times())
+    assert (8, 0) in times and (12, 0) in times
+    assert (7, 59) not in times and (12, 1) not in times
+
+
+def test_candidate_local_times_wraps_midnight():
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":60,"window":{"from":"22:00","to":"02:00"}}'
+    )
+    times = set(c.candidate_local_times())
+    assert (23, 0) in times and (0, 30) in times and (2, 0) in times
+    assert (12, 0) not in times

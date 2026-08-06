@@ -159,7 +159,40 @@ def _parse_times(cfg) -> Cadence | None:
 
 
 def _parse_interval(cfg) -> Cadence | None:
-    return None  # Task 3
+    """An interval cadence, or None when it could never fire.
+
+    The window and day list WIDEN when absent (no window = all day, no `days` key = all week)
+    because the unrestricted 24/7 drift is a real choice someone might want. An explicitly
+    empty day list is different: the owner unchecked all seven, and a cadence that can never
+    fire must read as invalid rather than silently doing nothing forever.
+    """
+    try:
+        every_minutes = int(cfg.get("every_minutes"))
+    except (TypeError, ValueError):
+        return None
+    if every_minutes <= 0:
+        return None
+
+    window_cfg = cfg.get("window")
+    start = end = None
+    if isinstance(window_cfg, dict):
+        start = _parse_hhmm(window_cfg.get("from"))
+        end = _parse_hhmm(window_cfg.get("to"))
+    window = (start or (0, 0), end or (23, 59))
+
+    if "days" in cfg:
+        days = _weekday_ints(cfg.get("days"))
+        if not days:
+            return None
+    else:
+        days = set(WEEKDAYS.values())
+
+    return Cadence(
+        mode="interval",
+        every_minutes=every_minutes,
+        window=window,
+        days=frozenset(days),
+    )
 
 
 def parse_iso(value: str) -> datetime:
