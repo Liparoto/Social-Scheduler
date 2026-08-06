@@ -9,7 +9,9 @@ import pytest
 from worker.time_of_day import (
     BAND_ORDER,
     band_times,
+    derive_band,
     parse_hhmm,
+    post_allows_band,
     post_bands,
     resolve_slot_time,
 )
@@ -75,3 +77,53 @@ def test_post_bands_returns_only_time_of_day_tags(tmp_path):
 
 def test_band_order_is_earliest_first():
     assert BAND_ORDER == ("morning", "afternoon", "evening")
+
+
+def test_derive_band_exact_hits_and_nearest():
+    bt = band_times(_Cfg())
+    assert derive_band(9, 0, bt) == "morning"
+    assert derive_band(13, 0, bt) == "afternoon"
+    assert derive_band(18, 0, bt) == "evening"
+    # 12:30 is 30 min from 13:00 and 210 from 09:00 — this install's live cadence time.
+    assert derive_band(12, 30, bt) == "afternoon"
+
+
+def test_derive_band_does_not_wrap_around_midnight():
+    bt = band_times(_Cfg())
+    assert derive_band(23, 0, bt) == "evening"   # 300 min from 18:00, 840 from 09:00
+    assert derive_band(2, 0, bt) == "morning"    # 420 min from 09:00, 960 from 18:00
+
+
+def test_derive_band_breaks_a_tie_toward_the_earlier_band():
+    bt = band_times(_Cfg())
+    assert derive_band(11, 0, bt) == "morning"   # exactly 120 min from 09:00 and from 13:00
+
+
+def test_derive_band_follows_a_non_default_config():
+    class Late:
+        tod_morning = "06:00"
+        tod_afternoon = "14:00"
+        tod_evening = "22:00"
+
+    bt = band_times(Late())
+    assert derive_band(9, 0, bt) == "morning"
+    assert derive_band(19, 0, bt) == "evening"   # 180 from 22:00, 300 from 14:00
+
+
+def test_post_allows_band_untagged_and_anytime_fit_anything():
+    assert post_allows_band(set(), "morning") is True
+    assert post_allows_band(set(), "evening") is True
+    assert post_allows_band({"anytime"}, "evening") is True
+
+
+def test_post_allows_band_a_specific_band_fits_only_itself():
+    assert post_allows_band({"evening"}, "evening") is True
+    assert post_allows_band({"evening"}, "morning") is False
+    # anytime alongside a specific band does NOT widen it: the specific tag is a request.
+    assert post_allows_band({"anytime", "evening"}, "morning") is False
+
+
+def test_post_allows_band_two_specific_bands_mean_either():
+    assert post_allows_band({"morning", "evening"}, "morning") is True
+    assert post_allows_band({"morning", "evening"}, "evening") is True
+    assert post_allows_band({"morning", "evening"}, "afternoon") is False

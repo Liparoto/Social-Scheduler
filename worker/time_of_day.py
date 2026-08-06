@@ -52,3 +52,35 @@ def resolve_slot_time(
         if b in bands:
             return band_times_map[b]
     return cadence_hm
+
+
+def derive_band(hour: int, minute: int, band_times_map: dict[str, tuple[int, int]]) -> str:
+    """Which band a clock time belongs to: the nearest configured band time.
+
+    Absolute clock-minute distance, no midnight wraparound, ties to the earlier band. This is
+    what gives a cadence TIME a band, which is in turn what lets a post's band tag act as a
+    FILTER on slots rather than as a source of times. There is deliberately no "anytime"
+    result: `anytime` describes content that does not care, and a slot always happens at a
+    definite hour.
+    """
+    target = hour * 60 + minute
+    best_name = BAND_ORDER[0]
+    best_distance: int | None = None
+    for name in BAND_ORDER:  # earliest-first, so `<` leaves ties with the earlier band
+        band_hour, band_minute = band_times_map[name]
+        distance = abs(target - (band_hour * 60 + band_minute))
+        if best_distance is None or distance < best_distance:
+            best_distance, best_name = distance, name
+    return best_name
+
+
+def post_allows_band(bands: set[str], slot_band: str) -> bool:
+    """May a post carrying these time_of_day tags be placed in a slot of `slot_band`?
+
+    No SPECIFIC band (untagged, or only `anytime`) fits anywhere — unchanged from before.
+    Otherwise the slot's band must be one the post asked for; two specific tags mean either is
+    acceptable, which is what two tags plainly say. `anytime` alongside a specific band does
+    not widen it: the specific tag is a request, and honouring it is the point.
+    """
+    specific = bands & set(BAND_ORDER)
+    return not specific or slot_band in specific
