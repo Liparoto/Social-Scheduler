@@ -16,7 +16,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from . import db
+from . import db, single_instance
 from .clients import PLATFORM_CAPS, ClientRegistry, UnknownPlatform
 from .config import Config, dry_run_active, kill_switch_active, load_env
 from .logging_setup import configure_logging
@@ -246,6 +246,22 @@ def run_forever(config: Config, client, logger, *, client_for=None) -> None:
 def main() -> int:
     config = Config.from_env()
     logger = configure_logging(config.database_path.parent / "logs")
+
+    # One worker per install, before anything else touches the database or the network.
+    # Applies to --once as well as the daemon: a cron'd --once alongside a running daemon
+    # is the same two-worker situation, just harder to notice.
+    lock_path = config.database_path.parent / "run" / "worker.lock"
+    try:
+        single_instance.acquire(lock_path)
+    except single_instance.AlreadyRunning as exc:
+        # Exit 0, deliberately. The autostart agent restarts on a NON-zero exit, so
+        # failing here with an error code would spin: launchd would keep relaunching a
+        # worker that keeps correctly refusing to run. "Another worker is already
+        # running" is a success condition for the guard — the install ends up with
+        # exactly one worker, which is the point.
+        logger.warning("Not starting: %s. This install already has a worker.", exc)
+        return 0
+
     registry = ClientRegistry(config)
     # Fallback for code paths that don't know a platform yet; every publication and
     # metrics fetch re-resolves its own client from the channel's platform below.
