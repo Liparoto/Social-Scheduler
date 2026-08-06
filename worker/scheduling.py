@@ -393,5 +393,28 @@ def _iter_time_slots(cadence: Cadence, tz_name: str, after: datetime, horizon_da
         cursor += timedelta(days=1)
 
 
-def _iter_interval_slots(cadence, tz_name, after, horizon_days):
-    return iter(())  # Task 5
+def _iter_interval_slots(cadence: Cadence, tz_name: str, after: datetime, horizon_days: int):
+    """Advance by `every_minutes` from `after`, yielding only steps that land inside the
+    window on an active weekday.
+
+    The cursor advances from where a SKIPPED step WOULD have been, never from the last yielded
+    slot. That is the whole feature: a non-round interval drifts, so over a few weeks the
+    account posts at every hour and the metrics can say which ones worked. Reset the phase on
+    a skip and every overnight gap drops the next send back onto the window's opening minute,
+    which is the "nudge it into the window" behaviour that was explicitly rejected.
+
+    The horizon is expressed as a STEP count so a small interval cannot outrun it: a cadence
+    whose window can never be satisfied ends after `steps` iterations instead of spinning.
+    """
+    tz = ZoneInfo(tz_name)
+    step = timedelta(minutes=cadence.every_minutes)
+    steps = math.ceil(horizon_days * 1440 / cadence.every_minutes)
+    cursor = after
+    for _ in range(steps):
+        cursor += step
+        local = cursor.astimezone(tz)
+        if local.weekday() not in cadence.days:
+            continue
+        if not _in_window(local.hour, local.minute, cadence.window):
+            continue
+        yield cursor.astimezone(UTC), (local.hour, local.minute)

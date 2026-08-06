@@ -318,3 +318,56 @@ def test_iter_slots_times_stops_at_the_horizon():
     c = parse_cadence('{"mode":"times","slots":[{"time":"09:00","days":["mon"]}]}')
     after = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)   # Tuesday
     assert list(iter_slots(c, "UTC", after, horizon_days=3)) == []
+
+
+# ---- iter_slots interval mode (Task 5) -----------------------------------------------
+
+
+def test_interval_slots_preserve_the_phase_across_a_skipped_step():
+    # Every 9h45m from Mon 09:00, window 08:00-21:00:
+    #   Mon 18:45 yield / Tue 04:30 SKIP / Tue 14:15 yield / Wed 00:00 SKIP / Wed 09:45 yield
+    # The final 09:45 is the assertion that matters: reset the phase on either skip and it
+    # would be 08:00 instead.
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":585,"window":{"from":"08:00","to":"21:00"}}'
+    )
+    after = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)  # Monday
+    got = _take(iter_slots(c, "UTC", after), 3)
+    assert [hm for _, hm in got] == [(18, 45), (14, 15), (9, 45)]
+    assert [dt.day for dt, _ in got] == [3, 4, 5]
+
+
+def test_interval_slots_skip_an_inactive_weekday_without_resetting_the_phase():
+    # Every 25h, weekdays only, from Fri 10:00: Sat 11:00 and Sun 12:00 are skipped and the
+    # first slot is Mon 13:00 — the drift kept accumulating through the weekend.
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":1500,'
+        '"days":["mon","tue","wed","thu","fri"]}'
+    )
+    after = datetime(2026, 8, 7, 10, 0, tzinfo=timezone.utc)  # Friday
+    first = _take(iter_slots(c, "UTC", after), 1)[0]
+    assert first[0] == datetime(2026, 8, 10, 13, 0, tzinfo=timezone.utc)  # Monday 13:00
+
+
+def test_interval_slots_wrapping_window_yields_both_sides_of_midnight():
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":60,"window":{"from":"22:00","to":"02:00"}}'
+    )
+    after = datetime(2026, 8, 3, 21, 0, tzinfo=timezone.utc)
+    assert [hm[0] for _, hm in _take(iter_slots(c, "UTC", after), 5)] == [22, 23, 0, 1, 2]
+
+
+def test_interval_slots_terminate_when_the_window_can_never_be_satisfied():
+    # Exactly 24h from an instant at 03:00: the phase never moves, so no step is ever inside an
+    # 08:00-21:00 window. The generator must END rather than spin to the horizon forever.
+    c = parse_cadence(
+        '{"mode":"interval","every_minutes":1440,"window":{"from":"08:00","to":"21:00"}}'
+    )
+    after = datetime(2026, 8, 3, 3, 0, tzinfo=timezone.utc)
+    assert list(iter_slots(c, "UTC", after, horizon_days=10)) == []
+
+
+def test_interval_slots_with_no_window_sweep_the_whole_day():
+    c = parse_cadence('{"mode":"interval","every_minutes":600}')  # every 10h
+    after = datetime(2026, 8, 3, 0, 0, tzinfo=timezone.utc)
+    assert [hm for _, hm in _take(iter_slots(c, "UTC", after), 3)] == [(10, 0), (20, 0), (6, 0)]
