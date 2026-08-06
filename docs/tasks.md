@@ -1820,13 +1820,15 @@ of the live database with two proven posts aged past the reuse window, both were
 into slots and delivered to every group member at one shared time.
 
 ### Follow-up
-- [ ] **Link library posts to their original Instagram posts.** Only 11 of 111 library
-      posts have metrics, because metrics attach to publications THIS tool made — the other
-      146 real posts sit in `remote_media` unlinked. Automatic matching was tried and
-      rejected: captions match for 6 of 111 (the Apple Notes import left bare 🔺
-      placeholders) and thumbnails are downscaled re-encodes, so no hash agrees. A manual
-      "link this post to that one" UI would unlock the whole history and needs the owner's
-      judgement per post.
+- [x] **~~Link library posts to their original Instagram posts~~ — NOT NEEDED, premise was
+      wrong (checked 2026-08-06).** This was raised repeatedly on the assumption that the
+      111 library posts were imported HISTORY needing reconnection to their stats. They are
+      a **backlog of unposted content**: none of their captions appear on the account
+      ("little detour through the lights", "Kickoff at SoFi", "favorite hiking buddy" — all
+      absent), only 6 overlap at all, and 108 of 111 carry finished captions rather than
+      import stubs. There is nothing to link; each post becomes markable when it publishes
+      and is measured. The account's older Instagram posts genuinely cannot be reposted —
+      their files were never in the library — which is history, not a gap.
 
 ---
 
@@ -1866,13 +1868,8 @@ not what the first version assumed.
 reasons ("top 5% · reach, views, likes").
 
 ### Blocking the feature being useful — NEXT
-- [ ] **Link library posts to their original Instagram posts.** Measured after building:
-      **21 standouts, 0 markable** — every top performer predates this install, so none has
-      a library entry to repost. Captions match 6 of 111 (Notes import left 🔺
-      placeholders), thumbnails are re-encodes so hashes cannot match, and created_at is
-      import time. A manual "this post is that post" UI unlocks the back catalogue; the
-      pool otherwise fills only from new posts going forward.
-
+- [x] **~~Link library posts to their original Instagram posts~~ — not needed.** See the correction recorded under the BPP phase above: the library is a
+      backlog of unposted content, not imported history, so there is nothing to link.
 
 ---
 

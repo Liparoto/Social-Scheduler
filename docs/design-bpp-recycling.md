@@ -149,29 +149,34 @@ this old post going out again?" is exactly the question this prompts.
 
 ---
 
-## What blocks it being useful today
+## Where the pool comes from
 
-Marking requires a library post. Metrics attach to publications *this tool made*, and the
-146 other real Instagram posts sit in `remote_media` linked to nothing.
+The pool fills as content publishes. Nothing else is required.
 
-Measured after building it: **21 posts qualify as standouts, and 0 can be marked.** Every
-one predates this install. The mechanism is correct and has nearly nothing to act on.
+This was misdiagnosed at first, and the correction is worth keeping. The library's 111
+posts were assumed to be IMPORTED HISTORY — old Instagram posts recovered from Apple
+Notes — which would have needed reconnecting to their stats, and a manual
+"this library post is that Instagram post" matcher was proposed to do it.
 
-Automatic bridging was tried and rejected:
+They are not history. They are a **backlog of unposted content**. Checked directly against
+the live database:
 
-* **Captions** match 6 of 111 — the Apple Notes import left placeholders (mostly a bare 🔺).
-* **Images** cannot be hashed against each other; stored thumbnails are downscaled
-  re-encodes, so no hash agrees with the local originals.
-* **Dates** do not help — `posts.created_at` is when the import ran, not when it posted.
+```
+"little detour through the lights"  -> not on Instagram
+"Kickoff at SoFi"                   -> not on Instagram
+"favorite hiking buddy"             -> not on Instagram
+```
 
-So the pool fills from here forward: anything published through this tool becomes markable
-as soon as it has numbers.
+Only 6 library captions appear on the account, and those are the ones this tool published.
+108 of 111 posts carry real, finished captions — content prepared to go out, not stubs
+recovered from something already posted.
 
-**The unblocker is a manual link** — "this library post is that Instagram post" — which
-would make the whole back catalogue markable at once. Real scope, and a judgement per post,
-so it is the next piece of work rather than something to guess at.
+So there is nothing to link: those posts have never been on Instagram, and no stats exist
+for them anywhere. Each becomes markable the moment it publishes and gets measured.
 
----
+The account's older Instagram posts DO have stats and cannot be marked — their images and
+captions were never in the library, so there is no way to send them again. That is not a
+gap to close; it is history this tool does not hold the files for.
 
 ## The tolerance is the owner's
 
