@@ -118,6 +118,8 @@ export function updateChannel(
     target_queue_depth: number;
     reuse_min_age_days: number;
     bpp_every_days: number;
+    bpp_strong_pct: number;
+    bpp_broad_pct: number;
     color_hue: number | null;
   }>
 ): void {

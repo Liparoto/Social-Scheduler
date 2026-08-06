@@ -130,3 +130,25 @@ as soon as it has numbers.
 **The unblocker is a manual link** — "this library post is that Instagram post" — which
 would make the whole back catalogue markable at once. Real scope, and a judgement per post,
 so it is the next piece of work rather than something to guess at.
+
+---
+
+## The tolerance is the owner's
+
+`channels.bpp_strong_pct` / `bpp_broad_pct` (defaults 5 and 10, per channel).
+
+The original numbers came from one account's data and there is no reason they suit
+another. Someone with a large back catalogue may want the strictest 2%; someone building
+a rotation from a small library may want half of it. The right answer also moves as an
+account grows — what was exceptional at 1,000 followers is ordinary at 20,000.
+
+Per CHANNEL, not per install, because a personal account and a business account have
+different baselines and different purposes, and this tool is explicitly built to run
+several.
+
+The control shows the **live count** — "suggests 16 of 146 posts" — because "top 5%" is
+abstract and a count is not. On this account: 2% suggests 7, 5% suggests 16, 25% suggests
+25. The setting is meant to be tuned by watching the result.
+
+The badge quotes the owner's own threshold back ("top 25% · likes"), so a post flagged
+under a loose setting never reads as though it cleared a strict one.

@@ -46,6 +46,12 @@ MIN_DISCRIMINATING_CUTOFF = 3
 
 # "Way above average on one metric" and "solidly good on several" are both reasons the
 # owner marks a post, so both qualify. One number could not express that.
+#
+# DEFAULTS ONLY — the real values live on the channel (migration 0022) and are the
+# owner's to set. These were derived from one account and there is no reason they suit
+# another: a large back catalogue may want the strictest 2%, a small library building a
+# rotation may want half of it, and the right answer moves as an account grows. Every
+# function below takes them as arguments.
 STRONG_PERCENTILE = 0.05      # top 5% on a single metric
 BROAD_PERCENTILE = 0.10       # top 10% on two or more
 BROAD_MIN_METRICS = 2
@@ -56,8 +62,16 @@ class Standout:
     """Why a post is worth a look. Never why it was chosen — nothing here chooses."""
 
     post_id: int
-    strong: tuple[str, ...]     # metrics where it is top STRONG_PERCENTILE
-    broad: tuple[str, ...]      # metrics where it is top BROAD_PERCENTILE
+    strong: tuple[str, ...]     # metrics where it cleared the single-metric threshold
+    broad: tuple[str, ...]      # metrics where it cleared the multi-metric threshold
+    # The thresholds this was judged against, carried so the wording can quote the
+    # owner's OWN setting. Without them a post flagged under a 25% tolerance would read
+    # as if it had cleared 5%.
+    #
+    # PERCENTAGES here (5, 10), not the fractions the ranking functions take (0.05, 0.10)
+    # — these exist only to be printed. Mixing the two units silently renders "top 0.05%".
+    strong_pct: float = STRONG_PERCENTILE * 100
+    broad_pct: float = BROAD_PERCENTILE * 100
 
     @property
     def is_candidate(self) -> bool:
@@ -70,9 +84,9 @@ class Standout:
         actionable in a way that "0.42" never is.
         """
         if self.strong:
-            return f"top 5% · {', '.join(self.strong)}"
+            return f"top {self.strong_pct:g}% · {', '.join(self.strong)}"
         if len(self.broad) >= BROAD_MIN_METRICS:
-            return f"top 10% · {', '.join(self.broad)}"
+            return f"top {self.broad_pct:g}% · {', '.join(self.broad)}"
         return ""
 
 
@@ -92,7 +106,11 @@ def percentile_cutoff(values: list[int], fraction: float) -> int | None:
     return cutoff if cutoff >= MIN_DISCRIMINATING_CUTOFF else None
 
 
-def find_standouts(posts: list[dict]) -> list[Standout]:
+def find_standouts(
+    posts: list[dict],
+    strong_pct: float = STRONG_PERCENTILE,
+    broad_pct: float = BROAD_PERCENTILE,
+) -> list[Standout]:
     """Rank every post against the others in the SAME set.
 
     "Above average" only means anything relative to this account over the period being
@@ -107,8 +125,8 @@ def find_standouts(posts: list[dict]) -> list[Standout]:
     usable = {}
     for metric in STANDOUT_METRICS:
         values = [p.get(metric) for p in posts]
-        strong = percentile_cutoff(values, STRONG_PERCENTILE)
-        broad = percentile_cutoff(values, BROAD_PERCENTILE)
+        strong = percentile_cutoff(values, strong_pct)
+        broad = percentile_cutoff(values, broad_pct)
         if strong is not None or broad is not None:
             usable[metric] = (strong, broad)
 
@@ -123,7 +141,10 @@ def find_standouts(posts: list[dict]) -> list[Standout]:
                 strong_hits.append(metric)
             if broad_cut is not None and value >= broad_cut:
                 broad_hits.append(metric)
-        out.append(Standout(post["id"], tuple(strong_hits), tuple(broad_hits)))
+        out.append(Standout(
+            post["id"], tuple(strong_hits), tuple(broad_hits),
+            strong_pct=strong_pct * 100, broad_pct=broad_pct * 100,
+        ))
     return out
 
 

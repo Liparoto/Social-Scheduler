@@ -25,12 +25,14 @@ export interface InsightsChannel {
   insights_error: string | null;
   insights_refresh_requested: number;
   media_backfill_complete: number;
+  bpp_strong_pct: number;
+  bpp_broad_pct: number;
 }
 
 const CHANNEL_FIELDS = `
   id, platform, account_name, business_label, timezone, color_hue, avatar_path,
   media_synced_at, insights_synced_at, insights_error, insights_refresh_requested,
-  media_backfill_complete
+  media_backfill_complete, bpp_strong_pct, bpp_broad_pct
 `;
 
 export function getInsightsChannels(): InsightsChannel[] {

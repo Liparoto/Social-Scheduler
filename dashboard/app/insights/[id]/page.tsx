@@ -4,6 +4,7 @@ import { ChannelAvatar } from "@/components/ui";
 import { HBarList, HeatGrid, TrendChart, YearRibbon } from "@/components/charts";
 import { InsightsRefresh } from "@/components/insights-refresh";
 import { BppMark } from "@/components/bpp-mark";
+import { BppTolerance } from "@/components/bpp-tolerance";
 import {
   getAccountDays, getBppFlags, getBppPool, getChannelCounts, getChannelPosts,
   getDemographics, getInsightsChannel, getLibraryPostIds, pickDemographics,
@@ -165,7 +166,7 @@ export default async function ChannelInsightsPage({
   // Ranked across everything synced for this account, not the chart range: a post that
   // did exceptionally well eighteen months ago is still one of the best things here, and
   // curation is a judgement about the content rather than about a reporting window.
-  const standouts = standoutsFor(posts);
+  const standouts = standoutsFor(posts, channel.bpp_strong_pct, channel.bpp_broad_pct);
   const libraryPostIds = getLibraryPostIds(channel.id);
   const bppFlags = getBppFlags();
   const pool = getBppPool(channel.id);
@@ -381,6 +382,19 @@ export default async function ChannelInsightsPage({
             </div>
           }
         >
+          <div className="mb-4 rounded-lg border border-border bg-surface-sunken/40 px-3 py-2.5">
+            <p className="mb-2 text-[11px] font-medium text-ink-soft">
+              How selective the ★ suggestions are — for this account
+            </p>
+            <BppTolerance
+              channelId={channel.id}
+              strongPct={channel.bpp_strong_pct}
+              broadPct={channel.bpp_broad_pct}
+              matched={standoutCount}
+              total={posts.length}
+            />
+          </div>
+
           {ranked.length === 0 ? (
             <p className="text-sm text-muted">
               No posts synced yet. The worker mirrors the account&rsquo;s posts on its next

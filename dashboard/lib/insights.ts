@@ -447,8 +447,10 @@ export const STANDOUT_LABELS: Record<string, string> = {
 // saves things, saves rank like anything else; on one where the top decile is a single
 // save, they cannot tell good from ordinary and are skipped.
 const MIN_DISCRIMINATING_CUTOFF = 3;
-const STRONG_PERCENTILE = 0.05;
-const BROAD_PERCENTILE = 0.10;
+// Defaults only. The live values come from the channel and belong to the owner — see
+// migration 0022 for why a single hardcoded tolerance cannot suit every account.
+export const DEFAULT_STRONG_PCT = 5;
+export const DEFAULT_BROAD_PCT = 10;
 const BROAD_MIN_METRICS = 2;
 
 export interface Standout {
@@ -473,12 +475,16 @@ function cutoff(values: (number | null)[], fraction: number): number | null {
  * viewed, so the caller passes whatever the range picker selected and this ranks that.
  * No absolute thresholds anywhere.
  */
-export function standoutsFor(posts: PostRow[]): Map<number, Standout> {
+export function standoutsFor(
+  posts: PostRow[],
+  strongPct: number = DEFAULT_STRONG_PCT,
+  broadPct: number = DEFAULT_BROAD_PCT,
+): Map<number, Standout> {
   const usable: [string, number | null, number | null][] = [];
   for (const metric of STANDOUT_METRICS) {
     const values = posts.map((p) => p[metric as keyof PostRow] as number | null);
-    const strong = cutoff(values, STRONG_PERCENTILE);
-    const broad = cutoff(values, BROAD_PERCENTILE);
+    const strong = cutoff(values, strongPct / 100);
+    const broad = cutoff(values, broadPct / 100);
     if (strong !== null || broad !== null) usable.push([metric, strong, broad]);
   }
 
@@ -493,10 +499,12 @@ export function standoutsFor(posts: PostRow[]): Map<number, Standout> {
       if (broadCut !== null && value >= broadCut) broad.push(STANDOUT_LABELS[metric]);
     }
     const isCandidate = strong.length > 0 || broad.length >= BROAD_MIN_METRICS;
+    // The badge quotes the owner's OWN threshold back at them, so a post flagged under a
+    // 25% setting never reads as if it cleared 5%.
     const reason = strong.length
-      ? `top 5% · ${strong.join(", ")}`
+      ? `top ${strongPct}% · ${strong.join(", ")}`
       : broad.length >= BROAD_MIN_METRICS
-        ? `top 10% · ${broad.join(", ")}`
+        ? `top ${broadPct}% · ${broad.join(", ")}`
         : "";
     out.set(post.id, { strong, broad, isCandidate, reason });
   }

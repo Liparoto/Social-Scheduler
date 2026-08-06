@@ -53,6 +53,11 @@ export async function PATCH(
   if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
   // Math.max(0, …) rather than a bare Number: this value divides slot positions,
   // and a negative would silently mean "off" while reading as if it were on.
+  // Clamped to 1..100: 0 would ask for the top nothing-percent and silently suggest
+  // nothing, which reads as broken rather than strict.
+  for (const key of ["bpp_strong_pct", "bpp_broad_pct"] as const) {
+    if (key in body) fields[key] = Math.min(100, Math.max(1, Math.trunc(Number(body[key]) || 1)));
+  }
   if ("bpp_every_days" in body)
     fields.bpp_every_days = Math.max(0, Math.trunc(Number(body.bpp_every_days) || 0));
   if ("color_hue" in body) fields.color_hue = body.color_hue ?? null;

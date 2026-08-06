@@ -400,3 +400,36 @@ def test_a_group_with_the_cadence_off_recycles_nothing(conn):
     assert conn.execute(
         "SELECT COUNT(*) c FROM publications WHERE is_recycled=1"
     ).fetchone()["c"] == 0
+
+
+# ---- the tolerance is the owner's, not ours ----------------------------------------
+#
+# The 5%/10% defaults came from ONE account. A large back catalogue may want the strictest
+# 2%; a small library building a rotation may want half of it; and the right answer moves
+# as an account grows. Nothing may be hardcoded.
+
+def test_a_stricter_tolerance_suggests_fewer_posts():
+    posts = _spread("likes", list(range(100)))
+    strict = sum(s.is_candidate for s in find_standouts(posts, 0.02, 0.05))
+    loose = sum(s.is_candidate for s in find_standouts(posts, 0.40, 0.50))
+    assert strict < loose
+
+
+def test_a_very_loose_tolerance_suggests_about_half_the_library():
+    """Someone may genuinely want 51% — building a rotation from a small library, say."""
+    posts = _spread("likes", list(range(100)))
+    matched = sum(s.is_candidate for s in find_standouts(posts, 0.51, 0.51))
+    assert 40 <= matched <= 60
+
+
+def test_the_badge_quotes_the_owners_own_threshold():
+    """A post flagged under a 25% setting must not read as if it cleared 5%."""
+    posts = _spread("likes", [5] * 90 + list(range(100, 110)))
+    reasons = [s.reason() for s in find_standouts(posts, 0.25, 0.40) if s.is_candidate]
+    assert reasons and reasons[0].startswith("top 25% ·")
+
+
+def test_the_defaults_reproduce_the_previous_behaviour():
+    """Existing installs must see no change until somebody touches the setting."""
+    posts = _spread("likes", [5] * 95 + [200, 190, 180, 170, 160])
+    assert [s.reason() for s in find_standouts(posts) if s.is_candidate][0] == "top 5% · likes"
