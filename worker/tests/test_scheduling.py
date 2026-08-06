@@ -151,3 +151,61 @@ def test_no_times_or_no_days_produces_nothing():
     assert daily_slots(set(), "UTC", after, [(9, 0)], 3) == []
     assert daily_slots({0}, "UTC", after, [], 3) == []
     assert daily_slots({0}, "UTC", after, [(9, 0)], 0) == []
+
+
+from worker.scheduling import Cadence, parse_cadence  # noqa: E402
+
+
+def test_parse_cadence_reads_the_original_single_time_shape():
+    # The shape this install's live row is stored in.
+    c = parse_cadence('{"days":["mon","wed"],"time":"18:00"}')
+    assert c.mode == "times"
+    assert c.slots == ((18, 0, frozenset({0, 2})),)
+
+
+def test_parse_cadence_reads_the_multi_time_shape():
+    c = parse_cadence('{"days":["sat"],"times":["18:00","09:00"]}')
+    assert c.slots == ((9, 0, frozenset({5})), (18, 0, frozenset({5})))  # sorted by time
+
+
+def test_parse_cadence_reads_per_time_days():
+    c = parse_cadence(
+        '{"mode":"times","slots":['
+        '{"time":"18:00","days":["sat","sun"]},'
+        '{"time":"12:30","days":["mon"]}]}'
+    )
+    assert c.slots == ((12, 30, frozenset({0})), (18, 0, frozenset({5, 6})))
+
+
+def test_parse_cadence_merges_slots_sharing_a_time():
+    # Two sends booked for the same minute would collide on one slot.
+    c = parse_cadence(
+        '{"mode":"times","slots":['
+        '{"time":"18:00","days":["sat"]},{"time":"18:00","days":["sun"]}]}'
+    )
+    assert c.slots == ((18, 0, frozenset({5, 6})),)
+
+
+def test_parse_cadence_drops_an_unusable_slot_but_keeps_the_rest():
+    c = parse_cadence(
+        '{"mode":"times","slots":['
+        '{"time":"25:00","days":["mon"]},'      # impossible time
+        '{"time":"09:00","days":[]},'           # no days
+        '{"time":"18:00","days":["mon"]}]}'
+    )
+    assert c.slots == ((18, 0, frozenset({0})),)
+
+
+def test_parse_cadence_returns_none_when_nothing_is_usable():
+    assert parse_cadence(None) is None
+    assert parse_cadence("") is None
+    assert parse_cadence("not json") is None
+    assert parse_cadence('["a list, not an object"]') is None
+    assert parse_cadence('{"days":[],"time":"18:00"}') is None       # no days
+    assert parse_cadence('{"days":["mon"],"time":"25:00"}') is None  # no valid time
+    assert parse_cadence('{"days":["mon"]}') is None                 # no time at all
+
+
+def test_candidate_local_times_in_times_mode_is_just_its_times():
+    c = parse_cadence('{"days":["mon"],"times":["09:00","18:00"]}')
+    assert sorted(c.candidate_local_times()) == [(9, 0), (18, 0)]
