@@ -109,3 +109,26 @@ def test_ordinary_threads_container_still_omits_reply_to_id():
 
     _, data = c.session.posts[0]
     assert "reply_to_id" not in data
+
+
+# ---- Threads topic tag ----------------------------------------------------------------
+def test_topic_tag_is_sent_without_its_hash():
+    """The API takes the bare word; sending '#Tag' would tag the post '#Tag'."""
+    c = threads_client([FakeResponse({"id": "cont-1"})])
+    c.create_threads_container(
+        "USER1", "tok", media_type="TEXT", text="#Tag and #More", topic_tag="Tag"
+    )
+
+    _, data = c.session.posts[0]
+    assert data["topic_tag"] == "Tag"
+    # The text goes out untouched, hashes and all — declaring the tag is the whole point.
+    assert data["text"] == "#Tag and #More"
+
+
+def test_omitted_topic_tag_is_absent_from_the_payload():
+    """Not None-valued, absent. An empty topic_tag is not the same as no topic_tag."""
+    c = threads_client([FakeResponse({"id": "cont-1"})])
+    c.create_threads_container("USER1", "tok", media_type="TEXT", text="hello")
+
+    _, data = c.session.posts[0]
+    assert "topic_tag" not in data

@@ -353,6 +353,7 @@ class GraphClient:
         is_carousel_item: bool = False,
         children: list[str] | None = None,
         reply_to_id: str | None = None,
+        topic_tag: str | None = None,
     ) -> str:
         """Create a Threads media container. Returns the container id.
 
@@ -369,10 +370,17 @@ class GraphClient:
         self-reply, which is a real post in the author's feed, not a hidden comment.
         Only `threads_content_publish` is needed for it (the same scope publishing
         already uses); `threads_manage_replies` governs OTHER people's replies.
+
+        `topic_tag` names the post's ONE topic, WITHOUT the leading '#'. Passing it is
+        Meta's preferred method; letting Threads pick the topic out of the text instead
+        is documented as "not preferred but kept for backwards compatibility", and it
+        rewrites the body — see _topic_tag_for in publisher.py for the full story.
         """
         data = {"media_type": media_type, "access_token": token}
         if reply_to_id is not None:
             data["reply_to_id"] = reply_to_id
+        if topic_tag is not None:
+            data["topic_tag"] = topic_tag
         if text is not None:
             data["text"] = text
         if image_url is not None:

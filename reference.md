@@ -238,13 +238,26 @@ document whether it is possible, and this project does not assume undocumented b
   Token scopes confirmed live 2026-08-05 via `GET graph.threads.net/debug_token`:
   `threads_basic, threads_content_publish, threads_manage_replies, threads_manage_insights,
   threads_read_replies`.
-- ⚠ **A leading `#` is eaten as the post's `topic_tag`** (verified live 2026-08-06). Sending
-  `"#NationalParks #Waterfall #NatureLovers"` stores `topic_tag: "NationalParks"` and
-  `text: "NationalParks #Waterfall #NatureLovers"` — the first tag loses its `#` in the body
-  and becomes a tag chip instead. Threads supports **one** topic tag per post; every later
-  `#word` stays literal text, NOT a link. So a hashtag block behaves very differently here
-  than on Instagram: only the first one is functional. Not a bug in this project — the API
-  received exactly what was sent. To keep the `#` in the body, don't start the text with one.
+- ⚠ **Hashtags and `topic_tag`.** Threads allows **one topic tag per post**, and if you
+  don't name it, it takes "the first valid tag included in a post of any type" out of your
+  text — and rewrites the body without that tag's `#`. Verified live 2026-08-06: sending
+  `"#NationalParks #Waterfall #NatureLovers"` stored `topic_tag: "NationalParks"` and
+  `text: "NationalParks #Waterfall #NatureLovers"`. Every *later* `#word` stays literal
+  text, NOT a link — so a hashtag block does far less here than on Instagram, where they
+  all work. Meta calls the in-text form "not preferred but kept for backwards
+  compatibility"; the `topic_tag` parameter is the current method, and the worker now
+  always names the tag explicitly (`publisher._topic_tag_for`).
+- ⚠⚠ **An impermissible `topic_tag` fails the CONTAINER, not just the tag.** Verified live
+  2026-08-06: `topic_tag=bad.tag` → `Invalid parameter` / `Topic Tag Not Permitted`
+  (code 100, **subcode 4279071**), and no container is created. Meta does not publish the
+  permitted set and it covers blocked topics, not merely punctuation, so **no local
+  validation can guarantee a tag is acceptable**. `publisher._threads_container` therefore
+  retries once with no tag when a container is refused for the tag — losing the `#` is
+  cosmetic, losing the post is not. Never send a topic tag without that fallback.
+- Container fields: an **unpublished** container exposes only `id` and `status`. Asking for
+  `text` or `topic_tag` on one is an error (`Tried accessing nonexisting field`), so a
+  container cannot be used to preview how Threads will parse your text — only a published
+  post can.
 - **Quota gate — `GET /{threads-user-id}/threads_publishing_limit`, fields
   `quota_usage,config`** → `config.quota_total` (**250**), `config.quota_duration` (**86400s /
   24h, rolling**). Unlike Facebook Pages, **Threads *is* gated at runtime** — the worker reads

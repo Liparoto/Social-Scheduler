@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from worker.publisher import _build_plan, publish_one, run_first_comment_retries
+from worker.publisher import (
+    _build_plan,
+    _topic_tag_for,
+    publish_one,
+    run_first_comment_retries,
+)
 from worker.tests.conftest import FakeGraphClient
 
 NOW = datetime(2026, 8, 5, 18, 0, 0, tzinfo=timezone.utc)
@@ -298,6 +303,132 @@ def test_threads_retry_reuses_the_self_reply_path(conn, config, make_publication
     assert reply_to_id == "threads-media-2"
     assert text == TAGS
     assert _reload(conn, pub["id"])["first_comment_status"] == "posted"
+
+
+# ---- Threads topic tags: keeping the '#' in the body ----------------------------------
+#
+# Threads allows ONE topic tag per post. Left to itself it picks the first hashtag out of
+# the text and rewrites the body without that tag's '#' (seen live 2026-08-06). Naming the
+# tag with the `topic_tag` parameter is Meta's documented, preferred method.
+@pytest.mark.parametrize("text,expected", [
+    ("#NationalParks #Waterfall #NatureLovers", "NationalParks"),  # first tag wins
+    ("look at this #Waterfall", "Waterfall"),                      # not just leading tags
+    ("#solo", "solo"),
+    ("no tags here", None),
+    ("", None),
+    (None, None),
+    ("#", None),                       # a bare hash is not a tag
+    ("# spaced", None),                # nor is a hash followed by a space
+    ("#has.period #Fine", "Fine"),     # periods are rejected by Meta — skip to a valid one
+    ("#has&amp #Fine", "Fine"),        # ampersands likewise
+    ("#" + "x" * 51 + " #Fine", "Fine"),  # over Meta's 50-char cap
+    ("#" + "x" * 50, "x" * 50),        # exactly at the cap is fine
+])
+def test_topic_tag_extraction(text, expected):
+    assert _topic_tag_for(text) == expected
+
+
+def test_threads_comment_names_its_topic_tag(conn, config, fake_client,
+                                             make_publication):
+    pub = make_publication(post_type="single", n_assets=1, platform="threads",
+                           first_comment=TAGS)
+    publish_one(conn, pub, config, fake_client, dry_run=False, now=NOW)
+
+    # Two containers: the post (caption has no hashtags) then the reply (all of them).
+    assert fake_client.topic_tags == [None, "physicaltherapy"]
+    # The text still carries every '#' — we changed what we DECLARE, not what we send.
+    _, text = [c for c in fake_client.calls if c[0] == "threads_reply"][0][1]
+    assert text == TAGS
+    assert text.startswith("#")
+
+
+def test_threads_post_names_a_topic_tag_from_its_caption_too(conn, config, fake_client,
+                                                             make_publication):
+    """The rewrite hits captions as hard as comments — a Threads post whose caption
+    leads with a hashtag loses that '#' the same way."""
+    pub = make_publication(post_type="text", n_assets=0, platform="threads")
+    conn.execute("UPDATE posts SET caption='#Recovery day thoughts' WHERE id=?",
+                 (pub["post_id"],))
+    conn.commit()
+    pub = _reload(conn, pub["id"])
+
+    publish_one(conn, pub, config, fake_client, dry_run=False, now=NOW)
+
+    assert fake_client.topic_tags == ["Recovery"]
+
+
+class _RefusesTopicTags(FakeGraphClient):
+    """Meta refuses topic tags it doesn't permit, AT container creation — verified live:
+    `topic_tag=bad.tag` returns "Topic Tag Not Permitted" (code 100, subcode 4279071).
+    The permitted set isn't published and covers whole blocked topics, not just
+    punctuation, so any hashtag might be refused."""
+
+    def create_threads_container(self, *args, topic_tag=None, **kwargs):
+        if topic_tag is not None:
+            # Record the refused attempt before raising — the base class records inside
+            # the call we're pre-empting, so without this the retry looks like the only
+            # attempt and the test can't tell a fallback from never having tried.
+            self.topic_tags.append(topic_tag)
+            raise RuntimeError(
+                "POST USER1/threads -> 400: Invalid parameter "
+                "(Topic Tag Not Permitted): The provided topic tag is not permitted"
+            )
+        return super().create_threads_container(*args, topic_tag=None, **kwargs)
+
+
+def test_a_refused_topic_tag_never_fails_the_post(conn, config, make_publication):
+    """The hazard this fallback exists for: a blocked hashtag must not take the whole
+    post down. Losing the '#' is a cosmetic wart; losing the post is not."""
+    client = _RefusesTopicTags()
+    pub = make_publication(post_type="single", n_assets=1, platform="threads",
+                           first_comment=TAGS)
+
+    out = publish_one(conn, pub, config, client, dry_run=False, now=NOW)
+
+    assert out.result == "posted"
+    row = _reload(conn, pub["id"])
+    assert row["status"] == "posted"
+    assert row["last_error"] is None
+    # ...and the first comment still went out, just without its topic tag.
+    assert row["first_comment_status"] == "posted"
+
+
+def test_a_refused_topic_tag_retries_exactly_once_without_it(conn, config,
+                                                             make_publication):
+    client = _RefusesTopicTags()
+    pub = make_publication(post_type="text", n_assets=0, platform="threads")
+    conn.execute("UPDATE posts SET caption='#Blocked topic' WHERE id=?",
+                 (pub["post_id"],))
+    conn.commit()
+
+    publish_one(conn, _reload(conn, pub["id"]), config, client, dry_run=False, now=NOW)
+
+    # Two attempts at the container: with the tag (refused), then without.
+    assert client.topic_tags == ["Blocked", None]
+    assert [c[0] for c in client.calls].count("threads_text") == 1
+
+
+def test_a_non_topic_tag_failure_still_fails_normally(conn, config, make_publication):
+    """The fallback must be narrow. A real container error is not a topic-tag problem
+    and must keep failing — retried with backoff, exactly as before."""
+    client = FakeGraphClient(fail_on=["threads_text"])
+    pub = make_publication(post_type="text", n_assets=0, platform="threads")
+
+    out = publish_one(conn, pub, config, client, dry_run=False, now=NOW)
+
+    assert out.result == "retry_scheduled"
+    assert _reload(conn, pub["id"])["status"] == "scheduled"
+
+
+def test_no_hashtags_means_no_topic_tag_parameter(conn, config, fake_client,
+                                                  make_publication):
+    """Sending topic_tag=None must leave the payload exactly as it was before this
+    existed — an empty tag on every plain post would be a new way to fail."""
+    pub = make_publication(post_type="single", n_assets=1, platform="threads",
+                           first_comment="no tags in this one")
+    publish_one(conn, pub, config, fake_client, dry_run=False, now=NOW)
+
+    assert fake_client.topic_tags == [None, None]
 
 
 # ---- Registry consistency ------------------------------------------------------------

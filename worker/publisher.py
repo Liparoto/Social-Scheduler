@@ -12,6 +12,8 @@ either schedule a backed-off retry or, once attempts are exhausted, land in term
 
 from __future__ import annotations
 
+import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -20,6 +22,7 @@ from pathlib import Path
 from . import db
 from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS, PlatformCaps, UnknownPlatform
 from .config import Config
+from .logging_setup import LOGGER_NAME
 from .redact import redact
 
 MIN_CAROUSEL = 2
@@ -304,6 +307,68 @@ def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str |
     return post["caption"] if post else None
 
 
+# A Threads topic tag: the word after a '#', minus the characters Meta rejects.
+# Per Meta's docs a tag is 1-50 characters and may not contain a period or an ampersand;
+# whitespace and a further '#' obviously end it too.
+_TOPIC_TAG_RE = re.compile(r"#([^\s#.&]{1,50})(?=\s|$)")
+
+
+def _topic_tag_for(text: str | None) -> str | None:
+    """The topic tag to send explicitly for a Threads post, or None.
+
+    Threads allows exactly ONE topic tag per post. If you don't name it, Threads picks
+    the first valid hashtag out of your text — and REWRITES the body, dropping that
+    tag's '#' (verified live 2026-08-06: sending "#NationalParks #Waterfall ..." stored
+    topic_tag="NationalParks" and text="NationalParks #Waterfall ...").
+
+    Meta documents the in-text form as "not preferred but kept for backwards
+    compatibility" and the `topic_tag` parameter as the current way. Naming the tag
+    explicitly is therefore both the documented path and our best shot at the body
+    surviving intact, since the post's one tag slot is already filled by the parameter.
+
+    Returns the tag WITHOUT its '#', since that is the form the API takes.
+
+    Only a cleanly-matching tag is returned: on Threads the first hashtag is the only
+    functional one anyway, so there is nothing to gain from trying to rescue a tag with
+    a period or an ampersand in it, and passing one Meta rejects would fail a publish
+    that works fine today.
+    """
+    if not text:
+        return None
+    match = _TOPIC_TAG_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _threads_container(client, **kwargs) -> str:
+    """create_threads_container, with the topic tag downgraded to best-effort.
+
+    Meta validates the tag when the container is created and refuses tags it does not
+    permit — verified live: `topic_tag=bad.tag` comes back "Topic Tag Not Permitted"
+    (code 100, subcode 4279071). The permitted set is not published anywhere and covers
+    more than punctuation (Threads blocks whole topics), so no amount of local validation
+    can guarantee a tag is acceptable.
+
+    That turns a cosmetic nicety into a publishing hazard: without this fallback, one
+    unlucky hashtag in a caption would fail the whole post — strictly worse than the
+    missing '#' this feature set out to fix. So a rejected tag is retried once with no
+    tag at all, which is exactly the behaviour that shipped before topic tags existed.
+    """
+    try:
+        return client.create_threads_container(**kwargs)
+    except Exception as exc:  # noqa: BLE001 — narrow retry below; anything else re-raises
+        if kwargs.get("topic_tag") is None or "topic tag" not in str(exc).lower():
+            raise
+        # Logged through the shared worker logger rather than publish_one's `log`
+        # closure: the publish functions are called by signature from _PUBLISHERS and
+        # don't receive it, and widening every adapter's signature to carry a logger for
+        # one fallback would be a worse trade than naming the logger here.
+        logging.getLogger(LOGGER_NAME).info(
+            "topic tag %r refused by Threads, posting without it: %s",
+            kwargs["topic_tag"], exc,
+        )
+        return client.create_threads_container(**{**kwargs, "topic_tag": None})
+
+
 def _normalise_comment(raw: str | None) -> str | None:
     """"" / "   " / None all mean 'no first comment'. One definition, used everywhere."""
     if raw is None:
@@ -556,15 +621,21 @@ def _publish_threads(client, plan, token, config, sleep_fn) -> str:
     """Container -> publish, like Instagram, but text posts need no media at all."""
     user = plan["account_id"]
     post_type = plan["post_type"]
+    # Name the topic tag rather than letting Threads pick it out of the caption, which
+    # rewrites the caption. Applies to the POST as much as to the first comment — any
+    # Threads text containing hashtags loses the first one's '#'. See _topic_tag_for.
+    topic_tag = _topic_tag_for(plan["caption"])
 
     if post_type == "text":
-        container = client.create_threads_container(
-            user, token, media_type="TEXT", text=plan["caption"]
+        container = _threads_container(
+            client, threads_user_id=user, token=token,
+            media_type="TEXT", text=plan["caption"], topic_tag=topic_tag,
         )
     elif post_type == "single":
-        container = client.create_threads_container(
-            user, token, media_type="IMAGE",
+        container = _threads_container(
+            client, threads_user_id=user, token=token, media_type="IMAGE",
             image_url=plan["asset_urls"][0], text=plan["caption"],
+            topic_tag=topic_tag,
         )
     elif post_type == "carousel":
         children = []
@@ -577,8 +648,9 @@ def _publish_threads(client, plan, token, config, sleep_fn) -> str:
                 status_fn=client.get_threads_container_status,
             )
             children.append(child)
-        container = client.create_threads_container(
-            user, token, media_type="CAROUSEL", children=children, text=plan["caption"]
+        container = _threads_container(
+            client, threads_user_id=user, token=token, media_type="CAROUSEL",
+            children=children, text=plan["caption"], topic_tag=topic_tag,
         )
     else:
         raise _NonRetryable(f"threads adapter has no publish path for post_type '{post_type}'")
@@ -654,8 +726,9 @@ def _comment_threads(client, account_id, message, media_id, token, config,
     """Threads has no comment edge — the first comment is a self-reply, which is an
     ordinary text post carrying reply_to_id. So it needs the full container -> poll ->
     publish dance, reusing the same poll loop the publish path uses."""
-    container = client.create_threads_container(
-        account_id, token, media_type="TEXT", text=message, reply_to_id=media_id
+    container = _threads_container(
+        client, threads_user_id=account_id, token=token, media_type="TEXT",
+        text=message, reply_to_id=media_id, topic_tag=_topic_tag_for(message),
     )
     _poll_until_finished(
         client, container, token, config, sleep_fn,

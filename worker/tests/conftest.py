@@ -66,6 +66,7 @@ class FakeGraphClient:
                  threads_limit=(0, 250, 86400), threads_insights=None):
         self.calls = []
         self.requested_metrics = []
+        self.topic_tags = []
         self.limit = limit
         self.fail_on = set(fail_on or [])
         # 1-based index of the unpublished carousel child (create_page_photo(published=False)
@@ -194,7 +195,11 @@ class FakeGraphClient:
     # -- Threads surface -------------------------------------------------------------
     def create_threads_container(self, threads_user_id, token, *, media_type,
                                   text=None, image_url=None, is_carousel_item=False,
-                                  children=None, reply_to_id=None):
+                                  children=None, reply_to_id=None, topic_tag=None):
+        # Recorded separately from `calls` so the existing call-shape assertions across
+        # the Threads tests keep working unchanged while topic-tag tests can still see
+        # what was sent — including the None case, which is the point of several.
+        self.topic_tags.append(topic_tag)
         if reply_to_id is not None:
             # A Threads first comment is a self-REPLY, not a comment edge. Its own kind
             # so a test can tell a reply apart from an ordinary TEXT post, and can prove
