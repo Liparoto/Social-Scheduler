@@ -9,6 +9,8 @@ cd "$(dirname "$0")" || exit 1
 
 RUN_DIR="data/run"
 PORT=3939
+# Absolute, symlink-resolved, so it can be compared against a process's own cwd.
+INSTALL_DIR="$(pwd -P)"
 
 echo "=========================================="
 echo "  SocialScheduler — Stopping"
@@ -51,6 +53,30 @@ live_pid() {
   echo "$p"
 }
 
+# Every running worker belonging to THIS install, found by looking at the process table
+# rather than by trusting a pid file.
+#
+# This exists because a pid file is not the truth. The worker can be running with no
+# worker.pid at all — launchd owns its own copy, and a nohup worker whose pid file was
+# deleted (a stray `rm`, a half-finished Stop, an interrupted Start) becomes invisible to
+# every check above. That worker keeps publishing while this script reports success, and
+# the next Start adds a SECOND one: there is no single-instance guard and no row claiming,
+# so two daemons will happily publish the same due row twice, to a real account.
+#
+# Scoped by working directory, NOT by process name: another clone of this repo is a
+# separate install with its own database and its own queue, and stopping someone else's
+# worker would be its own kind of damage. lsof reads the cwd of each candidate; only pids
+# whose cwd is this exact directory are ours.
+install_worker_pids() {
+  local pids pid cwd
+  pids="$(pgrep -f 'worker\.run' 2>/dev/null)" || return 0
+  for pid in $pids; do
+    [ "$pid" = "$$" ] && continue
+    cwd="$(lsof -a -d cwd -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    [ "$cwd" = "$INSTALL_DIR" ] && echo "$pid"
+  done
+}
+
 STOPPED_ANY=0
 
 # ---- 1. The auto-stop timer, first, so it can't fire at a recycled PID later. ----
@@ -86,6 +112,46 @@ if launchctl print "gui/$UID/$AGENT" >/dev/null 2>&1; then
     echo "Stopping the worker (autostart agent, pid $AGENT_PID)..."
     launchctl kill TERM "gui/$UID/$AGENT" 2>/dev/null
     STOPPED_ANY=1
+  fi
+fi
+
+# ---- 2c. Confirm the worker is really gone; sweep anything the pid file missed. ----
+#
+# Everything above ASKED processes to stop. Nothing so far has checked whether any of them
+# did. This is the only part that looks at reality, and it matters more here than anywhere
+# else in this script: the cost of wrongly reporting "stopped" is a second daemon
+# publishing to a live account on the next Start.
+#
+# It also catches the worker no pid file knows about (see install_worker_pids), which is
+# why the sweep runs even when the blocks above found nothing to stop.
+WORKER_SURVIVORS="$(install_worker_pids)"
+if [ -n "$WORKER_SURVIVORS" ]; then
+  # An untracked worker gets its own line: it means a pid file was lost, which is worth
+  # knowing about rather than silently cleaning up.
+  if [ -z "$WORKER_PID" ] && [ -z "$AGENT_PID" ]; then
+    echo "Found a worker running that no pid file tracked (pid $(echo $WORKER_SURVIVORS | tr '\n' ' '))."
+    echo "Stopping it..."
+    STOPPED_ANY=1
+  fi
+  # SIGTERM first — the worker exits 0 on TERM, which finishes the current cycle cleanly
+  # and, for the launchd agent, avoids tripping its restart-on-crash rule.
+  for pid in $WORKER_SURVIVORS; do kill "$pid" 2>/dev/null; done
+
+  # Give it a few seconds. A cycle mid-publish can take a moment to unwind, and killing
+  # it harder than necessary is how a half-written publication happens.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    WORKER_SURVIVORS="$(install_worker_pids)"
+    [ -z "$WORKER_SURVIVORS" ] && break
+    sleep 1
+  done
+
+  # Still there: escalate, then check ONE more time so the final message reflects the
+  # outcome rather than the attempt.
+  if [ -n "$WORKER_SURVIVORS" ]; then
+    echo "The worker did not stop on request — forcing it."
+    for pid in $WORKER_SURVIVORS; do kill -9 "$pid" 2>/dev/null; done
+    sleep 1
+    WORKER_SURVIVORS="$(install_worker_pids)"
   fi
 fi
 
@@ -128,11 +194,40 @@ if [ -n "$PORT_PIDS" ]; then
 fi
 
 # ---- 5. Clean up the bookkeeping files. ----
-rm -f "$RUN_DIR/dashboard.pid" "$RUN_DIR/worker.pid" \
-      "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+#
+# Only remove worker.pid once the worker is actually gone. Deleting it while a worker is
+# still alive is what CREATES an untracked worker: the next Start would see no pid file,
+# assume nothing is running, and launch a second daemon alongside the first.
+rm -f "$RUN_DIR/dashboard.pid" "$RUN_DIR/watchdog.pid" "$RUN_DIR/worker.deadline"
+if [ -z "$WORKER_SURVIVORS" ]; then
+  rm -f "$RUN_DIR/worker.pid"
+fi
+
+# ---- 6. Report what is actually true. ----
+DASH_LEFT="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)"
 
 echo
-if [ "$STOPPED_ANY" = "1" ]; then
+if [ -n "$WORKER_SURVIVORS" ] || [ -n "$DASH_LEFT" ]; then
+  # Never claim success while something survives. A false "Nothing is running" is worse
+  # than no message at all: it is the message that makes someone press Start again.
+  echo "⚠️  Something is STILL running — do not press Start."
+  echo
+  if [ -n "$WORKER_SURVIVORS" ]; then
+    echo "   The worker survived, even after being forced:"
+    for pid in $WORKER_SURVIVORS; do
+      echo "     pid $pid   ->   kill -9 $pid"
+    done
+    echo
+    echo "   Starting again now would run TWO workers against one queue, and a due post"
+    echo "   would publish twice. Stop this one by hand first."
+    echo
+    echo "   To halt publishing immediately without stopping anything, set"
+    echo "   KILL_SWITCH=1 in .env — the worker checks it every cycle."
+  fi
+  if [ -n "$DASH_LEFT" ]; then
+    echo "   The dashboard is still holding port $PORT (pid $(echo $DASH_LEFT | tr '\n' ' '))."
+  fi
+elif [ "$STOPPED_ANY" = "1" ]; then
   echo "✅ Stopped. Nothing is running."
 else
   echo "Nothing was running."
