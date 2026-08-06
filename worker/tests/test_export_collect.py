@@ -432,3 +432,23 @@ def test_group_export_still_carries_no_credentials(conn):
     assert "SECRET-TOKEN" not in dumped
     assert "access_token" not in dumped
     assert "token_expires_at" not in dumped
+
+
+def test_bpp_marks_are_backed_up(conn):
+    """Curation work — a judgement made post by post while reviewing stats — and it is not
+    recoverable from anything else in the file. A restore without it silently loses the
+    whole pool and the rotation quietly stops."""
+    marked = conn.execute(
+        "INSERT INTO posts (caption, post_type, is_bpp, bpp_marked_at)"
+        " VALUES ('keeper','single',1,'2026-08-06T12:00:00+00:00')"
+    ).lastrowid
+    plain = conn.execute(
+        "INSERT INTO posts (caption, post_type) VALUES ('ordinary','single')"
+    ).lastrowid
+    conn.commit()
+
+    by_id = {p.post_id: p for p in collect_all(conn, GENERATED_AT).posts}
+
+    assert by_id[marked].is_bpp is True
+    assert by_id[marked].bpp_marked_at == "2026-08-06T12:00:00+00:00"
+    assert by_id[plain].is_bpp is False, "an unmarked post must not come back marked"

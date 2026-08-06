@@ -203,7 +203,8 @@ def _add_sheet(book: Workbook, title: str, headers: list[str], rows: list[list])
 
 POSTS_HEADERS = [
     "post_id", "caption", "first_comment", "post_type", "content_kind", "content_status",
-    "status", "tags", "green_periods", "blackout_periods", "cooldown_days",
+    "status", "is_bpp", "bpp_marked_at", "tags", "green_periods", "blackout_periods",
+    "cooldown_days",
     "target_channels", "image_files", "times_posted", "last_posted_at_utc", "total_reach",
     "total_likes", "created_by", "created_at_utc",
 ]
@@ -253,7 +254,11 @@ def write_workbook(
     _add_sheet(book, "Posts", POSTS_HEADERS, [
         [
             p.post_id, p.caption, p.first_comment, p.post_type, p.content_kind,
-            p.content_status, p.status, _join(p.tags), _join(p.green_periods),
+            p.content_status, p.status,
+            # Written as YES/blank rather than TRUE/FALSE: this column is scanned by eye
+            # in a spreadsheet, and a column of FALSE is harder to read past than blanks.
+            "YES" if p.is_bpp else "", p.bpp_marked_at,
+            _join(p.tags), _join(p.green_periods),
             _join(p.blackout_periods), p.cooldown_days, _join(p.target_channels),
             _join([i.export_filename for i in p.images]), p.times_posted,
             p.last_posted_at, p.total_reach, p.total_likes, p.created_by, p.created_at,

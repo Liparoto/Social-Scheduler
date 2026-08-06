@@ -127,6 +127,8 @@ export interface Asset {
 
 export interface Post {
   id: number;
+  is_bpp: number;
+  bpp_marked_at: string | null;
   caption: string | null;
   first_comment: string | null;
   post_type: PostType;

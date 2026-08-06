@@ -50,6 +50,21 @@ there.
 Library. Nothing in the app ever sets it. `bpp_marked_at` records when, so a periodic
 re-review can start with the oldest marks.
 
+Markable from three places, because a post is recognised as a keeper wherever you happen
+to be looking at it: the **Insights leaderboard** (while reviewing stats), the **post
+editor** (often the moment you notice), and unmarkable from the **BPP pool**. The Library
+shows a ★ BPP badge on marked posts — the mark is a property of the post, so it appears
+everywhere the post does, not only where it was set.
+
+In the editor the mark saves on click rather than with the rest of the form: it is a
+one-word decision, and making it wait behind an unrelated Save — or lose it on a discard —
+would be worse than one extra request.
+
+**Backups carry it.** `is_bpp` and `bpp_marked_at` are in `export.json` and get their own
+column in the Posts tab (written as YES/blank, since that column is scanned by eye). The
+pool is curation work, built up post by post, and is not recoverable from anything else in
+the file — a restore without it would silently empty the pool and stop the rotation.
+
 Only library posts can be marked — a repost needs the caption and image files. The
 leaderboard shows every post on the account, so ones without a library entry say "not in
 library" rather than offering a button that would fail.

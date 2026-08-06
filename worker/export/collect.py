@@ -53,6 +53,11 @@ class ExportedPost:
     content_kind: str
     content_status: str
     status: str
+    # Whether the owner marked this a keeper worth reposting. Curation work — a judgement
+    # made post by post while reviewing stats — and it is not recoverable from anything
+    # else in the file, so a backup without it silently loses the whole pool.
+    is_bpp: bool
+    bpp_marked_at: str | None
     cooldown_days: int | None
     created_by: str | None
     created_at: str | None
@@ -115,6 +120,8 @@ def collect_posts(conn: sqlite3.Connection) -> list[ExportedPost]:
                 post_type=row["post_type"],
                 content_kind=row["content_kind"],
                 content_status=row["content_status"],
+                is_bpp=bool(row["is_bpp"]),
+                bpp_marked_at=row["bpp_marked_at"],
                 status=row["status"],
                 cooldown_days=row["cooldown_days"],
                 created_by=row["created_by"],

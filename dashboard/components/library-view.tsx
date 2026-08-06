@@ -28,6 +28,7 @@ import type { Period, Tag } from "@/lib/types";
 
 interface PostLite {
   id: number;
+  is_bpp: number;
   caption: string | null;
   post_type: string;
   status: string;
@@ -698,6 +699,16 @@ export function LibraryView({
                 </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.content_kind === "evergreen" ? "Evergreen" : "One-time"}</span>
+                  {/* A keeper is a property of the post, so it belongs everywhere the post
+                      appears — not only on the page where it happened to be marked. */}
+                  {p.is_bpp ? (
+                    <span
+                      className="rounded-full border border-brand px-1.5 py-px text-brand-strong"
+                      title="Marked as a best-performing post — auto-fill reposts these on your BPP cadence"
+                    >
+                      ★ BPP
+                    </span>
+                  ) : null}
                   {p.content_status === "ready" && badgeDetails ? (
                     <span className="group relative inline-flex">
                       <button

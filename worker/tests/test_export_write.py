@@ -19,6 +19,7 @@ def _post(post_id, images):
     return ExportedPost(
         post_id=post_id, caption="Test Post", first_comment=None, post_type="single",
         content_kind="evergreen", content_status="ready", status="draft",
+        is_bpp=False, bpp_marked_at=None,
         cooldown_days=None, created_by=None, created_at=None, updated_at=None,
         images=images,
     )

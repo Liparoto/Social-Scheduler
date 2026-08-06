@@ -11,6 +11,7 @@ export default function LibraryPage() {
   const evaluationDate = localDate(new Date(), config.defaultTimezone);
   const posts = listPosts().map((p) => ({
     id: p.id,
+    is_bpp: p.is_bpp,
     caption: p.caption,
     post_type: p.post_type,
     status: p.status,

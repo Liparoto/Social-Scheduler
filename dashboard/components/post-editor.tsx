@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { BppMark } from "@/components/bpp-mark";
 import type {
   Asset,
   Channel,
@@ -348,6 +349,22 @@ export function PostEditor({
           <button type="button" className={segBtn(kind === "one_time")} onClick={() => setKind("one_time")}>
             One-time
           </button>
+        </div>
+
+        {/* Marking lives here as well as on the leaderboard: a post is often recognised
+            as a keeper while being edited, and having to go find it again on another
+            screen is exactly the friction that leaves the pool empty.
+
+            Saved on click via its own endpoint rather than with the rest of the form —
+            the mark is a one-word decision, and making it wait behind an unrelated Save
+            (or lose it on a discard) would be worse than the extra request. */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <BppMark postId={post.id} initial={Boolean(post.is_bpp)} />
+          <span className="text-[11px] text-muted">
+            {post.is_bpp
+              ? "In your BPP pool — auto-fill will bring it back on the cadence you set."
+              : "Mark it if it performed well and is worth running again."}
+          </span>
         </div>
       </section>
 
