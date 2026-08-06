@@ -165,6 +165,30 @@ class GraphClient:
             {"creation_id": creation_id, "access_token": token},
         )["id"]
 
+    # Instagram's own limit on a comment body. Checked here rather than left to Meta:
+    # an over-length comment comes back as a generic OAuthException that says nothing
+    # about length, and by then the post is already live and the reason is a mystery.
+    COMMENT_MAX_CHARS = 2200
+
+    def create_comment(self, media_id: str, message: str, token: str) -> str:
+        """Post a comment on a published media. Returns the comment id.
+
+        Used for the first comment (hashtags), so this only ever runs AFTER the media
+        publishes — see publisher._post_first_comment for why that ordering matters.
+
+        Requires the `instagram_business_manage_comments` scope on the token, which is
+        NOT the same scope publishing needs. A token that can publish can still fail
+        here, and that failure is the comment's alone: the post stays up.
+        """
+        if len(message) > self.COMMENT_MAX_CHARS:
+            raise GraphAPIError(
+                f"comment is {len(message)} chars, over Instagram's "
+                f"{self.COMMENT_MAX_CHARS} limit"
+            )
+        return self._post(
+            f"{media_id}/comments", {"message": message, "access_token": token}
+        )["id"]
+
     def get_media_insights(
         self, media_id: str, token: str, metrics: list[str]
     ) -> dict:
@@ -328,6 +352,7 @@ class GraphClient:
         image_url: str | None = None,
         is_carousel_item: bool = False,
         children: list[str] | None = None,
+        reply_to_id: str | None = None,
     ) -> str:
         """Create a Threads media container. Returns the container id.
 
@@ -338,8 +363,16 @@ class GraphClient:
 
         Carousel children are created with is_carousel_item=True beforehand, then their
         ids are passed as `children` to the CAROUSEL parent call.
+
+        `reply_to_id` makes this container a REPLY to an existing thread rather than a
+        new top-level post. Threads has no comment edge — a "first comment" here is a
+        self-reply, which is a real post in the author's feed, not a hidden comment.
+        Only `threads_content_publish` is needed for it (the same scope publishing
+        already uses); `threads_manage_replies` governs OTHER people's replies.
         """
         data = {"media_type": media_type, "access_token": token}
+        if reply_to_id is not None:
+            data["reply_to_id"] = reply_to_id
         if text is not None:
             data["text"] = text
         if image_url is not None:

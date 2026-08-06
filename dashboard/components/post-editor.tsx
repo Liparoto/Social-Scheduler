@@ -21,6 +21,7 @@ import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms"
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
+import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { FramingButton } from "./framing-button";
@@ -106,6 +107,7 @@ export function PostEditor({
   const [captions, setCaptions] = useState(
     initialCaptions.length ? initialCaptions : [{ platform: "", body: "" }]
   );
+  const [firstComment, setFirstComment] = useState(post.first_comment ?? "");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,6 +146,8 @@ export function PostEditor({
     initialKind: post.content_kind,
     cooldown,
     initialCooldownDays: post.cooldown_days,
+    firstComment,
+    initialFirstComment: post.first_comment,
   });
 
   async function save() {
@@ -158,7 +162,14 @@ export function PostEditor({
       );
       return;
     }
+    if (firstComment.trim().length > FIRST_COMMENT_MAX_CHARS) {
+      setError(
+        `First comment is ${firstComment.trim().length} / ${FIRST_COMMENT_MAX_CHARS} characters.`
+      );
+      return;
+    }
     const body = {
+      first_comment: firstComment,
       content_kind: kind,
       content_status: status,
       cooldown_days: cooldown.trim() === "" ? null : Number(cooldown),
@@ -343,6 +354,30 @@ export function PostEditor({
       {/* Caption variants */}
       <section className={card}>
         <CaptionVariantsEditor value={captions} onChange={setCaptions} postType={post.post_type} />
+      </section>
+
+      {/* First comment */}
+      <section className={card}>
+        <h3 className="mb-1 font-display text-sm font-semibold text-ink">First comment</h3>
+        <p className="mb-3 text-xs text-muted">
+          Posted automatically once the post is live — the usual home for hashtags. On
+          Threads it goes out as a reply, which shows in your feed like any other post.
+        </p>
+        <textarea
+          className="min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
+          placeholder="#hashtags #go #here"
+          value={firstComment}
+          onChange={(e) => setFirstComment(e.target.value)}
+        />
+        {firstComment.trim().length > 0 ? (
+          <p
+            className={`mt-1 text-xs ${
+              firstComment.trim().length > FIRST_COMMENT_MAX_CHARS ? "text-danger" : "text-faint"
+            }`}
+          >
+            {firstComment.trim().length} / {FIRST_COMMENT_MAX_CHARS} characters
+          </p>
+        ) : null}
       </section>
 
       {/* Targets */}

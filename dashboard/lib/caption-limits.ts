@@ -10,6 +10,18 @@ export interface CaptionVariantLike {
 }
 
 /**
+ * Instagram's limit on a COMMENT body — a different limit from the caption's, and the
+ * binding one for the first comment. Mirrors GraphClient.COMMENT_MAX_CHARS in
+ * worker/graph_api.py; the worker still enforces its own copy, since a comment can reach
+ * it from a create route that predates this check.
+ *
+ * Threads replies are capped far lower (500), but that limit belongs to Threads' own
+ * caption rules, which platforms.ts already models. This constant is the outer bound the
+ * editor enforces for everyone.
+ */
+export const FIRST_COMMENT_MAX_CHARS = 2200;
+
+/**
  * Mirrors worker/publisher.py's _select_caption's matching rules — platform-specific
  * variant(s) if present, else the generic ("Any") one(s), else the post's base caption —
  * but returns EVERY matching variant's body, not just the first. The worker rotates

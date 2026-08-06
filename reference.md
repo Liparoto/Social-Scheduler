@@ -84,6 +84,15 @@ Two auth configurations:
 - **Instagram API with Instagram Login** (`graph.instagram.com`, newer, since July 2024):
   scopes `instagram_business_basic` + `instagram_business_content_publish`. **No Facebook Page
   required.** Best for IG-only.
+  - Posting a **first comment** additionally needs `instagram_business_manage_comments` —
+    a scope publishing does NOT require, so a token that posts fine can still fail to
+    comment. This install's token appears to carry it (a `GET /{media-id}/comments` read,
+    which needs the same scope, succeeds), but that is inference: `debug_token` cannot
+    introspect an Instagram-Login token (it answers `(#2) Service temporarily unavailable`
+    on every host/version — checked 2026-08-05, not a real outage). The only conclusive
+    test is a real comment. If it fails on permissions, re-authorise with the scope added.
+  - ⚠ The scope list above is what setup *asks for*; the live token clearly carries more
+    (the messages edge reads too), so treat it as a minimum, not an inventory.
 - **Instagram API with Facebook Login** (`graph.facebook.com`): scopes `instagram_basic` +
   `instagram_content_publish` + `pages_read_engagement` + `pages_show_list`. **Requires the IG
   account be linked to a Facebook Page.**
@@ -219,6 +228,23 @@ document whether it is possible, and this project does not assume undocumented b
 - **Text posts are a Threads-only capability** among this project's three platforms — neither
   Instagram nor Facebook Pages can publish a post with no media, so `TEXT` containers have no
   IG/FB equivalent. Max **500 characters**.
+- **There is no comment edge.** A "first comment" on Threads is a **self-reply**: the same
+  `POST /{threads-user-id}/threads` call with `reply_to_id=<published thread id>`, then the
+  usual poll and `threads_publish`. Two consequences worth knowing before using it:
+  the reply is a **real post in your feed**, not a hidden comment; and it costs a second
+  publish (so it counts against the 250/24h quota, and the 500-character cap applies to it
+  too). Scope-wise it needs only `threads_content_publish` — the one publishing already
+  uses. `threads_manage_replies` governs OTHER people's replies, not your own.
+  Token scopes confirmed live 2026-08-05 via `GET graph.threads.net/debug_token`:
+  `threads_basic, threads_content_publish, threads_manage_replies, threads_manage_insights,
+  threads_read_replies`.
+- ⚠ **A leading `#` is eaten as the post's `topic_tag`** (verified live 2026-08-06). Sending
+  `"#NationalParks #Waterfall #NatureLovers"` stores `topic_tag: "NationalParks"` and
+  `text: "NationalParks #Waterfall #NatureLovers"` — the first tag loses its `#` in the body
+  and becomes a tag chip instead. Threads supports **one** topic tag per post; every later
+  `#word` stays literal text, NOT a link. So a hashtag block behaves very differently here
+  than on Instagram: only the first one is functional. Not a bug in this project — the API
+  received exactly what was sent. To keep the `#` in the body, don't start the text with one.
 - **Quota gate — `GET /{threads-user-id}/threads_publishing_limit`, fields
   `quota_usage,config`** → `config.quota_total` (**250**), `config.quota_duration` (**86400s /
   24h, rolling**). Unlike Facebook Pages, **Threads *is* gated at runtime** — the worker reads

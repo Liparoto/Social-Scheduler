@@ -163,6 +163,16 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
                         logger=logger, sleep_fn=sleep_fn)
             processed += 1
 
+    # Re-attempt first comments a human explicitly asked to retry from the dashboard.
+    # AFTER the publish batch (a retry is never more urgent than getting posts out) and
+    # inside the kill-switch guard above, since it posts to a live account.
+    from .publisher import run_first_comment_retries
+
+    run_first_comment_retries(
+        conn, config, client, now, logger=logger, client_for=client_for,
+        dry_run=dry_run, sleep_fn=sleep_fn,
+    )
+
     # Refresh metrics for already-published posts (throttled per publication).
     from .metrics import run_metrics
 

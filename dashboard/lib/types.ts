@@ -33,6 +33,13 @@ export type PublicationStatus =
   | "failed"
   | "canceled";
 
+/**
+ * The first comment's outcome, tracked separately from the send's own status because it
+ * happens AFTER the media is live. 'none' covers both "no first comment was written" and
+ * "this platform has no first-comment concept" — neither is a failure.
+ */
+export type FirstCommentStatus = "none" | "pending" | "posted" | "failed";
+
 // Content model (migration 0002_content_model.sql). content_status is a SEPARATE axis
 // from PostStatus above: content_status governs automation eligibility (draft/ready/
 // retired), while PostStatus stays the coarse overview lifecycle hint. Never conflate them.
@@ -163,8 +170,10 @@ export interface Publication {
   attempt_count: number;
   next_retry_at: string | null;
   last_error: string | null;
-  first_comment_status: "none" | "pending" | "posted" | "failed";
+  first_comment_status: FirstCommentStatus;
   first_comment_remote_id: string | null;
+  first_comment_error: string | null;
+  first_comment_retry_requested: number;
   is_dry_run: number;
   is_held: number;
   /** Which destination this send is for — 'story' rows target ONE slide via asset_id. */
@@ -191,4 +200,13 @@ export interface PostPublicationRow {
   remote_post_id: string | null;
   /** Which destination this send is for. 'story' rows also carry an asset_id (one slide). */
   surface: Surface;
+  /**
+   * The first comment's own outcome, independent of the send's. A comment is attempted
+   * only after the media is live, so 'failed' here always means "the post went out, the
+   * comment did not" — never a failed post.
+   */
+  first_comment_status: FirstCommentStatus;
+  first_comment_error: string | null;
+  /** 1 while a human-requested retry is waiting for the worker to pick it up. */
+  first_comment_retry_requested: number;
 }

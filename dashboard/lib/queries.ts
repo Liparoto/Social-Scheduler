@@ -1326,7 +1326,9 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
   return getDb()
     .prepare(
       `SELECT pub.id, pub.channel_id, pub.scheduled_at, pub.status, pub.is_held,
-              pub.is_dry_run, pub.remote_post_id,
+              pub.is_dry_run, pub.remote_post_id, pub.surface,
+              pub.first_comment_status, pub.first_comment_error,
+              pub.first_comment_retry_requested,
               c.account_name AS channel_name, c.platform AS channel_platform,
               c.timezone AS channel_timezone, c.color_hue AS channel_color_hue,
               c.avatar_path AS channel_avatar_path
@@ -1593,6 +1595,27 @@ export function retryPublication(id: number): boolean {
        SET status = 'scheduled', next_retry_at = NULL, last_error = NULL,
            attempt_count = 0, updated_at = @now
        WHERE id = @id AND status = 'failed'`
+    )
+    .run({ id, now: nowIso() });
+  return info.changes > 0;
+}
+
+/**
+ * Ask the worker to have one more go at a failed first comment.
+ *
+ * Deliberately NOT the same shape as retryPublication above: that one re-queues the post
+ * itself, which is safe because nothing went out. This one runs against a post that is
+ * already live, so it only ever sets a request flag — the worker does the work and clears
+ * the flag, and the guard below means only a genuinely failed comment can be re-requested.
+ * A 'posted' comment must never be retried; that would put a second one on a live post.
+ */
+export function requestFirstCommentRetry(id: number): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE publications
+       SET first_comment_retry_requested = 1, updated_at = @now
+       WHERE id = @id AND status = 'posted' AND is_dry_run = 0
+         AND first_comment_status = 'failed'`
     )
     .run({ id, now: nowIso() });
   return info.changes > 0;
@@ -1912,6 +1935,29 @@ export function getCaptionVariants(postId: number): CaptionVariant[] {
  * a caption saved in the editor left the card showing the old text. Callers that replace
  * caption variants should decide what this becomes; see `syncedPostCaption()`.
  */
+/**
+ * Set the first comment (hashtags) posted after this post publishes.
+ *
+ * Until this existed, `first_comment` could only be written at creation time by the
+ * composer — so anything created by bulk import or slide extraction could never get one
+ * at all. Empty normalises to NULL so "no first comment" is one value everywhere, which
+ * is what the worker's own normaliser expects.
+ */
+export function updatePostFirstComment(
+  postId: number,
+  firstComment: string | null
+): void {
+  getDb()
+    .prepare(
+      "UPDATE posts SET first_comment = @first_comment, updated_at = @updated_at WHERE id = @id"
+    )
+    .run({
+      first_comment: firstComment?.trim() || null,
+      id: postId,
+      updated_at: nowIso(),
+    });
+}
+
 export function updatePostCaption(postId: number, caption: string | null): void {
   getDb()
     .prepare("UPDATE posts SET caption = @caption, updated_at = @updated_at WHERE id = @id")

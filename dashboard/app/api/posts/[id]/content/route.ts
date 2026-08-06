@@ -12,10 +12,11 @@ import {
   setPostTargets,
   updatePostCaption,
   updatePostContentModel,
+  updatePostFirstComment,
 } from "@/lib/queries";
 import type { ContentKind, ContentStatus, PeriodMode, PostTarget } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
-import { captionLimitError } from "@/lib/caption-limits";
+import { FIRST_COMMENT_MAX_CHARS, captionLimitError } from "@/lib/caption-limits";
 import { syncedPostCaption } from "@/lib/quick-edit-captions";
 import { parseTargets } from "@/lib/story-fanout";
 
@@ -47,6 +48,9 @@ export async function GET(
       body: v.body,
       sort_order: v.sort_order,
     })),
+    // Same reasoning as the variants: kept out of the Library list query, fetched only
+    // when an editor actually opens this post.
+    first_comment: post.first_comment ?? "",
   });
 }
 
@@ -190,6 +194,24 @@ export async function PATCH(
     captionVariants = variants;
   }
 
+  // The first comment (hashtags), auto-posted once the media is live. Instagram's own
+  // comment limit is 2200 characters; rejecting an over-long one here means the owner
+  // finds out while editing rather than after the post has already gone out and only
+  // the comment failed.
+  let firstComment: string | null | undefined;
+  if ("first_comment" in body) {
+    const raw = body.first_comment == null ? "" : String(body.first_comment);
+    if (raw.trim().length > FIRST_COMMENT_MAX_CHARS) {
+      return NextResponse.json(
+        {
+          error: `First comment is ${raw.trim().length} characters — the limit is ${FIRST_COMMENT_MAX_CHARS}.`,
+        },
+        { status: 400 }
+      );
+    }
+    firstComment = raw.trim() || null;
+  }
+
   let tagIds: number[] | undefined;
   if ("tag_ids" in body) {
     const validTagIds = new Set(listTags().map((t) => t.id));
@@ -236,6 +258,9 @@ export async function PATCH(
     if (syncedCaption !== undefined) {
       updatePostCaption(postId, syncedCaption);
     }
+  }
+  if (firstComment !== undefined) {
+    updatePostFirstComment(postId, firstComment);
   }
   if (tagIds !== undefined) {
     setPostTags(postId, tagIds);

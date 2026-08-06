@@ -139,6 +139,16 @@ class FakeGraphClient:
         self._n += 1
         return f"media-{self._n}"
 
+    def create_comment(self, media_id, message, token):
+        # Records the MESSAGE, not just that a call happened: the whole point of the
+        # first comment is the text (hashtags), so a test must be able to prove the
+        # right body reached the API rather than an empty or truncated one.
+        self.calls.append(("comment", media_id, message))
+        if "comment" in self.fail_on:
+            raise RuntimeError("comment boom")
+        self._n += 1
+        return f"comment-{self._n}"
+
     # -- Facebook Page surface -----------------------------------------------------
     def create_page_photo(self, page_id, image_url, token, *, caption=None, published=True):
         self.calls.append(("page_photo" if published else "page_child", image_url))
@@ -184,8 +194,14 @@ class FakeGraphClient:
     # -- Threads surface -------------------------------------------------------------
     def create_threads_container(self, threads_user_id, token, *, media_type,
                                   text=None, image_url=None, is_carousel_item=False,
-                                  children=None):
-        if media_type == "CAROUSEL":
+                                  children=None, reply_to_id=None):
+        if reply_to_id is not None:
+            # A Threads first comment is a self-REPLY, not a comment edge. Its own kind
+            # so a test can tell a reply apart from an ordinary TEXT post, and can prove
+            # which published thread it was attached to.
+            kind = "threads_reply"
+            value = (reply_to_id, text)
+        elif media_type == "CAROUSEL":
             kind = "threads_carousel"
             value = tuple(children or ())
         elif is_carousel_item:
@@ -348,7 +364,7 @@ def make_publication(conn):
     def _make(post_type="single", n_assets=1, public_url="https://assets.test/a.jpg",
               scheduled_offset_min=-1, with_token=True, now=None,
               platform="instagram", remote_account_id=None, media_kind="image",
-              surface="feed", story_slide=0):
+              surface="feed", story_slide=0, first_comment=None):
         # Discord has no account id at all (the webhook URL is both address and secret),
         # so its remote_account_id stays None even when the caller doesn't pass one —
         # every other platform gets a sensible per-platform default.
@@ -385,7 +401,9 @@ def make_publication(conn):
         )
         channel_id = cur.lastrowid
         cur = conn.execute(
-            "INSERT INTO posts (caption, post_type) VALUES ('hello world', ?)", (post_type,)
+            "INSERT INTO posts (caption, first_comment, post_type) "
+            "VALUES ('hello world', ?, ?)",
+            (first_comment, post_type),
         )
         post_id = cur.lastrowid
         asset_ids = []

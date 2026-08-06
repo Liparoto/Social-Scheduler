@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import db
-from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS, PlatformCaps
+from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS, PlatformCaps, UnknownPlatform
 from .config import Config
 from .redact import redact
 
@@ -304,6 +304,14 @@ def _select_caption(conn, post_id: int, platform: str, used_count: int) -> str |
     return post["caption"] if post else None
 
 
+def _normalise_comment(raw: str | None) -> str | None:
+    """"" / "   " / None all mean 'no first comment'. One definition, used everywhere."""
+    if raw is None:
+        return None
+    trimmed = raw.strip()
+    return trimmed or None
+
+
 def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None,
                  config=None, surface: str = "feed", conn=None) -> dict:
     # For real publishes every asset resolves (validated above). In dry-run there is no
@@ -371,7 +379,16 @@ def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str 
         # Stories have no caption field. Nulled in the PLAN, not merely skipped at the
         # call site, so dry-run output shows the truth about what would be sent.
         "caption": None if surface == "story" else caption,
-        "first_comment": post["first_comment"],
+        # Same treatment as the caption, for the same reason: a Story has no comment
+        # edge, so the comment is nulled in the PLAN rather than skipped at the call
+        # site, and dry-run output shows the truth about what would be sent.
+        #
+        # Whitespace normalises to None here too — an empty composer textarea arrives as
+        # "" or "\n", and "there is a first comment" must mean the same thing everywhere
+        # downstream rather than each caller re-deciding what counts as blank.
+        "first_comment": _normalise_comment(
+            None if surface == "story" else post["first_comment"]
+        ),
         "asset_urls": asset_urls,
         "asset_paths": asset_paths,
         # Which media field a story container should use. Feed paths branch on post_type
@@ -623,6 +640,42 @@ def _publish_telegram(client, plan, token, config, sleep_fn) -> str:
     return str(message_id) if message_id is not None else "posted"
 
 
+# Commenters take the three facts they need (account, message, published media id)
+# rather than a plan: a retry has no plan to build — the assets may since have been
+# deleted, and re-resolving them to post a text comment would be pure risk.
+def _comment_instagram(client, account_id, message, media_id, token, config,
+                       sleep_fn) -> str:
+    """One call against the published media's comment edge. No container, no polling."""
+    return client.create_comment(media_id, message, token)
+
+
+def _comment_threads(client, account_id, message, media_id, token, config,
+                     sleep_fn) -> str:
+    """Threads has no comment edge — the first comment is a self-reply, which is an
+    ordinary text post carrying reply_to_id. So it needs the full container -> poll ->
+    publish dance, reusing the same poll loop the publish path uses."""
+    container = client.create_threads_container(
+        account_id, token, media_type="TEXT", text=message, reply_to_id=media_id
+    )
+    _poll_until_finished(
+        client, container, token, config, sleep_fn,
+        status_fn=client.get_threads_container_status,
+    )
+    return client.publish_threads_container(account_id, container, token)
+
+
+def _comment_facebook(client, account_id, message, media_id, token, config,
+                      sleep_fn) -> str:
+    """A Page post's comment edge. Requires `pages_manage_engagement` on the Page token —
+    a different scope from publishing, so this can fail on a token that posts fine.
+
+    UNVERIFIED against a live Page: this install has no Facebook channel to test with.
+    The shape matches Instagram's comment edge, but treat the first real FB comment as
+    the verification step, exactly as reference.md does for other unverified FB details.
+    """
+    return client.create_comment(media_id, message, token)
+
+
 # Publish entry point per platform. Uniform signature so the dispatch below is a lookup,
 # not a chain of ifs whose final `else` silently means "Instagram".
 _PUBLISHERS = {
@@ -664,8 +717,29 @@ _QUOTA_READERS = {
     "threads": lambda c, acct, tok: c.get_threads_publishing_limit(acct, tok),
 }
 
+# How each platform posts a first comment after publishing, or None where the platform
+# has no equivalent. Every supported platform declares a choice, same reasoning as
+# _QUOTA_GATED: None must mean "this platform genuinely has no first-comment concept",
+# never "not wired up yet".
+#   * instagram — comment edge on the published media.
+#   * facebook  — comment edge on the published Page post (see _comment_facebook's note).
+#   * threads   — no comment edge; a self-reply carrying reply_to_id.
+#   * discord   — a webhook posts messages, not comments. A follow-up message would be a
+#                 different feature with different semantics, not this one.
+#   * telegram  — same: a second message to the channel is not a comment on the first.
+_COMMENTERS = {
+    "instagram": _comment_instagram,
+    "facebook": _comment_facebook,
+    "threads": _comment_threads,
+    "discord": None,
+    "telegram": None,
+}
+
 assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
     "publisher._PUBLISHERS and clients.SUPPORTED_PLATFORMS disagree"
+)
+assert set(_COMMENTERS) == set(SUPPORTED_PLATFORMS), (
+    "publisher._COMMENTERS and clients.SUPPORTED_PLATFORMS disagree"
 )
 assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), (
     "publisher._QUOTA_GATED and clients.SUPPORTED_PLATFORMS disagree"
@@ -673,6 +747,120 @@ assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), (
 assert set(_QUOTA_READERS) == {p for p, gated in _QUOTA_GATED.items() if gated}, (
     "publisher._QUOTA_READERS must have exactly the platforms _QUOTA_GATED marks True"
 )
+
+
+def _post_first_comment(conn, pub, client, *, platform, account_id, message, media_id,
+                        token, config, sleep_fn, now, log) -> None:
+    """Post the first comment on an ALREADY-PUBLISHED media. Never raises.
+
+    Three rules hold this together, and all three exist because the post is already live
+    by the time this runs:
+
+    1. It cannot fail the publication. There is no way to unpublish, so turning a live
+       post into a 'failed' row would be a lie about what happened.
+    2. It cannot be retried automatically. The publication is 'posted', so the normal
+       backoff machinery no longer applies to it — and a blind retry risks a SECOND
+       comment on a live post, which is worse than a missing one. It fails once,
+       visibly, and waits for a human.
+    3. It must not be silent. 'failed' plus the reason lands on the row, per the
+       project's failures-are-visible rule.
+
+    'pending' is written BEFORE the attempt so a worker that dies mid-call leaves a
+    visibly stuck row rather than a 'none' that looks like there was no work to do.
+    """
+    commenter = _COMMENTERS[platform]
+    # Nothing to say, or a platform with no first-comment concept. Both leave the status
+    # at its 'none' default — 'failed' here would cry wolf on every Discord post.
+    if not message or commenter is None:
+        return
+
+    db.update_publication(
+        conn, pub["id"], first_comment_status="pending", updated_at=_iso(now)
+    )
+    try:
+        comment_id = commenter(
+            client, account_id, message, media_id, token, config, sleep_fn
+        )
+    except Exception as exc:  # noqa: BLE001 — a comment failure must never escape
+        # redact() for the same reason _mark_failure does it: this text is rendered
+        # straight into the dashboard, and an exception string can carry a token.
+        db.update_publication(
+            conn, pub["id"],
+            first_comment_status="failed", first_comment_error=redact(str(exc)),
+            updated_at=_iso(now),
+        )
+        log(f"first comment FAILED (post is live and unaffected): {redact(str(exc))}")
+        return
+    db.update_publication(
+        conn, pub["id"],
+        first_comment_status="posted", first_comment_remote_id=comment_id,
+        first_comment_error=None, updated_at=_iso(now),
+    )
+    log(f"first comment -> {comment_id}")
+
+
+def run_first_comment_retries(conn, config, client, now, *, logger=None,
+                              client_for=None, dry_run=False, sleep_fn=time.sleep) -> int:
+    """Re-attempt first comments a human explicitly asked to retry. Returns the count.
+
+    Only rows carrying first_comment_retry_requested=1 are touched — never a 'failed'
+    row on its own. That flag is the whole safety property: the media is live, so
+    "retry" has to be a decision someone made, not something the poll loop concludes.
+
+    The flag is cleared whether the retry succeeds or fails, exactly like the avatar
+    refresh handshake: a click means one more attempt, not a permanent retry loop.
+    """
+    rows = conn.execute(
+        """SELECT p.*, po.first_comment AS post_first_comment
+             FROM publications p
+             JOIN posts po ON po.id = p.post_id
+            WHERE p.first_comment_retry_requested = 1
+              AND p.status = 'posted'
+              AND p.is_dry_run = 0
+              AND p.remote_post_id IS NOT NULL"""
+    ).fetchall()
+    if not rows:
+        return 0
+    if dry_run:
+        # A retry posts to a live account, so it must not run in dry-run. The request is
+        # LEFT SET rather than cleared, so it happens once dry-run is switched off
+        # instead of being silently swallowed.
+        if logger:
+            logger.info("DRY-RUN: %d first-comment retry request(s) left queued", len(rows))
+        return 0
+
+    pick_client = client_for or (lambda _platform: client)
+    done = 0
+    for pub in rows:
+        channel = db.get_channel(conn, pub["channel_id"])
+        if channel is None:
+            continue
+
+        def log(msg, pub_id=pub["id"]):
+            if logger:
+                logger.info("[pub %s] %s", pub_id, msg)
+
+        # Clear the request FIRST. If the attempt then crashes the process, the retry
+        # does not silently repeat on the next cycle — which, on a live post, could
+        # leave two identical comments.
+        db.update_publication(
+            conn, pub["id"], first_comment_retry_requested=0, updated_at=_iso(now)
+        )
+        try:
+            pub_client = pick_client(channel["platform"])
+        except UnknownPlatform:
+            continue
+        _post_first_comment(
+            conn, pub, pub_client,
+            platform=channel["platform"],
+            account_id=channel["remote_account_id"],
+            message=_normalise_comment(pub["post_first_comment"]),
+            media_id=pub["remote_post_id"],
+            token=channel["access_token"],
+            config=config, sleep_fn=sleep_fn, now=now, log=log,
+        )
+        done += 1
+    return done
 
 
 def _mark_failure(conn, pub, config, now, error: str, terminal: bool) -> PublishOutcome:
@@ -798,6 +986,15 @@ def publish_one(
         conn, pub["id"],
         status="posted", remote_post_id=media_id, published_at=_iso(now),
         last_error=None, next_retry_at=None, updated_at=_iso(now),
+    )
+    # 5. First comment — AFTER the row says 'posted', and deliberately outside every
+    #    failure path above. The media is live and cannot be unpublished, so a comment
+    #    failure is recorded on its own columns and changes nothing else.
+    _post_first_comment(
+        conn, pub, client,
+        platform=plan["platform"], account_id=plan["account_id"],
+        message=plan["first_comment"], media_id=media_id, token=token,
+        config=config, sleep_fn=sleep_fn, now=now, log=log,
     )
     if post["content_kind"] == "one_time":
         _maybe_retire_one_time(conn, post["id"], now)

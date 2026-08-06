@@ -63,6 +63,21 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
     router.refresh();
   }
 
+  async function retryComment() {
+    setError(null);
+    setBusy(true);
+    const res = await fetch(`/api/publications/${send.id}/retry-comment`, {
+      method: "POST",
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setError(b.error ?? "Something went wrong.");
+      return;
+    }
+    router.refresh();
+  }
+
   async function doRemove() {
     setError(null);
     setBusy(true);
@@ -171,6 +186,45 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
             >
               Remove
             </button>
+          )}
+        </div>
+      ) : null}
+
+      {/* The first comment's own outcome. Only shown when there is something to say:
+          'none' is the overwhelmingly common case (no first comment written) and a badge
+          on every send saying so would be noise. A FAILED comment must be visible here —
+          the post itself went out fine, so nothing else on this row hints at it. */}
+      {send.first_comment_status !== "none" ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-sunken px-2.5 py-1.5">
+          <span className="text-[11px] font-medium text-muted">First comment</span>
+          {send.first_comment_status === "posted" ? (
+            <span className="text-[11px] text-ink-soft">Posted</span>
+          ) : send.first_comment_status === "pending" ? (
+            <span className="text-[11px] text-ink-soft">
+              {send.first_comment_retry_requested === 1
+                ? "Retry queued — the worker will pick it up."
+                : "In progress…"}
+            </span>
+          ) : (
+            <>
+              <span className="text-[11px] font-medium text-status-failed">
+                Failed — the post itself went out fine.
+              </span>
+              {send.first_comment_error ? (
+                <span className="data text-[11px] text-muted">{send.first_comment_error}</span>
+              ) : null}
+              {send.first_comment_retry_requested === 1 ? (
+                <span className="text-[11px] text-ink-soft">Retry queued.</span>
+              ) : (
+                <button
+                  onClick={retryComment}
+                  disabled={busy}
+                  className="rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted hover:border-brand hover:text-brand disabled:opacity-50"
+                >
+                  {busy ? "Queueing…" : "Retry comment"}
+                </button>
+              )}
+            </>
           )}
         </div>
       ) : null}

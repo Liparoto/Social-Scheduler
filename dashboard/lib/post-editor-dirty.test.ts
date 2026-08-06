@@ -17,6 +17,8 @@ function clean(over: Partial<DirtyCheckInput> = {}): DirtyCheckInput {
     initialKind: "evergreen",
     cooldown: "",
     initialCooldownDays: null,
+    firstComment: "",
+    initialFirstComment: null,
     ...over,
   };
 }
@@ -103,4 +105,34 @@ test("whitespace around an unchanged cooldown is NOT dirty", () => {
 
 test("blank and null mean the same thing — use the channel default", () => {
   assert.equal(isPostDirty(clean({ cooldown: "   ", initialCooldownDays: null })), false);
+});
+
+// ---- first comment: goes out WITH the post, so unsaved edits must block "Post now" ----
+
+test("adding a first comment is dirty", () => {
+  assert.equal(isPostDirty(clean({ firstComment: "#tags", initialFirstComment: null })), true);
+});
+
+test("changing a first comment is dirty", () => {
+  assert.equal(
+    isPostDirty(clean({ firstComment: "#new", initialFirstComment: "#old" })),
+    true
+  );
+});
+
+test("clearing a first comment is dirty", () => {
+  assert.equal(isPostDirty(clean({ firstComment: "", initialFirstComment: "#old" })), true);
+});
+
+test("whitespace-only first-comment churn is NOT dirty", () => {
+  // save() trims and collapses empty to null — match it, or every post with a first
+  // comment reads as permanently unsaved.
+  assert.equal(
+    isPostDirty(clean({ firstComment: " #tags ", initialFirstComment: "#tags" })),
+    false
+  );
+});
+
+test("blank and null first comments mean the same thing", () => {
+  assert.equal(isPostDirty(clean({ firstComment: "  ", initialFirstComment: null })), false);
 });

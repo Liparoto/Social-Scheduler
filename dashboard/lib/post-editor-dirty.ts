@@ -25,6 +25,9 @@ export interface DirtyCheckInput {
   /** Raw editor string. "" means "use the channel default" — same as a null column. */
   cooldown: string;
   initialCooldownDays: number | null;
+  /** Raw editor string; "" (or whitespace) means no first comment, same as a null column. */
+  firstComment: string;
+  initialFirstComment: string | null;
 }
 
 /** Stable comparable form of a target set — channel AND surface, order-independent. */
@@ -51,6 +54,11 @@ function normalizedCooldown(cooldown: string): number | null {
   return cooldown.trim() === "" ? null : Number(cooldown);
 }
 
+/** The first comment as save() sends it: trimmed, and empty collapsed to null. */
+function normalizedFirstComment(value: string | null): string | null {
+  return value?.trim() || null;
+}
+
 export function isPostDirty(input: DirtyCheckInput): boolean {
   return (
     normalizedCaptions(input.captions) !== normalizedCaptions(input.initialCaptions) ||
@@ -63,6 +71,10 @@ export function isPostDirty(input: DirtyCheckInput): boolean {
     // every new post by unmergeCarousel, so leaving them out made the guard lie about
     // exactly the fields a split silently carries over.
     input.kind !== input.initialKind ||
-    normalizedCooldown(input.cooldown) !== input.initialCooldownDays
+    normalizedCooldown(input.cooldown) !== input.initialCooldownDays ||
+    // The first comment goes out with the post, so an unsaved edit to it is exactly the
+    // kind of staleness this guard exists for: "Post now" would publish the old hashtags.
+    normalizedFirstComment(input.firstComment) !==
+      normalizedFirstComment(input.initialFirstComment)
   );
 }

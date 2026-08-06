@@ -624,7 +624,29 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       against the live API on the first real Story (no 400, `views: 6` recorded). The
       supported names were established by probing, not guessing: `taps_forward`/`taps_back`/
       `exits` are REJECTED, `navigation` and `views` replace them. See reference.md.
-- [ ] First-comment automation (post-publish comment endpoint).
+- [x] **First-comment automation** — VERIFIED LIVE 2026-08-06 on post 91: Instagram
+      comment `18112425109948908` on media `17890533954412393` (`comments_count: 1`
+      confirms it), and Threads reply `18614912674002589` under thread
+      `17995486442803965`. `instagram_business_manage_comments` is therefore confirmed
+      present on the live token — the read-only probe was right.
+      Two things learned only from the live run: (1) Threads ate the leading `#` as the
+      post's `topic_tag` (see reference.md — platform behaviour, not our bug); (2) the IG
+      comments EDGE reads empty for a fresh comment even though `comments_count` is 1, so
+      verify a comment by count, not by listing the edge.
+      See `docs/plan-first-comment.md`. Until now the field was collected by
+      the composer, stored, carried into the publish plan, and then never read by anything:
+      no comment was ever posted, on any platform. Now:
+      Instagram posts to the media's comment edge; Threads posts a self-reply
+      (`reply_to_id`) since it has no comment edge; Facebook is written but UNVERIFIED
+      (no FB channel to test against). The attempt happens strictly AFTER the publication
+      is marked `posted`, and a comment failure can never downgrade a live post — it lands
+      on `first_comment_status`/`first_comment_error` (migration 0017) and nowhere else.
+      No automatic retry (a blind retry risks a second comment on a live post): retrying is
+      an explicit dashboard action that sets `first_comment_retry_requested`, swept by the
+      worker, cleared whether it succeeds or fails. The field is also editable AFTER
+      creation now — before, only the composer could set it, so bulk-imported and extracted
+      posts could never have one at all.
+      Facebook remains the one unverified adapter (no FB channel on this install).
 - [ ] Approval-workflow UI (activates the `requires_approval` flag).
 
 ### Verification
