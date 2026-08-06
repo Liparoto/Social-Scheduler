@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from . import db
-from .bpp import BPP_MIN_REACH, is_recycle_slot, merge_recycle_slots
+from .bpp import bpp_slot_indices
 from .clients import PLATFORM_CAPS
 from .config import Config
 from .periods import in_season, local_date, period_from_row
@@ -175,31 +175,7 @@ def select_candidates(conn, channel_id: int, now):
              FROM post_metrics pm
              JOIN publications p3 ON p3.id = pm.publication_id
              WHERE p3.post_id = p.id AND p3.channel_id = :cid
-          ) AS perf,
-          -- BPP score: interactions per person reached, best across this post's runs on
-          -- this channel. NULL when nothing clears :bpp_min_reach, which the ranking
-          -- treats as "not enough evidence" rather than "performed badly" (see
-          -- worker/bpp.py). `perf` above is left untouched — it still orders the normal
-          -- tier, and changing it would alter selection even with BPP switched off.
-          --
-          -- The LATEST snapshot per publication, not the best: an early reading has both
-          -- low reach and low interactions, so taking the flattering moment from a noisy
-          -- series would reward noise.
-          (SELECT MAX(
-             (IFNULL(pm.likes,0) + IFNULL(pm.comments,0)
-              + IFNULL(pm.saves,0) + IFNULL(pm.shares,0)) * 1.0 / pm.reach)
-             FROM publications p4
-             JOIN post_metrics pm ON pm.id = (
-               SELECT id FROM post_metrics WHERE publication_id = p4.id
-               ORDER BY fetched_at DESC, id DESC LIMIT 1)
-             WHERE p4.post_id = p.id AND p4.channel_id = :cid
-               AND pm.reach IS NOT NULL AND pm.reach >= :bpp_min_reach
-          ) AS bpp_rate,
-          (SELECT COALESCE(MAX(pm.reach), 0)
-             FROM post_metrics pm
-             JOIN publications p5 ON p5.id = pm.publication_id
-             WHERE p5.post_id = p.id AND p5.channel_id = :cid
-          ) AS bpp_reach
+          ) AS perf
         FROM posts p
         WHERE p.content_status = 'ready'
           AND {_TYPE_CAPABILITY_SQL}
@@ -221,21 +197,10 @@ def select_candidates(conn, channel_id: int, now):
           last_posted ASC,
           p.created_at ASC
         """,
-        {"cid": channel_id, "bpp_min_reach": BPP_MIN_REACH, **cap_params},
+        {"cid": channel_id, **cap_params},
     ).fetchall()
     return rows
 
-
-def rank_proven(rows) -> list:
-    """The recycle-slot pool: rows with a real score, best rate first.
-
-    Rows without a score are DROPPED rather than sorted last. A recycle slot exists to
-    run something proven; filling it from the unscored pile would make it an ordinary
-    slot wearing a badge that says otherwise, and _fill_unit already falls back to normal
-    selection when this comes back short.
-    """
-    scored = [r for r in rows if r["bpp_rate"] is not None]
-    return sorted(scored, key=lambda r: (r["bpp_rate"], r["bpp_reach"]), reverse=True)
 
 
 def _post_periods(conn, post_id: int):
@@ -310,7 +275,7 @@ def capable_post_ids(conn, channel) -> set[int]:
 
 
 def eligible_candidates(conn, channel, now, limit: int | None, *,
-                        reuse_default=None, timezone_name=None):
+                        reuse_default=None, timezone_name=None, skip_cooldown=False):
     """Apply cooldown, one-time, period, and caption-length gates to the SQL candidates;
     return <= limit (or all of them when limit is None).
 
@@ -329,6 +294,11 @@ def eligible_candidates(conn, channel, now, limit: int | None, *,
         if r["content_kind"] == "one_time":
             if last is not None:
                 continue  # one-time: only if this channel hasn't posted it
+        elif last is not None and skip_cooldown:
+            # A BPP pool ignores the reuse window — the owner marked the post AND set the
+            # frequency, so the cadence is the decision. One-time content is still
+            # excluded above: "never repost this" outranks "repost my best".
+            pass
         elif last is not None:
             cooldown = r["cooldown_days"] if r["cooldown_days"] is not None else reuse_default
             if parse_iso(last) > now - timedelta(days=cooldown):
@@ -361,9 +331,6 @@ def group_rank(conn, member_ids: list[int], post_ids) -> list:
         return []
     mq = ",".join("?" * len(member_ids))
     pq = ",".join("?" * len(post_ids))
-    min_reach = BPP_MIN_REACH  # bound into the f-string, not a parameter, so the
-                               # placeholder order above stays readable
-
     return conn.execute(
         f"""
         SELECT
@@ -377,31 +344,7 @@ def group_rank(conn, member_ids: list[int], post_ids) -> list:
              FROM post_metrics pm
              JOIN publications p3 ON p3.id = pm.publication_id
              WHERE p3.post_id = p.id AND p3.channel_id IN ({mq})
-          ) AS perf,
-          -- BPP score, MAX across members for the same reason perf is (see the docstring):
-          -- Threads reports no reach, so its rate is always NULL, and any combination
-          -- other than "best member" would let a member that cannot measure drag down a
-          -- score driven entirely by Instagram's real numbers.
-          --
-          -- This MUST stay in step with select_candidates' copy. The solo path and the
-          -- group path are different queries returning rows the same code reads, so a
-          -- column present in one and absent from the other is not a wrong number — it is
-          -- an IndexError on the publish path, which is exactly how this was found.
-          (SELECT MAX(
-             (IFNULL(pm.likes,0) + IFNULL(pm.comments,0)
-              + IFNULL(pm.saves,0) + IFNULL(pm.shares,0)) * 1.0 / pm.reach)
-             FROM publications p4
-             JOIN post_metrics pm ON pm.id = (
-               SELECT id FROM post_metrics WHERE publication_id = p4.id
-               ORDER BY fetched_at DESC, id DESC LIMIT 1)
-             WHERE p4.post_id = p.id AND p4.channel_id IN ({mq})
-               AND pm.reach IS NOT NULL AND pm.reach >= {min_reach}
-          ) AS bpp_rate,
-          (SELECT COALESCE(MAX(pm.reach), 0)
-             FROM post_metrics pm
-             JOIN publications p5 ON p5.id = pm.publication_id
-             WHERE p5.post_id = p.id AND p5.channel_id IN ({mq})
-          ) AS bpp_reach
+          ) AS perf
         FROM posts p
         WHERE p.id IN ({pq})
         ORDER BY
@@ -410,11 +353,12 @@ def group_rank(conn, member_ids: list[int], post_ids) -> list:
           last_posted ASC,
           p.created_at ASC
         """,
-        (*member_ids, *member_ids, *member_ids, *member_ids, *post_ids),
+        (*member_ids, *member_ids, *post_ids),
     ).fetchall()
 
 
-def group_eligible_candidates(conn, group, members, now, limit: int | None):
+def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
+                              skip_cooldown=False):
     """Ranked (candidate_row, [member channels to receive it]) for a channel group.
 
     A post P is group-eligible when BOTH hold:
@@ -446,7 +390,8 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None):
         allowed[m["id"]] = {
             r["post_id"]
             for r in eligible_candidates(
-                conn, m, now, None, reuse_default=reuse_default, timezone_name=tz_name
+                conn, m, now, None, reuse_default=reuse_default, timezone_name=tz_name,
+                skip_cooldown=skip_cooldown,
             )
         }
 
@@ -513,6 +458,167 @@ def _setting(settings, name: str, default=0):
     return default if value is None else value
 
 
+def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> list:
+    """The owner's marked posts that could go out on this channel, whose turn first.
+
+    Ordered by when each last went out, oldest first, so the pool ROTATES: every marked
+    post is used before any repeats. That is the behaviour being reproduced — a set of
+    keepers cycled through, not a favourite replayed.
+
+    `skip_cooldown=True` is the one rule a BPP is allowed past, and only because the owner
+    chose both the marks and the frequency: a pool of four on a monthly cadence means each
+    post returns every four months, which a 90-day reuse window would silently veto,
+    leaving the feature looking broken rather than declining. One-time content is still
+    excluded — "never repost this" outranks "repost my best".
+    """
+    marked = {
+        row["id"]
+        for row in conn.execute("SELECT id FROM posts WHERE is_bpp = 1").fetchall()
+    }
+    if not marked:
+        return []
+    rows = eligible_candidates(
+        conn, channel, now, None, reuse_default=reuse_default,
+        timezone_name=timezone_name, skip_cooldown=True,
+    )
+    pool = [r for r in rows if r["post_id"] in marked]
+    # None sorts first: a marked post never sent on THIS channel is the stalest of all.
+    pool.sort(key=lambda r: (r["last_posted"] is not None, r["last_posted"] or ""))
+    return pool
+
+
+def _last_bpp_date(conn, member_ids: list[int]):
+    """The date the unit last had a BPP scheduled, or None if never.
+
+    Reads scheduled_at, not published_at, and counts queued rows as well as sent ones —
+    otherwise every cycle would re-measure the gap against the last SENT one and stack
+    several BPPs into a queue that already had one waiting.
+    """
+    if not member_ids:
+        return None
+    placeholders = ",".join("?" * len(member_ids))
+    row = conn.execute(
+        f"SELECT MAX(scheduled_at) AS d FROM publications "
+        f"WHERE channel_id IN ({placeholders}) AND is_recycled = 1",
+        member_ids,
+    ).fetchone()
+    if not row or not row["d"]:
+        return None
+    return parse_iso(row["d"]).date()
+
+
+def _apply_bpp(conn, unit, settings, now, need, candidates, every_days, cadence, config,
+               last_future, logger):
+    """Place BPPs into the slots whose dates fall due, and pick whose turn it is.
+
+    Returns the reordered candidate list plus {post_id: was_recycled}.
+
+    The slot DATES have to be known before it can be decided which are due, but a slot's
+    TIME depends on the post that lands in it (time-of-day tags). So the dates are
+    projected first using the cadence's own time — dates come from the weekday pattern and
+    are unaffected by that choice — and _fill_unit recomputes the real times afterwards
+    from whatever ends up selected.
+    """
+    weekdays, hour, minute = cadence
+    after = parse_iso(last_future) if last_future else now
+    projected = weekly_date_slots(
+        weekdays, settings["timezone"], after, [(hour, minute)] * max(need, 0)
+    )
+    if not projected:
+        return candidates, {}
+
+    due = bpp_slot_indices(
+        [slot.date() for slot in projected],
+        _last_bpp_date(conn, [m["id"] for m in unit.members]),
+        every_days,
+    )
+    if not due:
+        return candidates, {}
+
+    if unit.is_group:
+        pool = _group_bpp_pool(conn, settings, unit.members, now)
+    else:
+        ch = unit.members[0]
+        pool = [(r, [ch]) for r in bpp_pool(conn, ch, now)]
+
+    if not pool:
+        if logger:
+            logger.info(
+                "[autofill %s] a BPP slot came due but the pool is empty — mark some posts "
+                "in the dashboard, or this stays ordinary auto-fill", unit.label,
+            )
+        return candidates, {}
+
+    merged = _merge_bpp_slots(candidates, pool, due, len(projected))
+    ordered = [item for item, _ in merged]
+    flags = {item[0]["post_id"]: was_bpp for item, was_bpp in merged}
+    if logger and any(flags.values()):
+        chosen = [pid for pid, yes in flags.items() if yes]
+        logger.info(
+            "[autofill %s] BPP: %d slot(s) from a pool of %d — post(s) %s",
+            unit.label, len(chosen), len(pool), ", ".join(str(p) for p in chosen),
+        )
+    return ordered, flags
+
+
+def _group_bpp_pool(conn, group, members, now) -> list:
+    """The group's BPP pool as (row, recipients) pairs.
+
+    Reuses group_eligible_candidates for the recipient logic — which members can take a
+    post, and whether a rule blocks the whole group — so a BPP is delivered on exactly the
+    same terms as any other pick and cannot land on a subset of the group.
+    """
+    marked = {
+        row["id"]
+        for row in conn.execute("SELECT id FROM posts WHERE is_bpp = 1").fetchall()
+    }
+    if not marked:
+        return []
+    pairs = [
+        (row, recipients)
+        for row, recipients in group_eligible_candidates(
+            conn, group, members, now, None, skip_cooldown=True
+        )
+        if row["post_id"] in marked
+    ]
+    pairs.sort(key=lambda rm: (rm[0]["last_posted"] is not None, rm[0]["last_posted"] or ""))
+    return pairs
+
+
+def _merge_bpp_slots(normal, pool, due_positions, total):
+    """Put a pool pick in each due slot, everything else as usual.
+
+    Returns [(item, is_bpp), ...]. No post can appear twice — the pool and the normal
+    list are drawn from the same library, so without the guard a BPP could be queued
+    again by the very next ordinary slot. A due slot with the pool exhausted falls back
+    to normal selection and is NOT flagged, because it is not one.
+    """
+    used: set = set()
+    out: list = []
+    normal_i = pool_i = 0
+
+    def take(items, index):
+        while index < len(items):
+            candidate = items[index]
+            index += 1
+            if candidate[0]["post_id"] not in used:
+                return candidate, index
+        return None, index
+
+    for position in range(total):
+        item, is_bpp = None, False
+        if position in due_positions:
+            item, pool_i = take(pool, pool_i)
+            is_bpp = item is not None
+        if item is None:
+            item, normal_i = take(normal, normal_i)
+        if item is None:
+            break
+        used.add(item[0]["post_id"])
+        out.append((item, is_bpp))
+    return out
+
+
 def _unit_publication_count(conn, member_ids: list[int]) -> int:
     """How many publications this unit has ever had — the sequence recycle slots count on.
 
@@ -529,52 +635,6 @@ def _unit_publication_count(conn, member_ids: list[int]) -> int:
     ).fetchone()
     return row[0] or 0
 
-
-def _apply_bpp(conn, unit, settings, now, need, candidates, every_n, logger):
-    """Swap proven performers into this batch's recycle positions.
-
-    Returns the reordered candidate list plus {post_id: was_recycled}.
-
-    The proven pool is fetched with NO limit, unlike the normal path: the normal query
-    stops at `need` and — with 100 unposted items ahead of 11 posted ones — would return
-    nothing proven at all. Fetching everything is why this only runs when BPP is on.
-    """
-    base = _unit_publication_count(conn, [m["id"] for m in unit.members])
-    recycle_positions = {i for i in range(need) if is_recycle_slot(base + i, every_n)}
-    if not recycle_positions:
-        return candidates, {}
-
-    if unit.is_group:
-        pool = group_eligible_candidates(conn, settings, unit.members, now, None)
-    else:
-        ch = unit.members[0]
-        pool = [(r, [ch]) for r in eligible_candidates(conn, ch, now, None)]
-    proven = [(row, members) for row, members in pool if row["bpp_rate"] is not None]
-    proven.sort(key=lambda rm: (rm[0]["bpp_rate"], rm[0]["bpp_reach"]), reverse=True)
-
-    if not proven:
-        # Nothing has cleared the evidence floor yet. Normal selection, no badge — an
-        # ordinary slot must never be labelled a recycle.
-        if logger:
-            logger.info(
-                "[autofill %s] BPP on (every %d) but nothing proven yet — normal selection",
-                unit.label, every_n,
-            )
-        return candidates, {}
-
-    merged = merge_recycle_slots(
-        candidates, proven, recycle_positions, need,
-        key=lambda rm: rm[0]["post_id"],
-    )
-    ordered = [item for item, _ in merged]
-    flags = {item[0]["post_id"]: was_recycled for item, was_recycled in merged}
-    if logger and any(flags.values()):
-        picked = [pid for pid, yes in flags.items() if yes]
-        logger.info(
-            "[autofill %s] BPP recycled %d slot(s): post(s) %s",
-            unit.label, len(picked), ", ".join(str(p) for p in picked),
-        )
-    return ordered, flags
 
 
 def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logger) -> int:
@@ -611,21 +671,17 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
         ch = unit.members[0]
         candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, need)]
 
-    # BPP: hand a share of the slots to proven performers instead of the next unposted
-    # item. Off unless the unit sets it, and when off the SELECTION is unchanged — no
-    # reordering, no recycle flag, and none of the unbounded candidate work in _apply_bpp.
+    # BPP: give some slots to posts the OWNER marked as worth reposting, on their own
+    # cadence in days. Nothing here judges content — the mark is the judgement, made by a
+    # person looking at the stats (see worker/bpp.py for why an algorithm cannot).
     #
-    # Not free, though: select_candidates and group_rank compute bpp_rate/bpp_reach on
-    # every call whether or not this is on. Two more correlated subqueries per candidate
-    # query, paid by every install. That is deliberate — one query shape is far easier to
-    # keep the solo and group paths in step on than two, and keeping them in step is
-    # exactly what this feature already got wrong once — but "off" means off in behaviour,
-    # not in cost, and the comment that used to claim otherwise was simply wrong.
-    every_n = _setting(settings, "bpp_every_n_slots")
+    # Off unless the unit sets a cadence, and when off none of this runs.
+    every_days = _setting(settings, "bpp_every_days")
     recycled_flags: dict[int, bool] = {}
-    if every_n > 0 and candidates:
+    if every_days > 0:
         candidates, recycled_flags = _apply_bpp(
-            conn, unit, settings, now, need, candidates, every_n, logger
+            conn, unit, settings, now, need, candidates, every_days, cadence, config,
+            last_future, logger,
         )
 
     if not candidates:

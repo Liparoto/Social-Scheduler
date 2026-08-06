@@ -1827,3 +1827,48 @@ into slots and delivered to every group member at one shared time.
       placeholders) and thumbnails are downscaled re-encodes, so no hash agrees. A manual
       "link this post to that one" UI would unlock the whole history and needs the owner's
       judgement per post.
+
+---
+
+## Phase — BPP, rebuilt as curation  ·  2026-08-06
+
+Design: `docs/design-bpp-recycling.md`. The owner described their real workflow and it is
+not what the first version assumed.
+
+### The model changed
+- [x] **Marking is a human decision, not a score.** The first version ranked posts by
+      engagement rate and would have recycled a 59-reach post ahead of one with 1,462 reach
+      and 151 interactions — a small denominator inflates a rate, exactly as raw reach
+      over-rewards distribution. There is no scalar for "this deserves another run".
+      `posts.is_bpp` is set by a person; nothing sets it automatically.
+- [x] **Cadence in DAYS, not slots** (`bpp_every_days`). "One a month" is how the owner
+      thinks, and it keeps meaning the same thing when the posting cadence changes — it is
+      a dial they turn up when the account is having a rough stretch.
+- [x] **The pool rotates**, oldest-sent first, so every keeper is used before any repeats.
+- [x] **A BPP may pass the reuse window** — the owner chose both the marks and the
+      frequency, and a small pool on a tight cadence would otherwise be silently vetoed and
+      look broken. One-time content is still never reposted.
+- [x] **Consequence shown, not just the setting:** "2 posts marked · each comes back
+      roughly every 28 days", with a warning under 90 days. The owner asked for exactly this.
+
+### Surfacing candidates
+- [x] Standouts are per-metric and relative to the account: top 5% on one metric, or top
+      10% on two or more — matching "way above average likes" OR "saved a ton" OR "multiple
+      metrics well above average". The badge names the metrics, never a score.
+- [x] **A metric must be able to discriminate before it can crown anything.** Recomputed
+      per account: this account's saves have a median of 0 and a top-10% cutoff of 1, so
+      saves are skipped HERE — on an account whose audience saves, they rank like anything
+      else. Saves are collected for every account regardless.
+- [x] A "★ Standouts" filter turns a 146-row review into a short list.
+
+### Verified
+720 worker + 401 dashboard tests, 0 lint errors, clean typecheck. Badges render with real
+reasons ("top 5% · reach, views, likes").
+
+### Blocking the feature being useful — NEXT
+- [ ] **Link library posts to their original Instagram posts.** Measured after building:
+      **21 standouts, 0 markable** — every top performer predates this install, so none has
+      a library entry to repost. Captions match 6 of 111 (Notes import left 🔺
+      placeholders), thumbnails are re-encodes so hashes cannot match, and created_at is
+      import time. A manual "this post is that post" UI unlocks the back catalogue; the
+      pool otherwise fills only from new posts going forward.

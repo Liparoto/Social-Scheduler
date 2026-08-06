@@ -106,19 +106,28 @@ Suggested starting value: **4** (one slot in four is a repeat).
 
 ## What this does NOT do, and why
 
-**It cannot use the 146 posts already on the account.** Only 11 library posts have any
-metrics, because metrics attach to publications *this tool made*. The other 146 real
-Instagram posts live in `remote_media` with no link to a library post.
+**It cannot reach the posts you would most want to mark — yet.**
 
-Bridging them was investigated and rejected: matching library posts to real posts by
-caption succeeds for **6 of 111**, because the Apple Notes import left placeholder captions
-(mostly a bare 🔺). Image matching is not possible either — the stored thumbnails are
-downscaled re-encodes, so no content hash agrees with the local originals.
+Marking requires a library post: something with the caption and image files needed to send
+it again. Metrics attach to publications *this tool made*, and the 146 other real Instagram
+posts sit in `remote_media` with no link to anything in the library.
 
-A manual "link this library post to this Instagram post" UI would work and would unlock a
-lot of history. It is real scope, needs the owner's judgement per post, and is recorded as
-follow-up rather than guessed at overnight.
+Measured on the live account after building it: **21 posts qualify as standouts, and 0 of
+them can be marked.** Every one predates this install. The mechanism works; it has almost
+nothing to act on today.
 
-**Practical consequence:** BPP is thin *today* (11 posts to draw on) and gets better every
-time something publishes. It is worth turning on now precisely because the pool grows on
-its own.
+Automatic bridging was tried and rejected:
+
+* **Captions** match for 6 of 111 — the Apple Notes import left placeholders (mostly a bare
+  🔺), so there is nothing to match on.
+* **Images** cannot be hashed against each other: the stored thumbnails are downscaled
+  re-encodes, so no content hash agrees with the local originals.
+* **Dates** do not help either — `posts.created_at` is when the import ran, not when the
+  post went out.
+
+So the pool fills from here forward: everything published through this tool carries both a
+library entry and metrics, and becomes markable the moment it has numbers.
+
+**The unblocker is a manual link** — "this library post is that Instagram post" — which
+would make the whole back catalogue markable at once. It is real scope and needs a
+judgement per post, so it is recorded as the next piece of work rather than guessed at.

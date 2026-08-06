@@ -3,14 +3,15 @@ import { notFound } from "next/navigation";
 import { ChannelAvatar } from "@/components/ui";
 import { HBarList, HeatGrid, TrendChart, YearRibbon } from "@/components/charts";
 import { InsightsRefresh } from "@/components/insights-refresh";
+import { BppMark } from "@/components/bpp-mark";
 import {
-  getAccountDays, getChannelCounts, getChannelPosts, getDemographics,
-  getInsightsChannel, pickDemographics,
+  getAccountDays, getBppFlags, getBppPool, getChannelCounts, getChannelPosts,
+  getDemographics, getInsightsChannel, getLibraryPostIds, pickDemographics,
 } from "@/lib/insights-queries";
 import {
   GENDER_LABELS, POST_SORTS, RANGES, bestTimeGrid, buildKpis, compact, densify,
   engagementOf, exact, formatDelta, latestMetric, postKindLabel, postKinds, rangeDays,
-  sortAgeBuckets, sortPosts, topBuckets, windowRows,
+  sortAgeBuckets, sortPosts, standoutsFor, topBuckets, windowRows,
   type MetricKey, type PostSortKey,
 } from "@/lib/insights";
 import { channelColor, tzAbbrev } from "@/lib/format";
@@ -161,6 +162,14 @@ export default async function ChannelInsightsPage({
   const counts = getChannelCounts(channel.id);
   const posts = getChannelPosts(channel.id);
   const demographics = getDemographics(channel.id);
+  // Ranked across everything synced for this account, not the chart range: a post that
+  // did exceptionally well eighteen months ago is still one of the best things here, and
+  // curation is a judgement about the content rather than about a reporting window.
+  const standouts = standoutsFor(posts);
+  const libraryPostIds = getLibraryPostIds(channel.id);
+  const bppFlags = getBppFlags();
+  const pool = getBppPool(channel.id);
+  const standoutsOnly = query.standouts === "1";
 
   const kpis = buildKpis(allDays, metricList, days);
   const activeKpi = kpis.find((k) => k.key === activeMetric.key);
@@ -180,11 +189,15 @@ export default async function ChannelInsightsPage({
   const filtered = kindFilter === "all"
     ? posts
     : posts.filter((p) => postKindLabel(p) === kindFilter);
-  const ranked = sortPosts(filtered, sortKey).slice(0, 25);
+  const shortlist = standoutsOnly
+    ? filtered.filter((p) => standouts.get(p.id)?.isCandidate)
+    : filtered;
+  const ranked = sortPosts(shortlist, sortKey).slice(0, 25);
+  const standoutCount = posts.filter((p) => standouts.get(p.id)?.isCandidate).length;
 
   const withParam = (key: string, value: string) => {
     const next = new URLSearchParams();
-    for (const [k, v] of Object.entries({ range: rangeKey, metric: metricKey, sort: sortKey, kind: kindFilter })) {
+    for (const [k, v] of Object.entries({ range: rangeKey, metric: metricKey, sort: sortKey, kind: kindFilter, standouts: standoutsOnly ? "1" : "" })) {
       if (v) next.set(k, String(v));
     }
     next.set(key, value);
@@ -332,7 +345,13 @@ export default async function ChannelInsightsPage({
         {/* Leaderboard */}
         <Section
           title="Top content"
-          hint={`${counts.withMetrics} of ${counts.posts} posts have metrics · ${counts.ours} were scheduled here`}
+          hint={
+            `${counts.withMetrics} of ${counts.posts} posts have metrics · ${counts.ours} scheduled here · ` +
+            `${pool.usable} marked BPP for this account` +
+            (standoutsOnly
+              ? " — showing posts in the top 5% of one metric, or the top 10% of two or more"
+              : "")
+          }
           action={
             <div className="flex flex-wrap items-center gap-3">
               <nav className="flex flex-wrap items-center gap-0.5">
@@ -341,6 +360,11 @@ export default async function ChannelInsightsPage({
                     {s.label}
                   </Pill>
                 ))}
+              </nav>
+              <nav className="flex items-center gap-0.5 border-l border-border pl-3">
+                <Pill href={withParam("standouts", standoutsOnly ? "" : "1")} active={standoutsOnly}>
+                  ★ Standouts ({standoutCount})
+                </Pill>
               </nav>
               {kinds.length > 1 ? (
                 <nav className="flex flex-wrap items-center gap-0.5 border-l border-border pl-3">
@@ -414,6 +438,21 @@ export default async function ChannelInsightsPage({
                               <span className="data text-[11px] text-faint">
                                 {post.published_at ? post.published_at.slice(0, 10) : "—"}
                               </span>
+                              {/* Names the metrics it led on, not a score — "saved far
+                                  more than usual" is something you can act on. */}
+                              {standouts.get(post.id)?.isCandidate ? (
+                                <span
+                                  className="rounded bg-accent-weak px-1.5 py-0.5 text-[10px] font-medium text-accent-strong"
+                                  title="Stands out against this account's own baseline"
+                                >
+                                  {standouts.get(post.id)!.reason}
+                                </span>
+                              ) : null}
+                              <BppMark
+                                postId={libraryPostIds[post.id] ?? null}
+                                initial={Boolean(bppFlags[libraryPostIds[post.id]])}
+                                compact
+                              />
                             </div>
                             <p className="mt-0.5 max-w-md truncate text-[13px] text-ink-soft">
                               {post.permalink ? (

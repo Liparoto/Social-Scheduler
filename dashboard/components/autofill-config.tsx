@@ -15,7 +15,9 @@ interface Props {
   minQueueDepth: number;
   targetQueueDepth: number;
   reuseMinAgeDays: number;
-  bppEveryNSlots: number;
+  bppEveryDays: number;
+  /** Marked posts this unit can actually send. */
+  bppPoolSize: number;
 }
 
 function parseCadence(raw: string | null): { days: string[]; time: string } {
@@ -42,7 +44,7 @@ export function AutofillConfig(props: Props) {
   const [minDepth, setMinDepth] = useState(props.minQueueDepth);
   const [target, setTarget] = useState(props.targetQueueDepth);
   const [reuseDays, setReuseDays] = useState(props.reuseMinAgeDays);
-  const [bpp, setBpp] = useState(props.bppEveryNSlots);
+  const [bpp, setBpp] = useState(props.bppEveryDays);
   const [pending, startT] = useTransition();
   const [saved, setSaved] = useState(false);
 
@@ -61,7 +63,7 @@ export function AutofillConfig(props: Props) {
         min_queue_depth: minDepth,
         target_queue_depth: target,
         reuse_min_age_days: reuseDays,
-        bpp_every_n_slots: bpp,
+        bpp_every_days: bpp,
       }),
     });
     setSaved(true);
@@ -153,7 +155,7 @@ export function AutofillConfig(props: Props) {
               />
             </label>
             <label className="text-xs text-ink-soft">
-              <span className="mb-1 block">Repost a winner every</span>
+              <span className="mb-1 block">Repost a BPP every (days)</span>
               <input
                 type="number"
                 min={0}
@@ -167,11 +169,46 @@ export function AutofillConfig(props: Props) {
           {/* Says what the number DOES, in slots, because "4" on its own is ambiguous —
               and states the 0 case, since off is the default and the reader needs to know
               they are looking at the off state rather than an unset one. */}
-          <p className="-mt-1 text-[11px] text-muted">
-            {bpp > 0
-              ? `1 in every ${bpp} auto-filled slots goes to a past post that performed well, instead of something new. Everything else — reuse window, cooldowns, seasons — still applies.`
-              : "0 = off. Auto-fill always picks unposted content first, so proven posts only come back once the library runs dry."}
-          </p>
+          {/* The consequence, not just the setting. "Every 14 days" with two posts
+              marked means each one reappears monthly — a number the owner would
+              otherwise have to work out, and the exact thing they asked to be obvious. */}
+          <div className="-mt-1 text-[11px]">
+            {bpp > 0 ? (
+              <>
+                <p className="text-muted">
+                  <span className="data text-ink-soft">{props.bppPoolSize}</span> post
+                  {props.bppPoolSize === 1 ? "" : "s"} marked BPP ·{" "}
+                  {props.bppPoolSize > 0 ? (
+                    <>
+                      each one comes back roughly every{" "}
+                      <span className="data text-ink-soft">
+                        {props.bppPoolSize * bpp}
+                      </span>{" "}
+                      days
+                    </>
+                  ) : (
+                    "nothing marked yet, so nothing will be reposted"
+                  )}
+                </p>
+                {props.bppPoolSize > 0 && props.bppPoolSize * bpp < 90 ? (
+                  <p className="mt-1 text-status-publishing">
+                    Small pool — the same posts will come round often. Mark more, or
+                    increase the gap.
+                  </p>
+                ) : null}
+                {props.bppPoolSize === 0 ? (
+                  <p className="mt-1 text-muted">
+                    Mark posts from <strong>Insights → your account → Top content</strong>.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-muted">
+                0 = off. Auto-fill picks unposted content first, so your best posts only
+                come back once the library runs dry.
+              </p>
+            )}
+          </div>
 
           <div className="flex items-center gap-3">
             <button

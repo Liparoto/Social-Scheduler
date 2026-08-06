@@ -1,3 +1,4 @@
+import { getBppPool } from "@/lib/insights-queries";
 import { getChannels, listChannelGroups, getGroupMembers } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { accountIdLabel, usesAccountId } from "@/lib/platforms";
@@ -26,7 +27,9 @@ export default function ChannelsPage() {
     min_queue_depth: g.min_queue_depth,
     target_queue_depth: g.target_queue_depth,
     reuse_min_age_days: g.reuse_min_age_days,
-    bpp_every_n_slots: g.bpp_every_n_slots,
+    bpp_every_days: g.bpp_every_days,
+    // Pool is measured against a MEMBER: a group sends what its members can send.
+    bpp_pool_size: getBppPool(getGroupMembers(g.id)[0]?.id ?? 0).usable,
     members: getGroupMembers(g.id).map((m) => ({
       id: m.id,
       account_name: m.account_name,
@@ -179,7 +182,8 @@ export default function ChannelsPage() {
                     minQueueDepth={c.min_queue_depth}
                     targetQueueDepth={c.target_queue_depth}
                     reuseMinAgeDays={c.reuse_min_age_days}
-                    bppEveryNSlots={c.bpp_every_n_slots ?? 0}
+                    bppEveryDays={c.bpp_every_days ?? 0}
+                    bppPoolSize={getBppPool(c.id).usable}
                   />
                 ) : (
                   <p className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3 text-xs text-muted">

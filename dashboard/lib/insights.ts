@@ -420,3 +420,85 @@ export function formatDelta(delta: number | null): string | null {
   const rounded = Math.abs(delta) >= 10 ? Math.round(delta) : Number(delta.toFixed(1));
   return `${delta > 0 ? "+" : ""}${rounded}%`;
 }
+
+/*
+  Standouts — which posts are worth a look, and why.
+
+  Deliberately mirrors worker/bpp.py rather than sharing with it (there is no shared
+  runtime between the Python worker and the Next dashboard; the database is the only
+  contract). The rules and the constants below are the same on both sides, and the
+  reasoning for each lives in that module.
+
+  Nothing here marks anything. It produces a hint and a reason; a person decides.
+*/
+
+export const STANDOUT_METRICS = [
+  "reach", "impressions", "likes", "comments", "saves", "shares",
+] as const;
+
+/** Display names — `impressions` holds Instagram's `views`. */
+export const STANDOUT_LABELS: Record<string, string> = {
+  reach: "reach", impressions: "views", likes: "likes",
+  comments: "comments", saves: "saves", shares: "shares",
+};
+
+// A metric must be able to separate posts before it can crown one. Recomputed per
+// account, every time — NOT a list of metrics that count. On an account whose audience
+// saves things, saves rank like anything else; on one where the top decile is a single
+// save, they cannot tell good from ordinary and are skipped.
+const MIN_DISCRIMINATING_CUTOFF = 3;
+const STRONG_PERCENTILE = 0.05;
+const BROAD_PERCENTILE = 0.10;
+const BROAD_MIN_METRICS = 2;
+
+export interface Standout {
+  strong: string[];
+  broad: string[];
+  isCandidate: boolean;
+  reason: string;
+}
+
+function cutoff(values: (number | null)[], fraction: number): number | null {
+  const present = values.filter((v): v is number => v !== null && v !== undefined)
+    .sort((a, b) => b - a);
+  if (present.length < 10) return null;          // too few posts to rank meaningfully
+  const value = present[Math.max(Math.floor(present.length * fraction) - 1, 0)];
+  return value >= MIN_DISCRIMINATING_CUTOFF ? value : null;
+}
+
+/**
+ * Rank each post against the others in the SAME set.
+ *
+ * "Above average" only means something relative to this account over the period being
+ * viewed, so the caller passes whatever the range picker selected and this ranks that.
+ * No absolute thresholds anywhere.
+ */
+export function standoutsFor(posts: PostRow[]): Map<number, Standout> {
+  const usable: [string, number | null, number | null][] = [];
+  for (const metric of STANDOUT_METRICS) {
+    const values = posts.map((p) => p[metric as keyof PostRow] as number | null);
+    const strong = cutoff(values, STRONG_PERCENTILE);
+    const broad = cutoff(values, BROAD_PERCENTILE);
+    if (strong !== null || broad !== null) usable.push([metric, strong, broad]);
+  }
+
+  const out = new Map<number, Standout>();
+  for (const post of posts) {
+    const strong: string[] = [];
+    const broad: string[] = [];
+    for (const [metric, strongCut, broadCut] of usable) {
+      const value = post[metric as keyof PostRow] as number | null;
+      if (value === null || value === undefined) continue;
+      if (strongCut !== null && value >= strongCut) strong.push(STANDOUT_LABELS[metric]);
+      if (broadCut !== null && value >= broadCut) broad.push(STANDOUT_LABELS[metric]);
+    }
+    const isCandidate = strong.length > 0 || broad.length >= BROAD_MIN_METRICS;
+    const reason = strong.length
+      ? `top 5% · ${strong.join(", ")}`
+      : broad.length >= BROAD_MIN_METRICS
+        ? `top 10% · ${broad.join(", ")}`
+        : "";
+    out.set(post.id, { strong, broad, isCandidate, reason });
+  }
+  return out;
+}

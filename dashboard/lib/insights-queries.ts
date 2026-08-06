@@ -170,3 +170,73 @@ export function requestInsightsRefresh(channelId: number): void {
     .prepare("UPDATE channels SET insights_refresh_requested = 1 WHERE id = ?")
     .run(channelId);
 }
+
+/**
+ * Mark or unmark a post as a BPP — one of the owner's keepers, worth reposting.
+ *
+ * Always a person's decision. Nothing in this app sets this flag automatically: the
+ * numbers surface candidates, a human decides, which is the whole point of the design
+ * (see docs/design-bpp-recycling.md).
+ */
+export function setPostBpp(postId: number, isBpp: boolean): boolean {
+  const info = getDb()
+    .prepare(
+      "UPDATE posts SET is_bpp = @flag, bpp_marked_at = @at, updated_at = @at WHERE id = @id",
+    )
+    .run({ id: postId, flag: isBpp ? 1 : 0, at: isBpp ? new Date().toISOString() : null });
+  return info.changes > 0;
+}
+
+export interface BppPool {
+  size: number;
+  /** Marked posts that this unit could actually send — targeted here and still ready. */
+  usable: number;
+}
+
+/**
+ * How many keepers are marked, and how many this channel can actually use.
+ *
+ * The two differ and the difference matters: a post marked from another account's
+ * leaderboard is in the pool but cannot go out here, so a cadence set against the raw
+ * count would quietly under-deliver.
+ */
+export function getBppPool(channelId: number): BppPool {
+  const db = getDb();
+  const size = (db.prepare("SELECT COUNT(*) AS n FROM posts WHERE is_bpp = 1").get() as {
+    n: number;
+  }).n;
+  const usable = (db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM posts p
+        WHERE p.is_bpp = 1 AND p.content_status = 'ready'
+          AND EXISTS (SELECT 1 FROM post_targets pt
+                       WHERE pt.post_id = p.id AND pt.channel_id = ? AND pt.surface = 'feed')`,
+    )
+    .get(channelId) as { n: number }).n;
+  return { size, usable };
+}
+
+/** Which library post a synced Instagram post corresponds to, when we published it. */
+export function getLibraryPostIds(channelId: number): Record<number, number> {
+  const rows = getDb()
+    .prepare(
+      `SELECT rm.id AS remote_id, pub.post_id, p.is_bpp
+         FROM remote_media rm
+         JOIN publications pub ON pub.id = rm.publication_id
+         JOIN posts p ON p.id = pub.post_id
+        WHERE rm.channel_id = ?`,
+    )
+    .all(channelId) as { remote_id: number; post_id: number; is_bpp: number }[];
+  const out: Record<number, number> = {};
+  for (const r of rows) out[r.remote_id] = r.post_id;
+  return out;
+}
+
+export function getBppFlags(): Record<number, boolean> {
+  const rows = getDb().prepare("SELECT id, is_bpp FROM posts WHERE is_bpp = 1").all() as {
+    id: number;
+  }[];
+  const out: Record<number, boolean> = {};
+  for (const r of rows) out[r.id] = true;
+  return out;
+}

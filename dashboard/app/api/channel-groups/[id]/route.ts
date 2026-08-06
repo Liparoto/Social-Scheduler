@@ -42,8 +42,8 @@ export async function PATCH(
   if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
   // Math.max(0, …) rather than a bare Number: this value divides slot positions,
   // and a negative would silently mean "off" while reading as if it were on.
-  if ("bpp_every_n_slots" in body)
-    fields.bpp_every_n_slots = Math.max(0, Math.trunc(Number(body.bpp_every_n_slots) || 0));
+  if ("bpp_every_days" in body)
+    fields.bpp_every_days = Math.max(0, Math.trunc(Number(body.bpp_every_days) || 0));
   if ("is_active" in body) fields.is_active = body.is_active ? 1 : 0;
 
   try {

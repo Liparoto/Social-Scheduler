@@ -67,7 +67,7 @@ export interface Channel {
   min_queue_depth: number;
   target_queue_depth: number;
   reuse_min_age_days: number;
-  bpp_every_n_slots: number;
+  bpp_every_days: number;
   is_active: number;
   group_id: number | null;
   created_at: string;
@@ -91,7 +91,7 @@ export interface ChannelGroup {
   min_queue_depth: number;
   target_queue_depth: number;
   reuse_min_age_days: number;
-  bpp_every_n_slots: number;
+  bpp_every_days: number;
   is_active: number;
   created_at: string;
   updated_at: string | null;

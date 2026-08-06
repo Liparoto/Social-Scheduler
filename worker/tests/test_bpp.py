@@ -1,186 +1,184 @@
-"""BPP recycling: the score, the slot arithmetic, and the autofill integration.
+"""BPP: a curated pool of the owner's best posts, rotated on a cadence.
 
-Auto-fill already preferred top performers, but the tier gate put every never-posted item
-ahead of every proven one — 100 against 11 on the live install — so the performance term
-could not touch a slot for roughly three months. These tests cover the slots that
-deliberately bypass that gate, and the guarantees that make doing so safe.
+The earlier version of this feature scored posts automatically and got it wrong in an
+instructive way — engagement rate ranked a 59-reach post above one with 1,462 reach and
+151 interactions, because a small denominator inflates a rate. The owner already curates
+by hand and better. So nothing here decides what is good; it surfaces candidates and
+schedules the ones a person marked.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from worker import db
-from worker.autofill import eligible_candidates, rank_proven, run_autofill, select_candidates
+from worker.autofill import bpp_pool, run_autofill
 from worker.bpp import (
-    BPP_MIN_REACH, Candidate, Snapshot, engagement_rate, interactions, is_recycle_slot,
-    merge_recycle_slots, rank_candidates, score_candidate,
+    MIN_DISCRIMINATING_CUTOFF, Standout, bpp_slot_indices, find_standouts,
+    percentile_cutoff, pool_is_thin, rotation_period_days,
 )
 
 NOW = datetime(2026, 7, 22, 18, 0, tzinfo=timezone.utc)
 
 
-# ---- the score (pure) --------------------------------------------------------------
+# ---- which metrics can discriminate -------------------------------------------------
 
-def test_engagement_rate_is_interactions_per_person_reached():
-    snap = Snapshot(reach=1000, likes=80, comments=15, saves=4, shares=1)
-    assert engagement_rate(snap) == 0.1
-
-
-def test_interactions_treat_an_unreported_field_as_zero():
-    """A platform that does not report saves has not reported FEWER saves."""
-    assert interactions(Snapshot(reach=100, likes=5, comments=None, saves=None, shares=2)) == 7
+def test_a_metric_everyone_scores_zero_or_one_on_is_not_a_signal():
+    """Live example: this account's saves have a median of 0 and a top-10% cutoff of 1,
+    so "top 10% for saves" would mean "got one save" — true, useless, and it would badge a
+    third of the library."""
+    saves = [0] * 90 + [1] * 8 + [2] * 2
+    assert percentile_cutoff(saves, 0.10) is None
 
 
-def test_a_post_below_the_reach_floor_has_no_score_rather_than_a_small_one():
-    """Without a floor, 1 like on a reach of 3 scores 33% and outranks the whole account
-    forever. Too little evidence is not the same as poor performance."""
-    assert engagement_rate(Snapshot(reach=3, likes=1, comments=0, saves=0, shares=0)) is None
+def test_saves_DO_count_on_an_account_whose_audience_saves():
+    """The exclusion above is per-account and recomputed every time — it is not a list of
+    metrics that count. On an account where people actually save, saves rank like anything
+    else."""
+    saves = list(range(0, 200, 2))  # a real spread, plenty above the floor
+    cutoff = percentile_cutoff(saves, 0.10)
+    assert cutoff is not None and cutoff >= MIN_DISCRIMINATING_CUTOFF
+
+    posts = [{"id": i, "saves": v} for i, v in enumerate(saves)]
+    standouts = {s.post_id: s for s in find_standouts(posts)}
+    top = max(posts, key=lambda p: p["saves"])
+    assert "saves" in standouts[top["id"]].broad
 
 
-def test_a_measured_zero_is_a_real_score_not_a_missing_one():
-    """0.0 means 'we measured, nobody engaged' and must rank LAST; None means 'we cannot
-    tell' and must be left out. Collapsing them loses the distinction the ranking needs."""
-    assert engagement_rate(Snapshot(reach=500, likes=0, comments=0, saves=0, shares=0)) == 0.0
+def test_too_few_posts_to_rank_yields_no_signal():
+    """A brand-new account gets no standouts rather than badging noise."""
+    assert percentile_cutoff([100, 50, 10], 0.10) is None
 
 
-def test_reach_exactly_at_the_floor_counts():
-    snap = Snapshot(reach=BPP_MIN_REACH, likes=5, comments=0, saves=0, shares=0)
-    assert engagement_rate(snap) is not None
+def test_a_metric_nobody_reports_is_skipped():
+    """Threads reports no reach at all — every value is None."""
+    assert percentile_cutoff([None] * 50, 0.10) is None
 
 
-def test_zero_reach_never_divides():
-    assert engagement_rate(Snapshot(reach=0, likes=3, comments=0, saves=0, shares=0)) is None
-    assert engagement_rate(Snapshot(reach=None, likes=3, comments=0, saves=0, shares=0)) is None
+# ---- surfacing candidates -----------------------------------------------------------
+
+def _spread(metric, values):
+    return [{"id": i, metric: v} for i, v in enumerate(values)]
 
 
-def test_a_posts_best_run_represents_it():
-    """A post published twice is fairly judged by its better outing."""
-    weak = Snapshot(reach=1000, likes=10, comments=0, saves=0, shares=0)     # 1%
-    strong = Snapshot(reach=500, likes=50, comments=0, saves=0, shares=0)    # 10%
-    assert score_candidate([weak, strong], post_id=7).rate == 0.1
+def test_a_post_far_above_average_on_one_metric_is_a_candidate():
+    """'Way above average likes' on its own is a reason the owner marks a post."""
+    posts = _spread("likes", [5] * 95 + [200, 190, 180, 170, 160])
+    standouts = {s.post_id: s for s in find_standouts(posts)}
+    best = standouts[95]
+    assert "likes" in best.strong
+    assert best.is_candidate
 
 
-def test_a_post_with_nothing_above_the_floor_scores_none(  ):
-    below = Snapshot(reach=10, likes=5, comments=0, saves=0, shares=0)
-    assert score_candidate([below], post_id=7).rate is None
+def test_an_ordinary_post_is_not_a_candidate():
+    posts = _spread("likes", [5] * 95 + [200, 190, 180, 170, 160])
+    assert find_standouts(posts)[0].is_candidate is False
 
 
-def test_ranking_drops_unproven_posts_instead_of_sorting_them_last():
-    """A recycle slot exists to run something PROVEN. Filling it from the unscored pile
-    would make it an ordinary slot wearing a badge that says otherwise."""
-    ranked = rank_candidates([
-        Candidate(post_id=1, rate=0.05, reach=500),
-        Candidate(post_id=2, rate=None, reach=900),
-        Candidate(post_id=3, rate=0.11, reach=100),
-    ])
-    assert [c.post_id for c in ranked] == [3, 1]
+def test_good_across_several_metrics_is_a_candidate_without_leading_any():
+    """'Multiple metrics were well above average' — the other reason given, and it must
+    qualify even when no single metric is outstanding."""
+    posts = []
+    for i in range(100):
+        posts.append({"id": i, "likes": i, "reach": i * 10, "views": i * 20})
+    # id 91 sits in the top decile of all three, top 5% of none.
+    standouts = {s.post_id: s for s in find_standouts(posts)}
+    assert standouts[91].strong == ()
+    assert len(standouts[91].broad) >= 2
+    assert standouts[91].is_candidate
 
 
-def test_reach_breaks_a_tie_between_equally_engaging_posts():
-    ranked = rank_candidates([
-        Candidate(post_id=1, rate=0.08, reach=200),
-        Candidate(post_id=2, rate=0.08, reach=900),
-    ])
-    assert [c.post_id for c in ranked] == [2, 1]
+def test_the_reason_names_the_metrics_not_a_score():
+    """'This was saved far more than usual' is actionable; '0.42' is not."""
+    assert Standout(1, ("likes",), ()).reason() == "top 5% · likes"
+    assert Standout(1, (), ("likes", "reach")).reason() == "top 10% · likes, reach"
+    assert Standout(1, (), ("likes",)).reason() == ""
 
 
-def test_rate_beats_raw_reach():
-    """The reordering this feature exists for. Real numbers from the live account: 754
-    reach at 2.7% versus 661 at 6.5% — the old reach-based score ranked them backwards."""
-    ranked = rank_candidates([
-        Candidate(post_id=1, rate=0.027, reach=754),
-        Candidate(post_id=2, rate=0.065, reach=661),
-    ])
-    assert [c.post_id for c in ranked] == [2, 1]
+def test_standouts_are_relative_to_the_account_being_looked_at():
+    """No absolute thresholds anywhere: an account averaging 11 likes and one averaging
+    11,000 both get a useful answer."""
+    small = find_standouts(_spread("likes", [5] * 95 + [60, 55, 50, 45, 40]))
+    large = find_standouts(_spread("likes", [5000] * 95 + [60000, 55000, 50000, 45000, 40000]))
+    assert sum(s.is_candidate for s in small) == sum(s.is_candidate for s in large)
 
 
-# ---- slot arithmetic ---------------------------------------------------------------
-
-def test_zero_means_off_and_never_divides():
-    assert is_recycle_slot(0, 0) is False
-    assert is_recycle_slot(7, 0) is False
-    assert is_recycle_slot(3, -1) is False
+def test_no_posts_is_not_a_crash():
+    assert find_standouts([]) == []
 
 
-def test_every_nth_slot_recycles():
-    assert [i for i in range(8) if is_recycle_slot(i, 4)] == [0, 4]
+# ---- the pool, stated plainly -------------------------------------------------------
+
+def test_the_rotation_period_is_pool_size_times_cadence():
+    """The number the owner actually needs. Two posts every 14 days is not 'every 14
+    days' — it is each post reappearing monthly."""
+    assert rotation_period_days(2, 14) == 28
+    assert rotation_period_days(12, 30) == 360
 
 
-def test_the_ratio_continues_across_cycles():
-    """Sequence counts the unit's whole publication history, so the share holds instead of
-    restarting — and clustering — with every batch."""
-    assert is_recycle_slot(100, 4) is True
-    assert is_recycle_slot(101, 4) is False
+def test_no_rotation_period_when_off_or_empty():
+    assert rotation_period_days(0, 14) is None
+    assert rotation_period_days(5, 0) is None
 
 
-# ---- merging -----------------------------------------------------------------------
-
-def _item(post_id):
-    return {"post_id": post_id}
-
-
-KEY = lambda item: item["post_id"]  # noqa: E731
+def test_a_thin_pool_is_flagged():
+    assert pool_is_thin(2, 14) is True      # each post back every 28 days
+    assert pool_is_thin(12, 30) is False    # each post back yearly
 
 
-def test_proven_picks_land_on_recycle_positions():
-    merged = merge_recycle_slots(
-        [_item(1), _item(2), _item(3)], [_item(9)], {1}, 3, KEY
-    )
-    assert [(i["post_id"], r) for i, r in merged] == [(1, False), (9, True), (2, False)]
+# ---- when a BPP is due --------------------------------------------------------------
+
+def _days(*offsets):
+    return [date(2026, 8, 1) + timedelta(days=o) for o in offsets]
 
 
-def test_a_post_is_never_queued_twice_in_one_batch():
-    """Both pools are drawn from the same library, so a proven post is usually in both.
-    Without the guard the same post would be queued twice, minutes apart, to a live
-    account."""
-    merged = merge_recycle_slots(
-        [_item(1), _item(9), _item(2)], [_item(9)], {0}, 3, KEY
-    )
-    ids = [i["post_id"] for i, _ in merged]
-    assert ids == [9, 1, 2]
-    assert len(ids) == len(set(ids))
+def test_nothing_is_due_when_the_cadence_is_off():
+    assert bpp_slot_indices(_days(0, 1, 2), None, 0) == set()
 
 
-def test_a_recycle_position_falls_back_to_normal_selection_when_nothing_is_proven():
-    """Leaving the slot empty would shrink the queue to buy nothing — and the flag must
-    report what actually happened, so a fallback is not badged as a recycle."""
-    merged = merge_recycle_slots([_item(1), _item(2)], [], {0}, 2, KEY)
-    assert [(i["post_id"], r) for i, r in merged] == [(1, False), (2, False)]
+def test_the_first_slot_takes_one_when_none_has_ever_gone_out():
+    """Turning the feature on should do something visible, not wait a month."""
+    assert bpp_slot_indices(_days(0, 1, 2), None, 30) == {0}
 
 
-def test_the_batch_ends_early_when_both_pools_run_out():
-    merged = merge_recycle_slots([_item(1)], [_item(9)], {0}, 5, KEY)
-    assert len(merged) == 2
+def test_slots_are_spaced_by_the_cadence():
+    chosen = bpp_slot_indices(_days(0, 7, 14, 21, 28), None, 14)
+    assert chosen == {0, 2, 4}
 
 
-def test_exhausted_proven_pool_still_fills_later_recycle_positions_normally():
-    merged = merge_recycle_slots(
-        [_item(1), _item(2), _item(3)], [_item(9)], {0, 2}, 3, KEY
-    )
-    assert [(i["post_id"], r) for i, r in merged] == [(9, True), (1, False), (2, False)]
+def test_the_gap_counts_from_the_last_one_that_went_out():
+    last = date(2026, 7, 30)
+    assert bpp_slot_indices(_days(0, 1, 2), last, 14) == set()  # Aug 1-3: 2-4 days, too soon
+    # Aug 12 is 13 days after — still short. Aug 13 is exactly 14, so that slot is the one.
+    assert bpp_slot_indices(_days(11, 12, 13), last, 14) == {1}
 
 
-# ---- autofill integration ----------------------------------------------------------
+def test_planned_slots_count_toward_the_gap_not_just_sent_ones():
+    """Filling a week of queue at once must not stack a BPP into every slot that clears
+    the gap against a now-stale date."""
+    chosen = bpp_slot_indices(_days(0, 1, 2, 3, 4, 5, 6), None, 30)
+    assert chosen == {0}
 
-def _channel(conn, *, bpp=0, target=4, min_depth=3):
+
+# ---- integration --------------------------------------------------------------------
+
+def _channel(conn, *, bpp_days=0, target=4, min_depth=3, reuse=30):
     return conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, remote_account_id,
-              access_token, bpp_every_n_slots)
+              access_token, bpp_every_days)
            VALUES ('instagram','Chan','UTC',1,
                    '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}',
-                   ?,?,30,'acct1','tok',?)""",
-        (min_depth, target, bpp),
+                   ?,?,?,'acct1','tok',?)""",
+        (min_depth, target, reuse, bpp_days),
     ).lastrowid
 
 
-def _post(conn, channel_id, *, created_at="2026-01-01T00:00:00+00:00"):
+def _post(conn, channel_id, *, is_bpp=0, kind="evergreen"):
     pid = conn.execute(
         "INSERT INTO posts (caption, post_type, status, content_status, content_kind,"
-        " created_at) VALUES ('x','single','draft','ready','evergreen',?)",
-        (created_at,),
+        " is_bpp, created_at) VALUES ('x','single','draft','ready',?,?, '2026-01-01T00:00:00+00:00')",
+        (kind, is_bpp),
     ).lastrowid
     aid = conn.execute(
         "INSERT INTO assets (content_hash, media_kind, storage_path, public_url)"
@@ -194,158 +192,17 @@ def _post(conn, channel_id, *, created_at="2026-01-01T00:00:00+00:00"):
     return pid
 
 
-def _published_with_metrics(conn, post_id, channel_id, *, reach, likes, days_ago=200):
-    """A completed run of `post_id` old enough to be recyclable."""
+def _posted(conn, post_id, channel_id, *, days_ago):
     when = (NOW - timedelta(days=days_ago)).isoformat()
-    pub = conn.execute(
+    conn.execute(
         "INSERT INTO publications (post_id, channel_id, scheduled_at, status,"
         " published_at, remote_post_id) VALUES (?,?,?,'posted',?,?)",
-        (post_id, channel_id, when, when, f"r{post_id}"),
-    ).lastrowid
-    conn.execute(
-        "INSERT INTO post_metrics (publication_id, fetched_at, reach, likes, comments,"
-        " saves, shares) VALUES (?,?,?,?,0,0,0)",
-        (pub, when, reach, likes),
+        (post_id, channel_id, when, when, f"r{post_id}-{days_ago}"),
     )
     conn.commit()
-    return pub
 
 
-def test_the_score_reaches_selection_from_real_rows(conn):
-    cid = _channel(conn)
-    strong = _post(conn, cid)
-    _published_with_metrics(conn, strong, cid, reach=500, likes=50)
-    conn.commit()
-
-    row = next(r for r in select_candidates(conn, cid, NOW) if r["post_id"] == strong)
-    assert row["bpp_rate"] == 0.1
-    assert row["bpp_reach"] == 500
-
-
-def test_a_below_floor_run_leaves_the_score_null(conn):
-    cid = _channel(conn)
-    tiny = _post(conn, cid)
-    _published_with_metrics(conn, tiny, cid, reach=10, likes=5)
-    conn.commit()
-
-    row = next(r for r in select_candidates(conn, cid, NOW) if r["post_id"] == tiny)
-    assert row["bpp_rate"] is None
-
-
-def test_rank_proven_orders_by_rate_and_drops_the_unproven(conn):
-    cid = _channel(conn)
-    weak = _post(conn, cid)
-    strong = _post(conn, cid)
-    _post(conn, cid)  # never posted, no score
-    _published_with_metrics(conn, weak, cid, reach=1000, likes=20)     # 2%
-    _published_with_metrics(conn, strong, cid, reach=200, likes=40)    # 20%
-    conn.commit()
-
-    ranked = rank_proven(select_candidates(conn, cid, NOW))
-    assert [r["post_id"] for r in ranked] == [strong, weak]
-
-
-def test_with_bpp_off_nothing_is_recycled(conn):
-    """The default. Selection must stay byte-identical to before this feature existed."""
-    cid = _channel(conn, bpp=0)
-    proven = _post(conn, cid)
-    _published_with_metrics(conn, proven, cid, reach=500, likes=50)
-    for _ in range(4):
-        _post(conn, cid)
-    conn.commit()
-
-    run_autofill(conn, _config_for(conn), NOW)
-
-    assert conn.execute(
-        "SELECT COUNT(*) c FROM publications WHERE is_recycled = 1"
-    ).fetchone()["c"] == 0
-
-
-def test_with_bpp_on_a_proven_post_takes_a_slot(conn):
-    cid = _channel(conn, bpp=2)
-    proven = _post(conn, cid)
-    _published_with_metrics(conn, proven, cid, reach=500, likes=50)
-    for _ in range(5):
-        _post(conn, cid)
-    conn.commit()
-
-    run_autofill(conn, _config_for(conn), NOW)
-
-    recycled = conn.execute(
-        "SELECT post_id FROM publications WHERE is_recycled = 1"
-    ).fetchall()
-    assert [r["post_id"] for r in recycled] == [proven]
-
-
-def test_a_recycled_slot_is_recorded_so_the_choice_can_be_explained(conn):
-    """Once the queue is full there is no way to reconstruct WHY something was picked,
-    and 'why is this old post going out again?' is exactly what this feature prompts."""
-    cid = _channel(conn, bpp=2)
-    proven = _post(conn, cid)
-    _published_with_metrics(conn, proven, cid, reach=500, likes=50)
-    for _ in range(5):
-        _post(conn, cid)
-    conn.commit()
-
-    run_autofill(conn, _config_for(conn), NOW)
-
-    row = conn.execute(
-        "SELECT is_recycled, created_by FROM publications WHERE post_id = ? "
-        "AND status = 'scheduled'", (proven,),
-    ).fetchone()
-    assert row["is_recycled"] == 1 and row["created_by"] == "autofill"
-
-
-def test_bpp_on_with_nothing_proven_changes_nothing(conn):
-    cid = _channel(conn, bpp=2)
-    for _ in range(5):
-        _post(conn, cid)
-    conn.commit()
-
-    made = run_autofill(conn, _config_for(conn), NOW)
-
-    assert made > 0, "the queue must still fill"
-    assert conn.execute(
-        "SELECT COUNT(*) c FROM publications WHERE is_recycled = 1"
-    ).fetchone()["c"] == 0
-
-
-def test_a_recycled_post_still_obeys_the_reuse_window(conn):
-    """BPP changes WHICH eligible candidate is chosen, never WHETHER one is eligible. A
-    post inside its cooldown must stay out even if it is the best performer on record."""
-    cid = _channel(conn, bpp=1)          # every slot would recycle if allowed
-    recent = _post(conn, cid)
-    _published_with_metrics(conn, recent, cid, reach=900, likes=200, days_ago=2)
-    for _ in range(4):
-        _post(conn, cid)
-    conn.commit()
-
-    run_autofill(conn, _config_for(conn), NOW)
-
-    assert conn.execute(
-        "SELECT COUNT(*) c FROM publications WHERE post_id = ? AND status = 'scheduled'",
-        (recent,),
-    ).fetchone()["c"] == 0
-
-
-def test_a_recycled_post_is_not_also_queued_as_a_normal_pick(conn):
-    cid = _channel(conn, bpp=1)
-    proven = _post(conn, cid)
-    _published_with_metrics(conn, proven, cid, reach=500, likes=50)
-    for _ in range(4):
-        _post(conn, cid)
-    conn.commit()
-
-    run_autofill(conn, _config_for(conn), NOW)
-
-    rows = conn.execute(
-        "SELECT post_id, COUNT(*) c FROM publications WHERE status='scheduled'"
-        " GROUP BY post_id HAVING c > 1"
-    ).fetchall()
-    assert rows == [], "no post may be queued twice in one batch"
-
-
-def _config_for(conn):
+def _config(conn):
     from worker.config import Config
 
     return Config(
@@ -355,23 +212,145 @@ def _config_for(conn):
     )
 
 
-# ---- groups ------------------------------------------------------------------------
-#
-# The solo path and the group path are DIFFERENT queries whose rows are read by the same
-# code. A column present in one and missing from the other is not a wrong number — it is
-# an IndexError on the publish path. That is exactly how the first version of this shipped
-# and was caught only by running it against the owner's real (grouped) install, so the
-# group path gets its own coverage here.
+def test_with_the_cadence_off_nothing_is_recycled(conn):
+    """The default. Auto-fill behaves exactly as it did before this feature."""
+    cid = _channel(conn, bpp_days=0)
+    marked = _post(conn, cid, is_bpp=1)
+    _posted(conn, marked, cid, days_ago=200)
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
 
-def _group(conn, *, bpp=0, target=4, min_depth=3):
+    run_autofill(conn, _config(conn), NOW)
+
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM publications WHERE is_recycled=1"
+    ).fetchone()["c"] == 0
+
+
+def test_a_marked_post_takes_a_due_slot(conn):
+    cid = _channel(conn, bpp_days=30)
+    marked = _post(conn, cid, is_bpp=1)
+    _posted(conn, marked, cid, days_ago=200)
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, _config(conn), NOW)
+
+    rows = conn.execute(
+        "SELECT post_id FROM publications WHERE is_recycled=1"
+    ).fetchall()
+    assert [r["post_id"] for r in rows] == [marked]
+
+
+def test_an_unmarked_post_is_never_treated_as_a_bpp(conn):
+    """Only the owner's mark makes something a BPP — no metric, no heuristic."""
+    cid = _channel(conn, bpp_days=30)
+    great = _post(conn, cid, is_bpp=0)
+    _posted(conn, great, cid, days_ago=200)
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, _config(conn), NOW)
+
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM publications WHERE is_recycled=1"
+    ).fetchone()["c"] == 0
+
+
+def test_an_empty_pool_leaves_autofill_completely_normal(conn):
+    cid = _channel(conn, bpp_days=30)
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
+
+    made = run_autofill(conn, _config(conn), NOW)
+
+    assert made > 0, "the queue must still fill"
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM publications WHERE is_recycled=1"
+    ).fetchone()["c"] == 0
+
+
+def test_the_pool_rotates_oldest_first(conn):
+    """A set of keepers cycled through, not a favourite replayed."""
+    cid = _channel(conn, bpp_days=30)
+    recent = _post(conn, cid, is_bpp=1)
+    ancient = _post(conn, cid, is_bpp=1)
+    _posted(conn, recent, cid, days_ago=100)
+    _posted(conn, ancient, cid, days_ago=300)
+    conn.commit()
+
+    from worker import db as dbmod
+
+    pool = bpp_pool(conn, dbmod.get_channel(conn, cid), NOW)
+    assert [r["post_id"] for r in pool] == [ancient, recent]
+
+
+def test_a_bpp_may_ignore_the_reuse_window(conn):
+    """A pool of four on a monthly cadence returns each post every four months, which a
+    90-day reuse window would silently veto — the feature would look broken rather than
+    decline. The owner set both the marks and the frequency."""
+    cid = _channel(conn, bpp_days=30, reuse=365)
+    marked = _post(conn, cid, is_bpp=1)
+    _posted(conn, marked, cid, days_ago=40)          # well inside the 365-day window
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, _config(conn), NOW)
+
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM publications WHERE post_id=? AND is_recycled=1", (marked,)
+    ).fetchone()["c"] == 1
+
+
+def test_one_time_content_is_never_reposted_even_if_marked(conn):
+    """'Never repost this' outranks 'repost my best'."""
+    cid = _channel(conn, bpp_days=30)
+    once = _post(conn, cid, is_bpp=1, kind="one_time")
+    _posted(conn, once, cid, days_ago=300)
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, _config(conn), NOW)
+
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM publications WHERE post_id=? AND status='scheduled'", (once,)
+    ).fetchone()["c"] == 0
+
+
+def test_a_bpp_is_not_also_queued_as_an_ordinary_pick(conn):
+    cid = _channel(conn, bpp_days=1)     # every slot due
+    marked = _post(conn, cid, is_bpp=1)
+    _posted(conn, marked, cid, days_ago=200)
+    for _ in range(4):
+        _post(conn, cid)
+    conn.commit()
+
+    run_autofill(conn, _config(conn), NOW)
+
+    dupes = conn.execute(
+        "SELECT post_id FROM publications WHERE status='scheduled'"
+        " GROUP BY post_id HAVING COUNT(*) > 1"
+    ).fetchall()
+    assert dupes == []
+
+
+# ---- groups -------------------------------------------------------------------------
+
+def _group(conn, *, bpp_days=0, target=4, min_depth=3):
     gid = conn.execute(
         """INSERT INTO channel_groups
              (name, timezone, autofill_enabled, cadence_config, min_queue_depth,
-              target_queue_depth, reuse_min_age_days, bpp_every_n_slots)
+              target_queue_depth, reuse_min_age_days, bpp_every_days)
            VALUES ('G','UTC',1,
                    '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}',
                    ?,?,30,?)""",
-        (min_depth, target, bpp),
+        (min_depth, target, bpp_days),
     ).lastrowid
     members = [
         conn.execute(
@@ -385,65 +364,39 @@ def _group(conn, *, bpp=0, target=4, min_depth=3):
     return gid, members
 
 
-def _target_all(conn, post_id, member_ids):
-    for cid in member_ids:
-        conn.execute(
-            "INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?,?)",
-            (post_id, cid),
-        )
-    conn.commit()
-
-
-def test_the_group_ranking_carries_the_score(conn):
-    """The regression guard. group_rank is a separate query from select_candidates, and
-    _apply_bpp reads bpp_rate off whichever it got."""
-    gid, members = _group(conn)
-    from worker.autofill import group_rank
-
-    pid = _post(conn, members[0])
-    _target_all(conn, pid, members)
-    _published_with_metrics(conn, pid, members[0], reach=400, likes=40)
-    conn.commit()
-
-    rows = group_rank(conn, members, [pid])
-    assert rows[0]["bpp_rate"] == 0.1
-    assert rows[0]["bpp_reach"] == 400
-
-
-def test_a_group_recycles_a_proven_post_to_every_member(conn):
-    """A group fills as one unit — one slot, one publication per member. A recycle must
-    not break that or the accounts drift apart, which is what groups exist to prevent."""
-    gid, members = _group(conn, bpp=2)
-    proven = _post(conn, members[0])
-    _target_all(conn, proven, members)
-    _published_with_metrics(conn, proven, members[0], reach=400, likes=40)
-    for _ in range(5):
+def test_a_group_sends_a_bpp_to_every_member_at_one_time(conn):
+    """A group fills as one unit. A BPP must not break that or the accounts drift apart."""
+    gid, members = _group(conn, bpp_days=30)
+    marked = _post(conn, members[0], is_bpp=1)
+    conn.execute("INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?,?)",
+                 (marked, members[1]))
+    _posted(conn, marked, members[0], days_ago=200)
+    for _ in range(4):
         pid = _post(conn, members[0])
-        _target_all(conn, pid, members)
+        conn.execute("INSERT OR IGNORE INTO post_targets (post_id, channel_id) VALUES (?,?)",
+                     (pid, members[1]))
     conn.commit()
 
-    run_autofill(conn, _config_for(conn), NOW)
+    run_autofill(conn, _config(conn), NOW)
 
     rows = conn.execute(
         "SELECT channel_id, scheduled_at FROM publications"
-        " WHERE post_id = ? AND is_recycled = 1", (proven,),
+        " WHERE post_id=? AND is_recycled=1", (marked,),
     ).fetchall()
-    assert {r["channel_id"] for r in rows} == set(members), "every member gets it"
-    assert len({r["scheduled_at"] for r in rows}) == 1, "at one shared slot time"
+    assert {r["channel_id"] for r in rows} == set(members)
+    assert len({r["scheduled_at"] for r in rows}) == 1
 
 
-def test_a_group_with_bpp_off_recycles_nothing(conn):
-    gid, members = _group(conn, bpp=0)
-    proven = _post(conn, members[0])
-    _target_all(conn, proven, members)
-    _published_with_metrics(conn, proven, members[0], reach=400, likes=40)
+def test_a_group_with_the_cadence_off_recycles_nothing(conn):
+    gid, members = _group(conn, bpp_days=0)
+    marked = _post(conn, members[0], is_bpp=1)
+    _posted(conn, marked, members[0], days_ago=200)
     for _ in range(4):
-        pid = _post(conn, members[0])
-        _target_all(conn, pid, members)
+        _post(conn, members[0])
     conn.commit()
 
-    run_autofill(conn, _config_for(conn), NOW)
+    run_autofill(conn, _config(conn), NOW)
 
     assert conn.execute(
-        "SELECT COUNT(*) c FROM publications WHERE is_recycled = 1"
+        "SELECT COUNT(*) c FROM publications WHERE is_recycled=1"
     ).fetchone()["c"] == 0
