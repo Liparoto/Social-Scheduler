@@ -84,6 +84,19 @@ what varies is whether they can discriminate today.
 
 A **★ Standouts** filter reduces a 146-row review to a short list.
 
+## Reviewing the pool
+
+`/insights/pool` shows the marked posts **as a set**, in the order auto-fill will actually
+use them — longest-since-posted first, so "up next" is a fact rather than a guess.
+
+Marking happens one post at a time while reviewing stats; this is the other half of that
+workflow, where "do I have enough for the cadence I set" and "what is about to run again"
+are answerable at a glance instead of inferred from the queue.
+
+Per account it shows what that account can actually send, which is not the same as the
+pool size — a post targeted only at Instagram is not in the Threads rotation, so a cadence
+set against the raw count would quietly under-deliver.
+
 ## Scheduling the pool
 
 `bpp_every_days` per unit — 0 is off, and off is the default.

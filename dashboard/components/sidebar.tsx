@@ -11,6 +11,7 @@ const NAV = [
   { href: "/import", label: "Import", hint: "Bulk add images" },
   { href: "/library", label: "Library", hint: "Posts & bulk schedule" },
   { href: "/insights", label: "Insights", hint: "How accounts perform" },
+  { href: "/insights/pool", label: "BPP pool", hint: "Posts worth repeating" },
   { href: "/media", label: "Media", hint: "Stored files & cleanup" },
   { href: "/periods", label: "Periods", hint: "In-season windows" },
   { href: "/channels", label: "Channels", hint: "Accounts & config" },
@@ -46,9 +47,11 @@ export function Sidebar() {
       <nav className="flex-1 p-3">
         <ul className="space-y-1">
           {NAV.map((item) => {
+            // Exact match for /insights so the nested "BPP pool" page does not light up
+            // its parent as well — two highlighted rows reads as a bug.
             const active =
-              item.href === "/"
-                ? pathname === "/"
+              item.href === "/" || item.href === "/insights"
+                ? pathname === item.href
                 : pathname.startsWith(item.href);
             return (
               <li key={item.href}>

@@ -242,3 +242,69 @@ export function getBppFlags(): Record<number, boolean> {
   for (const r of rows) out[r.id] = true;
   return out;
 }
+
+export interface BppEntry {
+  post_id: number;
+  caption: string | null;
+  post_type: string;
+  content_status: string;
+  marked_at: string | null;
+  /** Most recent real send, across every channel. Null = marked but never re-posted yet. */
+  last_posted: string | null;
+  asset_id: number | null;
+  /** Channels this post can actually go out on. */
+  targets: string;
+}
+
+/**
+ * The BPP pool, in rotation order — whose turn is next, first.
+ *
+ * Ordered by last send with nulls first, matching worker/autofill.py's `bpp_pool`: a
+ * marked post that has not gone out since being marked is the stalest of all. The order
+ * shown here IS the order it will be used, so "up next" is a fact rather than a guess.
+ */
+export function getBppEntries(): BppEntry[] {
+  return getDb()
+    .prepare(
+      `
+      SELECT
+        p.id AS post_id, p.caption, p.post_type, p.content_status,
+        p.bpp_marked_at AS marked_at,
+        (SELECT MAX(pub.published_at) FROM publications pub
+          WHERE pub.post_id = p.id AND pub.status = 'posted' AND pub.is_dry_run = 0
+        ) AS last_posted,
+        (SELECT pa.asset_id FROM post_assets pa
+          WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS asset_id,
+        (SELECT GROUP_CONCAT(c.account_name, ', ') FROM post_targets pt
+           JOIN channels c ON c.id = pt.channel_id
+          WHERE pt.post_id = p.id AND pt.surface = 'feed') AS targets
+      FROM posts p
+      WHERE p.is_bpp = 1
+      ORDER BY (last_posted IS NOT NULL), last_posted ASC, p.id ASC
+      `,
+    )
+    .all() as BppEntry[];
+}
+
+export interface BppUnit {
+  id: number;
+  label: string;
+  everyDays: number;
+  usable: number;
+}
+
+/** Each active channel's cadence and how much of the pool it can actually send. */
+export function getBppUnits(): BppUnit[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, account_name, platform, bpp_every_days FROM channels WHERE is_active = 1
+        ORDER BY platform, account_name`,
+    )
+    .all() as { id: number; account_name: string; platform: string; bpp_every_days: number }[];
+  return rows.map((r) => ({
+    id: r.id,
+    label: `${r.account_name} · ${r.platform}`,
+    everyDays: r.bpp_every_days ?? 0,
+    usable: getBppPool(r.id).usable,
+  }));
+}
