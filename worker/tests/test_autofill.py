@@ -647,3 +647,30 @@ def test_assign_never_places_the_same_post_twice():
         [_item(9)], {9: set()}, _band_of, 2, {"evening"}, pool=[_item(9)], due={0},
     )
     assert [item[0]["post_id"] for item, _, _, _ in out] == [9]
+
+
+# ---- BPP x band interaction, end to end -----------------------------------------
+
+def test_bpp_due_slot_with_no_fitting_marked_post_falls_through_and_is_not_recycled(conn, config):
+    # Cadence covers only afternoon. The one marked (BPP) post is evening-tagged, so it can
+    # never land in the due slot; that slot must fall through to ordinary selection and the
+    # resulting publication must NOT be flagged as recycled.
+    ch = make_channel(conn, min_depth=1, target=1,
+                      cadence='{"days":["mon","tue","wed","thu","fri","sat","sun"],'
+                              '"time":"12:30"}', tz="UTC")
+    conn.execute("UPDATE channels SET bpp_every_days=30 WHERE id=?", (ch,))
+    marked = make_post(conn, ch, created_at="2026-01-01T00:00:00+00:00")
+    conn.execute("UPDATE posts SET is_bpp=1 WHERE id=?", (marked,))
+    _tag(conn, marked, "evening")
+    plain = make_post(conn, ch, created_at="2026-01-02T00:00:00+00:00")
+    conn.commit()
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    made = run_autofill(conn, config, now)
+    assert made == 1
+
+    row = conn.execute(
+        "SELECT post_id, is_recycled FROM publications WHERE channel_id=?", (ch,)
+    ).fetchone()
+    assert row["post_id"] == plain
+    assert row["is_recycled"] == 0

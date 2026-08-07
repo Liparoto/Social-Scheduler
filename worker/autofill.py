@@ -759,10 +759,20 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
             )
         return 0
 
+    # All-or-nothing. sqlite3's default isolation means these inserts sit in an implicit
+    # transaction, and run.py catches errors and REUSES this connection — so without the
+    # rollback a failure mid-group (e.g. a member channel deleted in the dashboard since
+    # _autofill_units read it; foreign keys are ON) would be silently committed by the
+    # next cycle's heartbeat, leaving one member scheduled and the other not: exactly the
+    # drift groups exist to prevent. The open transaction would also hold SQLite's writer
+    # lock for a full poll interval, blocking the dashboard.
     made = 0
     try:
         for (row, recipients), slot, _hhmm, is_bpp in placed:
             for member in recipients:
+                # requires_approval stays a CHANNEL property — it describes the account,
+                # not the schedule, so one member of a group may need approval and
+                # another not.
                 status = "pending_approval" if member["requires_approval"] else "scheduled"
                 conn.execute(
                     """INSERT INTO publications
