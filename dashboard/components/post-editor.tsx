@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BppMark } from "@/components/bpp-mark";
 import type {
@@ -23,6 +23,9 @@ import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
+import { captionLength } from "@/lib/caption-length";
+import { insertAtCaret } from "@/lib/insert-at-caret";
+import { EmojiPicker } from "@/components/emoji-picker";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { FramingButton } from "./framing-button";
@@ -109,6 +112,36 @@ export function PostEditor({
     initialCaptions.length ? initialCaptions : [{ platform: "", body: "" }]
   );
   const [firstComment, setFirstComment] = useState(post.first_comment ?? "");
+  const firstCommentRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once the new value reaches the DOM. See the layout effect below.
+  const pendingCaret = useRef<number | null>(null);
+
+  /**
+   * Put the caret back after an emoji insert.
+   *
+   * useLayoutEffect keyed on the value, NOT requestAnimationFrame. rAF can fire before React
+   * commits the new text, so setSelectionRange lands on the OLD string and the re-render
+   * then throws the caret to the end — verified in a browser.
+   */
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current;
+    if (caret === null) return;
+    pendingCaret.current = null;
+    const el = firstCommentRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  }, [firstComment]);
+
+  /** Splice a picked emoji into the first-comment box at the caret, not at the end. */
+  function insertFirstCommentEmoji(emoji: string) {
+    const el = firstCommentRef.current;
+    const start = el?.selectionStart ?? firstComment.length;
+    const end = el?.selectionEnd ?? firstComment.length;
+    const next = insertAtCaret(firstComment, emoji, start, end);
+    pendingCaret.current = next.caret;
+    setFirstComment(next.text);
+  }
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -163,9 +196,9 @@ export function PostEditor({
       );
       return;
     }
-    if (firstComment.trim().length > FIRST_COMMENT_MAX_CHARS) {
+    if (captionLength(firstComment.trim()) > FIRST_COMMENT_MAX_CHARS) {
       setError(
-        `First comment is ${firstComment.trim().length} / ${FIRST_COMMENT_MAX_CHARS} characters.`
+        `First comment is ${captionLength(firstComment.trim())} / ${FIRST_COMMENT_MAX_CHARS} characters.`
       );
       return;
     }
@@ -375,13 +408,17 @@ export function PostEditor({
 
       {/* First comment */}
       <section className={card}>
-        <h3 className="mb-1 font-display text-sm font-semibold text-ink">First comment</h3>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h3 className="font-display text-sm font-semibold text-ink">First comment</h3>
+          <EmojiPicker onInsert={insertFirstCommentEmoji} />
+        </div>
         <p className="mb-3 text-xs text-muted">
           Posted automatically once the post is live — the usual home for hashtags. On
           Threads it goes out as a reply, which shows in your feed like any other post.
         </p>
         <textarea
-          className="min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
+          ref={firstCommentRef}
+          className="font-emoji min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
           placeholder="#hashtags #go #here"
           value={firstComment}
           onChange={(e) => setFirstComment(e.target.value)}
@@ -389,10 +426,10 @@ export function PostEditor({
         {firstComment.trim().length > 0 ? (
           <p
             className={`mt-1 text-xs ${
-              firstComment.trim().length > FIRST_COMMENT_MAX_CHARS ? "text-danger" : "text-faint"
+              captionLength(firstComment.trim()) > FIRST_COMMENT_MAX_CHARS ? "text-danger" : "text-faint"
             }`}
           >
-            {firstComment.trim().length} / {FIRST_COMMENT_MAX_CHARS} characters
+            {captionLength(firstComment.trim())} / {FIRST_COMMENT_MAX_CHARS} characters
           </p>
         ) : null}
       </section>

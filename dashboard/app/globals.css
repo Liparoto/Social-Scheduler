@@ -41,6 +41,15 @@
   --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+  /* Scoped to the picker and the caption fields via `font-emoji` rather than applied
+     app-wide, so it never overrides display/body/mono anywhere else.
+
+     The fallback chain matters: if the bundled webfont fails to load, the machine's own
+     emoji font still draws something rather than leaving blank space. Apple Color Emoji is
+     listed only as a FALLBACK to a font already installed on the reader's Mac — it is never
+     shipped, because it is proprietary. */
+  --font-emoji: var(--font-noto-emoji), "Apple Color Emoji", "Segoe UI Emoji",
+    "Noto Color Emoji", sans-serif;
 
   --radius-card: 12px;
 }

@@ -32,6 +32,7 @@ from itertools import islice
 
 from . import db
 from .bpp import bpp_slot_indices
+from .caption_length import caption_length
 from .clients import PLATFORM_CAPS
 from .config import Config
 from .periods import in_season, local_date, period_from_row
@@ -246,7 +247,9 @@ def _caption_too_long_for_channel(conn, channel, post_id: int, post_type: str) -
         (post_id, channel["id"]),
     ).fetchone()[0]
     caption = _select_caption(conn, post_id, channel["platform"], used_count)
-    return caption is not None and len(caption) > limit
+    # Must agree with publisher.py's gate — this decides whether autofill even offers the
+    # post to this channel, and disagreeing would queue a send the publisher then refuses.
+    return caption is not None and caption_length(caption) > limit
 
 
 def capable_post_ids(conn, channel) -> set[int]:

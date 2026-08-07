@@ -1,11 +1,14 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useLayoutEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
+import { captionLength } from "@/lib/caption-length";
+import { insertAtCaret } from "@/lib/insert-at-caret";
+import { EmojiPicker } from "@/components/emoji-picker";
 import type { Asset, Period, PeriodMode, PostTarget, Tag } from "@/lib/types";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -61,6 +64,36 @@ export function Composer({
   const [assets, setAssets] = useState<UploadedAsset[]>([]);
   const [variants, setVariants] = useState<CaptionVariantDraft[]>([{ platform: "", body: "" }]);
   const [firstComment, setFirstComment] = useState("");
+  const firstCommentRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once the new value reaches the DOM. See the layout effect below.
+  const pendingCaret = useRef<number | null>(null);
+
+  /**
+   * Put the caret back after an emoji insert.
+   *
+   * useLayoutEffect keyed on the value, NOT requestAnimationFrame. rAF can fire before React
+   * commits the new text, so setSelectionRange lands on the OLD string and the re-render
+   * then throws the caret to the end — verified in a browser.
+   */
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current;
+    if (caret === null) return;
+    pendingCaret.current = null;
+    const el = firstCommentRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  }, [firstComment]);
+
+  /** Splice a picked emoji into the first-comment box at the caret, not at the end. */
+  function insertFirstCommentEmoji(emoji: string) {
+    const el = firstCommentRef.current;
+    const start = el?.selectionStart ?? firstComment.length;
+    const end = el?.selectionEnd ?? firstComment.length;
+    const next = insertAtCaret(firstComment, emoji, start, end);
+    pendingCaret.current = next.caret;
+    setFirstComment(next.text);
+  }
   // Targets, not channel ids: an Instagram channel can be picked for its Feed, its
   // Story, or both, and each is an independent send. See channel-surface-picker.
   const [targets, setTargets] = useState<PostTarget[]>([]);
@@ -124,7 +157,7 @@ export function Composer({
       .filter((v) => v.body.trim())
       .map((v) => ({ platform: v.platform || null, body: v.body.trim() }));
     const candidates = captionsForPlatform(platform, trimmedVariants, caption);
-    return Math.max(0, ...candidates.map((c) => c.length));
+    return Math.max(0, ...candidates.map((c) => captionLength(c)));
   }
 
   const selectedChannels = channels.filter((c) => selectedChannelIds.has(c.id));
@@ -146,7 +179,7 @@ export function Composer({
     .filter((n): n is number => n !== null);
   const fallbackCheck =
     captionChecks.length === 0 && textOnly && fallbackLimits.length > 0
-      ? { channel: null, limit: Math.min(...fallbackLimits), length: caption.length }
+      ? { channel: null, limit: Math.min(...fallbackLimits), length: captionLength(caption) }
       : null;
 
   const allCaptionChecks = fallbackCheck ? [fallbackCheck] : captionChecks;
@@ -500,14 +533,18 @@ export function Composer({
             </p>
           ) : null}
           <div>
-            <label className={label}>
-              First comment{" "}
-              <span className="font-normal text-faint">
-                (auto-posted after publish — good for hashtags)
-              </span>
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label className={label}>
+                First comment{" "}
+                <span className="font-normal text-faint">
+                  (auto-posted after publish — good for hashtags)
+                </span>
+              </label>
+              <EmojiPicker onInsert={insertFirstCommentEmoji} />
+            </div>
             <textarea
-              className={`${fieldCls} min-h-16 resize-y`}
+              ref={firstCommentRef}
+              className={`${fieldCls} font-emoji min-h-16 resize-y`}
               placeholder="#hashtags #go #here"
               value={firstComment}
               onChange={(e) => setFirstComment(e.target.value)}

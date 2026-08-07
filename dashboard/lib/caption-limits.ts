@@ -2,6 +2,7 @@
 // over caller-supplied channels/variants with no DB access, and the composer (a client
 // component) needs captionsForPlatform to keep its live counter's rotation-awareness in
 // sync with what the create routes and content/route.ts actually enforce.
+import { captionLength } from "./caption-length";
 import { captionLimit, platformLabel, type ChannelLikeForCompat } from "./platforms";
 
 export interface CaptionVariantLike {
@@ -67,7 +68,7 @@ export function overLimitCaptionsForChannels<T extends ChannelLikeForCompat>(
     const limit = captionLimit(platform, postType);
     if (limit === null) continue;
     const candidates = captionsForPlatform(platform, variants, fallback);
-    const worstLength = Math.max(...candidates.map((c) => c.length));
+    const worstLength = Math.max(...candidates.map((c) => captionLength(c)));
     if (worstLength > limit) {
       out.push({ platform, length: worstLength, limit });
     }
