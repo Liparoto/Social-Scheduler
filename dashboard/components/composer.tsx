@@ -6,6 +6,7 @@ import { channelColor, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
+import { captionLength } from "@/lib/caption-length";
 import type { Asset, Period, PeriodMode, PostTarget, Tag } from "@/lib/types";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -124,7 +125,7 @@ export function Composer({
       .filter((v) => v.body.trim())
       .map((v) => ({ platform: v.platform || null, body: v.body.trim() }));
     const candidates = captionsForPlatform(platform, trimmedVariants, caption);
-    return Math.max(0, ...candidates.map((c) => c.length));
+    return Math.max(0, ...candidates.map((c) => captionLength(c)));
   }
 
   const selectedChannels = channels.filter((c) => selectedChannelIds.has(c.id));
@@ -146,7 +147,7 @@ export function Composer({
     .filter((n): n is number => n !== null);
   const fallbackCheck =
     captionChecks.length === 0 && textOnly && fallbackLimits.length > 0
-      ? { channel: null, limit: Math.min(...fallbackLimits), length: caption.length }
+      ? { channel: null, limit: Math.min(...fallbackLimits), length: captionLength(caption) }
       : null;
 
   const allCaptionChecks = fallbackCheck ? [fallbackCheck] : captionChecks;

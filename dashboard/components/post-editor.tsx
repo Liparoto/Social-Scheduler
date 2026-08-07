@@ -23,6 +23,7 @@ import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
+import { captionLength } from "@/lib/caption-length";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { FramingButton } from "./framing-button";
@@ -163,9 +164,9 @@ export function PostEditor({
       );
       return;
     }
-    if (firstComment.trim().length > FIRST_COMMENT_MAX_CHARS) {
+    if (captionLength(firstComment.trim()) > FIRST_COMMENT_MAX_CHARS) {
       setError(
-        `First comment is ${firstComment.trim().length} / ${FIRST_COMMENT_MAX_CHARS} characters.`
+        `First comment is ${captionLength(firstComment.trim())} / ${FIRST_COMMENT_MAX_CHARS} characters.`
       );
       return;
     }
@@ -389,10 +390,10 @@ export function PostEditor({
         {firstComment.trim().length > 0 ? (
           <p
             className={`mt-1 text-xs ${
-              firstComment.trim().length > FIRST_COMMENT_MAX_CHARS ? "text-danger" : "text-faint"
+              captionLength(firstComment.trim()) > FIRST_COMMENT_MAX_CHARS ? "text-danger" : "text-faint"
             }`}
           >
-            {firstComment.trim().length} / {FIRST_COMMENT_MAX_CHARS} characters
+            {captionLength(firstComment.trim())} / {FIRST_COMMENT_MAX_CHARS} characters
           </p>
         ) : null}
       </section>

@@ -17,6 +17,7 @@ import json
 
 import requests
 
+from .caption_length import caption_length
 from .redact import redact
 
 
@@ -257,9 +258,11 @@ class GraphClient:
         NOT the same scope publishing needs. A token that can publish can still fail
         here, and that failure is the comment's alone: the post stays up.
         """
-        if len(message) > self.COMMENT_MAX_CHARS:
+        # caption_length, not len() — same reason as publisher.py's caption gate: Meta
+        # counts UTF-16 code units, so an emoji-dense comment is longer than len() thinks.
+        if caption_length(message) > self.COMMENT_MAX_CHARS:
             raise GraphAPIError(
-                f"comment is {len(message)} chars, over Instagram's "
+                f"comment is {caption_length(message)} chars, over Instagram's "
                 f"{self.COMMENT_MAX_CHARS} limit"
             )
         return self._post(

@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import db
+from .caption_length import caption_length
 from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS, PlatformCaps, UnknownPlatform
 from .config import Config
 from .logging_setup import LOGGER_NAME
@@ -258,9 +259,13 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         if not (caption or "").strip():
             raise _NonRetryable("a text post needs a caption")
     limit = caps.caption_limit(post_type)
-    if limit is not None and caption is not None and len(caption) > limit:
+    # caption_length, not len(): the platforms count UTF-16 code units, so every emoji is
+    # 2. Plain len() counts code points and under-counts, which let an over-length caption
+    # past this gate to be refused by the platform itself — a terminal failure after the
+    # post already read "scheduled". See worker/caption_length.py.
+    if limit is not None and caption is not None and caption_length(caption) > limit:
         raise _NonRetryable(
-            f"caption is {len(caption)} characters; {platform} allows {limit} "
+            f"caption is {caption_length(caption)} characters; {platform} allows {limit} "
             f"for a {post_type} post"
         )
     _validate_media_available(assets, dry_run, asset_base_url, caps, config, surface)
