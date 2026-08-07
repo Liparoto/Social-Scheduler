@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -51,12 +51,17 @@ class Cadence:
     days: frozenset[int] = frozenset()
 
     def candidate_local_times(self):
-        """Every local (hour, minute) a slot from this cadence could land on.
+        """Every local (hour, minute) this cadence ALLOWS. In times mode that is exact — its
+        slot times, and auto-fill derives the covered bands straight from them.
 
-        In times mode that is simply its times. In interval mode the send time DRIFTS, so any
-        minute inside the window is reachable. Auto-fill maps these through `derive_band` to
-        learn which bands the cadence covers — the one question both modes must answer the
-        same way, and the reason this module can stay entirely free of band concepts.
+        In interval mode it is only an UPPER BOUND: the window, every minute of it. Stepping
+        by `every_minutes` can only ever land on the residues of that interval modulo a day —
+        1440/gcd(every_minutes, 1440) clock times — and which ones depends on the phase, which
+        this object does not know (it lives in `after`, i.e. in the database). Do NOT use the
+        interval branch as a covered-band set: reporting the whole window for a 24-hour
+        interval marks every band covered, which silences the held-back warning that is the
+        strict band rule's only safety net. `autofill._covered_bands` peeks the real walk
+        instead, because it has `after`.
         """
         if self.mode == "interval":
             for minutes in _window_minutes(self.window):

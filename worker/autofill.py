@@ -25,8 +25,10 @@ group_eligible_candidates.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import timedelta
+from itertools import islice
 
 from . import db
 from .bpp import bpp_slot_indices
@@ -557,6 +559,38 @@ def _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post, ban
     return refilled
 
 
+def _covered_bands(cadence, tz_name: str, after, band_of) -> set[str]:
+    """Which bands this cadence can actually put a slot in.
+
+    In TIMES mode the answer is static — the bands of its slot times — and exact.
+
+    In INTERVAL mode it is emphatically NOT the whole window. Stepping by `every_minutes` can
+    only land on the residues of that interval modulo a day: exactly 1440/gcd(every_minutes,
+    1440) clock times, spaced gcd minutes apart. "Every 24h between 08:00 and 21:00" reaches
+    ONE clock time, not 1440 of them, and which one depends on the phase — i.e. on `after`.
+    Claiming the window would mark every band covered, leaving `_stranded_by_band` nothing to
+    report and silencing the held-back log line that is the strict band rule's only safety net
+    (design §7).
+
+    So the interval branch PEEKS the real walk, which the worker can do precisely because it
+    has `after`. Seven times the residue count is enough: the (clock time, weekday) pair
+    repeats within 7 * distinct STEPS, and each yielded slot consumes at least one step, so
+    that many yields has seen every reachable clock time — including one a day filter only
+    lets through on some weekdays.
+
+    What it cannot see is a DST shift further out than the peek reaches, which could move a
+    residue into a neighbouring band. That direction costs at most an unused slot, never a
+    send at the wrong hour.
+    """
+    if cadence.mode != "interval":
+        return {band_of(hm) for hm in cadence.candidate_local_times()}
+    distinct = 1440 // math.gcd(cadence.every_minutes, 1440)
+    return {
+        band_of(hhmm)
+        for _, hhmm in islice(iter_slots(cadence, tz_name, after), 7 * distinct)
+    }
+
+
 def _stranded_by_band(candidates, bands_by_post, covered) -> dict[str, int]:
     """How many eligible candidates carry a band the cadence has no slot for.
 
@@ -629,7 +663,9 @@ def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
 
     `pool`/`due` carry BPP: at a due POSITION the stalest pool post that fits the slot's band
     wins, and if none fits the slot falls through to normal selection and is NOT flagged —
-    because it isn't a BPP.
+    because it isn't a BPP. A due position is an index into `slots`, NOT a count of what has
+    been placed: pass 2 can skip a slot pass 1 filled (design §9), and measuring by output
+    length would shift every later position and hand the BPP to the wrong date.
     """
     remaining = list(items)
     remaining_pool = list(pool or [])
@@ -658,11 +694,11 @@ def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
 
     if not anything_left():
         return out
-    for slot, hhmm in slots:
+    for position, (slot, hhmm) in enumerate(slots):
         if len(out) >= need:
             break
         band = band_of(hhmm)
-        item = take(remaining_pool, band) if len(out) in due else None
+        item = take(remaining_pool, band) if position in due else None
         is_bpp = item is not None
         if item is None:
             item = take(remaining, band)
@@ -726,10 +762,12 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     def band_of(hhmm):
         return derive_band(hhmm[0], hhmm[1], bt_map)
 
-    covered = {band_of(hm) for hm in cadence.candidate_local_times()}
+    # `after` first: in interval mode which clock times are reachable depends on the phase,
+    # and the phase is `after`.
+    after = parse_iso(last_future) if last_future else now
+    covered = _covered_bands(cadence, settings["timezone"], after, band_of)
     bands_by_post = {row["post_id"]: post_bands(conn, row["post_id"]) for row, _ in candidates}
 
-    after = parse_iso(last_future) if last_future else now
     placed = _assign(
         iter_slots(cadence, settings["timezone"], after),
         candidates, bands_by_post, band_of, need, covered,

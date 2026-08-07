@@ -674,3 +674,112 @@ def test_bpp_due_slot_with_no_fitting_marked_post_falls_through_and_is_not_recyc
     ).fetchone()
     assert row["post_id"] == plain
     assert row["is_recycled"] == 0
+
+
+# ---- covered bands: interval mode reaches residues, not the whole window ---------
+from worker.autofill import _covered_bands  # noqa: E402
+from worker.scheduling import parse_cadence  # noqa: E402
+
+_MON_NOON = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+_MON_NINE = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
+
+
+def _covered(cadence_json, after, tz="UTC"):
+    return _covered_bands(parse_cadence(cadence_json), tz, after, _band_of)
+
+
+def test_covered_bands_in_times_mode_is_just_the_slot_bands():
+    # Unchanged, and must stay exact: under-reporting here would let _assign's early exit
+    # stall a queue that could have filled.
+    covered = _covered(
+        '{"mode":"times","slots":['
+        '{"time":"12:30","days":["mon"]},{"time":"18:00","days":["mon"]}]}',
+        _MON_NOON,
+    )
+    assert covered == {"afternoon", "evening"}
+
+
+def test_covered_bands_for_a_daily_interval_is_the_one_time_it_lands_on():
+    # The form's own default: every 24h, 08:00-21:00. It lands at 12:00 and ONLY 12:00, so
+    # claiming the whole window would mark all three bands covered and silence the guard.
+    covered = _covered(
+        '{"mode":"interval","every_minutes":1440,"window":{"from":"08:00","to":"21:00"}}',
+        _MON_NOON,
+    )
+    assert covered == {"afternoon"}
+
+
+def test_covered_bands_for_a_twelve_hour_interval_is_still_one_band():
+    # 12h divides the day evenly, so the other step lands at 00:00 and is skipped by the
+    # window. `every_minutes % 1440` would call this a drifting cadence; it isn't.
+    covered = _covered(
+        '{"mode":"interval","every_minutes":720,"window":{"from":"08:00","to":"21:00"}}',
+        _MON_NOON,
+    )
+    assert covered == {"afternoon"}
+
+
+def test_covered_bands_for_an_interval_that_genuinely_drifts_is_every_window_band():
+    covered = _covered(
+        '{"mode":"interval","every_minutes":585,"window":{"from":"08:00","to":"21:00"}}',
+        _MON_NINE,
+    )
+    assert covered == {"morning", "afternoon", "evening"}
+
+
+def test_covered_bands_for_an_interval_follows_the_phase():
+    # Same cadence, a different `after`: an 08:00 start lands at 08:00 forever, which is
+    # morning rather than afternoon. This is exactly what the dashboard cannot know.
+    cfg = '{"mode":"interval","every_minutes":1440,"window":{"from":"08:00","to":"21:00"}}'
+    assert _covered(cfg, datetime(2026, 8, 3, 8, 0, tzinfo=timezone.utc)) == {"morning"}
+
+
+class _Recorder:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg, *args):
+        self.lines.append(msg % args if args else msg)
+
+
+def test_autofill_logs_held_back_for_a_daily_interval(conn, config):
+    """Design §7 with the form's default interval, the case that used to slip through.
+
+    Every 24h between 08:00 and 21:00 reaches one clock time. The evening posts are as
+    unreachable as they would be under a single 12:30 time, and the log has to say so —
+    while the queue goes on filling from the untagged content and looks perfectly healthy.
+    """
+    ch = make_channel(
+        conn, min_depth=2, target=2, tz="UTC",
+        cadence='{"mode":"interval","every_minutes":1440,'
+                '"window":{"from":"08:00","to":"21:00"},'
+                '"days":["mon","tue","wed","thu","fri","sat","sun"]}',
+    )
+    for i in range(3):
+        _tag(conn, make_post(conn, ch, created_at=f"2026-01-0{i + 1}T00:00:00+00:00"), "evening")
+    make_post(conn, ch, created_at="2026-02-01T00:00:00+00:00")
+
+    log = _Recorder()
+    run_autofill(conn, config, _MON_NOON, log)
+    held = [line for line in log.lines if "held back" in line]
+    assert held, log.lines
+    assert "3" in held[0] and "evening" in held[0]
+
+
+def test_assign_reads_due_as_a_SLOT_index_not_a_placement_count():
+    """Design §9: pass 2 can skip a slot pass 1 filled.
+
+    Position 1 is due. Slot 0 (09:00) has nothing that fits and is skipped, so by the time
+    the due slot comes round only ONE post has been placed... none, in fact. Counting
+    placements instead of positions hands the BPP to slot 2 — a recycle a day late, with
+    is_recycled written on the wrong row and _last_bpp_date moved with it.
+    """
+    out = _assign(
+        iter([_slot(3, 9, 0), _slot(3, 18, 0), _slot(4, 18, 0)]),
+        [_item(1)], {1: {"evening"}, 9: set()}, _band_of, 2,
+        {"morning", "evening"}, pool=[_item(9)], due={1},
+    )
+    assert [(item[0]["post_id"], dt.day, flag) for item, dt, _, flag in out] == [
+        (9, 3, True),   # the marked post takes the DUE slot, on day 3
+        (1, 4, False),
+    ]

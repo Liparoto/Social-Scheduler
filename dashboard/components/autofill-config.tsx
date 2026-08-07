@@ -7,9 +7,11 @@ import {
   type Cadence,
   coveredBands,
   deriveBand,
+  intervalNote,
   parseCadence,
   serializeCadence,
   summarize,
+  uncoveredBandWarning,
 } from "@/lib/cadence";
 
 interface Props {
@@ -34,8 +36,15 @@ interface Props {
   bandCounts: Record<string, number>;
 }
 
-const DEFAULT_TIMES: Cadence = { mode: "times", slots: [{ time: "18:00", days: [] }] };
-const DEFAULT_INTERVAL: Cadence = {
+// All seven days, for the same reason DEFAULT_INTERVAL carries them: this is what the owner
+// lands on when they switch modes, and a slot with no days is DROPPED by the worker's
+// _parse_times — leaving parse_cadence returning None and the unit silently not auto-filling
+// at all. Exported so a test can hold both defaults to that rule.
+export const DEFAULT_TIMES: Cadence = {
+  mode: "times",
+  slots: [{ time: "18:00", days: [...DAYS] }],
+};
+export const DEFAULT_INTERVAL: Cadence = {
   mode: "interval",
   everyMinutes: 1440,
   from: "08:00",
@@ -337,20 +346,7 @@ export function AutofillConfig(props: Props) {
                 }
               />
 
-              <p className="text-[11px] text-muted">
-                {cadence.everyMinutes % 1440 === 0 ? (
-                  <>
-                    A whole number of days — this always lands at the same time. Use
-                    &ldquo;At set times&rdquo; unless you meant to drift.
-                  </>
-                ) : (
-                  <>
-                    The post time drifts by this interval each time, so it sweeps through
-                    every hour of the window over several days instead of landing at a
-                    fixed time.
-                  </>
-                )}
-              </p>
+              <p className="text-[11px] text-muted">{intervalNote(cadence.everyMinutes)}</p>
             </div>
           )}
 
@@ -358,8 +354,7 @@ export function AutofillConfig(props: Props) {
             <div className="space-y-1">
               {uncoveredWarnings.map(({ band, count }) => (
                 <p key={band} className="text-[11px] text-status-publishing">
-                  ⚠ {count} ready posts are tagged {band} — no {band} time set, so they
-                  will not be auto-filled.
+                  ⚠ {uncoveredBandWarning(band, count, cadence.mode)}
                 </p>
               ))}
             </div>

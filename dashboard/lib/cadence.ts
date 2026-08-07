@@ -100,9 +100,42 @@ export function serializeCadence(c: Cadence): string {
   });
 }
 
-/** Which bands a slot from this cadence could land in — the slot times in times mode, every
- *  minute of the window in interval mode (the send time drifts, so all of it is reachable).
- *  Mirrors Cadence.candidate_local_times() in worker/scheduling.py. */
+function gcd(a: number, b: number): number {
+  let x = Math.abs(Math.round(a));
+  let y = Math.abs(Math.round(b));
+  while (y) [x, y] = [y, x % y];
+  return x;
+}
+
+/** How far apart, in minutes, the clock times an interval cadence can land on are.
+ *
+ *  Stepping by `everyMinutes` only ever reaches the residues of that interval modulo a day,
+ *  and those sit exactly gcd(everyMinutes, 1440) minutes apart across the whole 24 hours.
+ *  Every 24h -> 1440 (one time of day). Every 12h -> 720 (two). Every 9h45m -> 45 (32). */
+export function intervalStepMinutes(everyMinutes: number): number {
+  return gcd(everyMinutes, 1440) || 1440;
+}
+
+/** How many distinct clock times an interval cadence can ever land on. */
+export function intervalTimesPerDay(everyMinutes: number): number {
+  return 1440 / intervalStepMinutes(everyMinutes);
+}
+
+/** Which bands a slot from this cadence is GUARANTEED to land in.
+ *
+ *  Times mode: the bands of its slot times, exactly — the same answer the worker gets.
+ *
+ *  Interval mode: NOT the whole window. The reachable clock times are only the
+ *  `intervalTimesPerDay` residues of the interval, and WHICH ones depends on the phase — the
+ *  last scheduled send, which lives in the database and is unknowable from a form. So this
+ *  answers the only honest question available here: which bands are covered for EVERY
+ *  possible phase. A 24h interval guarantees nothing, so nothing is suppressed and the
+ *  coverage warning stands; an interval that genuinely drifts (residues <= 60 min apart)
+ *  guarantees every band its window touches, exactly as before.
+ *
+ *  This DIVERGES from worker/autofill.py `_covered_bands` on purpose, and only in interval
+ *  mode: the worker has `after`, so it computes the exact reachable set instead of this lower
+ *  bound. `deriveBand` itself still mirrors the worker's `derive_band` byte for byte. */
 export function coveredBands(c: Cadence, bandTimes: Record<string, string>): Set<string> {
   const out = new Set<string>();
   if (c.mode === "times") {
@@ -112,24 +145,78 @@ export function coveredBands(c: Cadence, bandTimes: Record<string, string>): Set
     return out;
   }
   // An explicitly empty day list is invalid — worker/scheduling.py's _parse_interval
-  // rejects it and skips the unit entirely, so no minute of the window is actually
-  // reachable. Without this check the loop below would report the whole window as
-  // covered for a cadence that can never fire, silencing the warning that exists to
-  // catch precisely this.
+  // rejects it and skips the unit entirely, so nothing is reachable at all. Without this
+  // check the sweep below would report bands as covered for a cadence that can never fire,
+  // silencing the warning that exists to catch precisely this.
   if (!c.days.length) return out;
   const start = minutesOf(c.from) ?? 0;
   const end = minutesOf(c.to) ?? 1439;
-  const minutes = start <= end
-    ? Array.from({ length: end - start + 1 }, (_, i) => start + i)
-    : [
-        ...Array.from({ length: 1440 - start }, (_, i) => start + i),
-        ...Array.from({ length: end + 1 }, (_, i) => i),
-      ];
-  for (const m of minutes) {
-    const hhmm = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-    out.add(deriveBand(hhmm, bandTimes));
+  const inWindow = (m: number) =>
+    start <= end ? m >= start && m <= end : m >= start || m <= end;
+
+  const step = intervalStepMinutes(c.everyMinutes);
+  let guaranteed: Set<string> | null = null;
+  for (let phase = 0; phase < step; phase++) {
+    const bands = new Set<string>();
+    for (let m = phase; m < 1440; m += step) {
+      if (!inWindow(m)) continue;
+      const hhmm =
+        `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+      bands.add(deriveBand(hhmm, bandTimes));
+    }
+    // Intersect: a band only counts as covered if no phase can miss it.
+    if (guaranteed === null) {
+      guaranteed = bands;
+    } else {
+      const previous: Set<string> = guaranteed;
+      guaranteed = new Set<string>([...previous].filter((b) => bands.has(b)));
+    }
+    if (!guaranteed.size) return guaranteed;
   }
-  return out;
+  return guaranteed ?? out;
+}
+
+/** The sentence under the interval inputs saying what this interval actually does.
+ *
+ *  Three cases, keyed off how far apart the reachable clock times are — NOT off
+ *  `everyMinutes % 1440`, which is true only for whole days and so promised a sweep for
+ *  every 12h, an interval that lands at one time forever. */
+export function intervalNote(everyMinutes: number): string {
+  const step = intervalStepMinutes(everyMinutes);
+  const perDay = 1440 / step;
+  if (perDay === 1) {
+    return "A whole number of days — this always lands at the same time."
+      + " Use “At set times” unless you meant to drift.";
+  }
+  if (step > 60) {
+    return `This lands at only ${perDay} times of day, ${gapLabel(step)} apart —`
+      + " and which ones depends on when the last send was scheduled, so tagged posts may"
+      + " not be reachable.";
+  }
+  return "The post time drifts by this interval each time, so it sweeps through every hour"
+    + " of the window over several days instead of landing at a fixed time.";
+}
+
+/** The coverage warning for one band with content and no reachable slot. Mode-aware: in
+ *  times mode the cadence definitively has no such time; in interval mode it may or may not
+ *  land there depending on a phase the dashboard cannot see, so the wording says "may". */
+export function uncoveredBandWarning(
+  band: string,
+  count: number,
+  mode: Cadence["mode"],
+): string {
+  const subject = count === 1 ? `1 ready post is tagged ${band}` : `${count} ready posts are tagged ${band}`;
+  const them = count === 1 ? "it" : "they";
+  return mode === "times"
+    ? `${subject} — no ${band} time set, so ${them} will not be auto-filled.`
+    : `${subject} — this interval is not guaranteed to land in the ${band}, so ${them} may not be auto-filled.`;
+}
+
+function gapLabel(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (!h) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 function labelDays(days: string[]): string {
