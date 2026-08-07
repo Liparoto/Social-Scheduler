@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BppMark } from "@/components/bpp-mark";
 import type {
@@ -24,6 +24,8 @@ import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
 import { captionLength } from "@/lib/caption-length";
+import { insertAtCaret } from "@/lib/insert-at-caret";
+import { EmojiPicker } from "@/components/emoji-picker";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { FramingButton } from "./framing-button";
@@ -110,6 +112,21 @@ export function PostEditor({
     initialCaptions.length ? initialCaptions : [{ platform: "", body: "" }]
   );
   const [firstComment, setFirstComment] = useState(post.first_comment ?? "");
+  const firstCommentRef = useRef<HTMLTextAreaElement>(null);
+
+  /** Splice a picked emoji into the first-comment box at the caret, not at the end. */
+  function insertFirstCommentEmoji(emoji: string) {
+    const el = firstCommentRef.current;
+    const start = el?.selectionStart ?? firstComment.length;
+    const end = el?.selectionEnd ?? firstComment.length;
+    const next = insertAtCaret(firstComment, emoji, start, end);
+    setFirstComment(next.text);
+    // After React commits the new value, or the caret gets overwritten by the re-render.
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(next.caret, next.caret);
+    });
+  }
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -376,13 +393,17 @@ export function PostEditor({
 
       {/* First comment */}
       <section className={card}>
-        <h3 className="mb-1 font-display text-sm font-semibold text-ink">First comment</h3>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h3 className="font-display text-sm font-semibold text-ink">First comment</h3>
+          <EmojiPicker onInsert={insertFirstCommentEmoji} />
+        </div>
         <p className="mb-3 text-xs text-muted">
           Posted automatically once the post is live — the usual home for hashtags. On
           Threads it goes out as a reply, which shows in your feed like any other post.
         </p>
         <textarea
-          className="min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
+          ref={firstCommentRef}
+          className="font-emoji min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
           placeholder="#hashtags #go #here"
           value={firstComment}
           onChange={(e) => setFirstComment(e.target.value)}

@@ -7,6 +7,8 @@ import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
 import { captionLength } from "@/lib/caption-length";
+import { insertAtCaret } from "@/lib/insert-at-caret";
+import { EmojiPicker } from "@/components/emoji-picker";
 import type { Asset, Period, PeriodMode, PostTarget, Tag } from "@/lib/types";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -62,6 +64,21 @@ export function Composer({
   const [assets, setAssets] = useState<UploadedAsset[]>([]);
   const [variants, setVariants] = useState<CaptionVariantDraft[]>([{ platform: "", body: "" }]);
   const [firstComment, setFirstComment] = useState("");
+  const firstCommentRef = useRef<HTMLTextAreaElement>(null);
+
+  /** Splice a picked emoji into the first-comment box at the caret, not at the end. */
+  function insertFirstCommentEmoji(emoji: string) {
+    const el = firstCommentRef.current;
+    const start = el?.selectionStart ?? firstComment.length;
+    const end = el?.selectionEnd ?? firstComment.length;
+    const next = insertAtCaret(firstComment, emoji, start, end);
+    setFirstComment(next.text);
+    // After React commits the new value, or the caret gets overwritten by the re-render.
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(next.caret, next.caret);
+    });
+  }
   // Targets, not channel ids: an Instagram channel can be picked for its Feed, its
   // Story, or both, and each is an independent send. See channel-surface-picker.
   const [targets, setTargets] = useState<PostTarget[]>([]);
@@ -501,14 +518,18 @@ export function Composer({
             </p>
           ) : null}
           <div>
-            <label className={label}>
-              First comment{" "}
-              <span className="font-normal text-faint">
-                (auto-posted after publish — good for hashtags)
-              </span>
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label className={label}>
+                First comment{" "}
+                <span className="font-normal text-faint">
+                  (auto-posted after publish — good for hashtags)
+                </span>
+              </label>
+              <EmojiPicker onInsert={insertFirstCommentEmoji} />
+            </div>
             <textarea
-              className={`${fieldCls} min-h-16 resize-y`}
+              ref={firstCommentRef}
+              className={`${fieldCls} font-emoji min-h-16 resize-y`}
               placeholder="#hashtags #go #here"
               value={firstComment}
               onChange={(e) => setFirstComment(e.target.value)}
