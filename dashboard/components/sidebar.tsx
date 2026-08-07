@@ -14,6 +14,7 @@ const NAV = [
   { href: "/insights/pool", label: "BPP pool", hint: "Posts worth repeating" },
   { href: "/media", label: "Media", hint: "Stored files & cleanup" },
   { href: "/periods", label: "Periods", hint: "In-season windows" },
+  { href: "/tags", label: "Tags", hint: "Topics & cleanup" },
   { href: "/channels", label: "Channels", hint: "Accounts & config" },
 ];
 

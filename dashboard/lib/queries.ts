@@ -1947,6 +1947,107 @@ export function createTopicTag(name: string): Tag {
     .get(Number(info.lastInsertRowid)) as Tag;
 }
 
+/** Thrown when a delete targets a tag the install is not allowed to remove. */
+export class ProtectedTagError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProtectedTagError";
+  }
+}
+
+/** Thrown when a rename would collide with a tag that already exists. */
+export class DuplicateTagNameError extends Error {
+  constructor(name: string) {
+    super(`A tag named "${name}" already exists.`);
+    this.name = "DuplicateTagNameError";
+  }
+}
+
+/**
+ * Rename a topic tag in place. Returns the updated row, or null if the tag is gone.
+ *
+ * This is the non-destructive fix for a typo: the tag's id never changes, so every
+ * post_tags row survives and the posts keep the label under its new spelling. Deleting
+ * and re-adding would drop the tag off every post it was on.
+ *
+ * Refused for the four time_of_day bands (see deleteTopicTag) and for a name another tag
+ * already holds — tags.name is UNIQUE COLLATE NOCASE, so the bare UPDATE would otherwise
+ * surface as a 500 rather than something the page can explain.
+ */
+export function renameTopicTag(tagId: number, name: string): Tag | null {
+  const db = getDb();
+  const clean = name.trim();
+  if (!clean) throw new Error("Tag name cannot be empty.");
+
+  const tag = db.prepare("SELECT id, name, kind FROM tags WHERE id = ?").get(tagId) as
+    | Tag
+    | undefined;
+  if (!tag) return null;
+  if (tag.kind !== "topic") {
+    throw new ProtectedTagError(
+      `"${tag.name}" is a time-of-day band used for scheduling and cannot be renamed.`
+    );
+  }
+
+  // Exclude the row itself: renaming "beach" -> "Beach" is a legitimate case fix, and
+  // COLLATE NOCASE would otherwise report the tag as colliding with its own old name.
+  const clash = db
+    .prepare("SELECT id, name, kind FROM tags WHERE name = ? COLLATE NOCASE AND id != ?")
+    .get(clean, tagId) as Tag | undefined;
+  if (clash) {
+    if (clash.kind !== "topic") throw new ReservedTagNameError(clean);
+    throw new DuplicateTagNameError(clean);
+  }
+
+  db.prepare("UPDATE tags SET name = ? WHERE id = ?").run(clean, tagId);
+  return db.prepare("SELECT id, name, kind FROM tags WHERE id = ?").get(tagId) as Tag;
+}
+
+/** Topic tags with how many posts each is attached to, for the Tags admin page. */
+export function listTopicTagsWithUsage(): (Tag & { post_count: number })[] {
+  return getDb()
+    .prepare(
+      `SELECT t.id, t.name, t.kind, COUNT(pt.post_id) AS post_count
+         FROM tags t
+         LEFT JOIN post_tags pt ON pt.tag_id = t.id
+        WHERE t.kind = 'topic'
+        GROUP BY t.id
+        ORDER BY t.name COLLATE NOCASE`
+    )
+    .all() as (Tag & { post_count: number })[];
+}
+
+/**
+ * Delete a topic tag and detach it from every post that carries it.
+ *
+ * post_tags cascades on tags(id) (and db.ts sets `foreign_keys = ON`), so the join rows
+ * go with it — the POSTS are untouched, they just stop carrying this label.
+ *
+ * The four time_of_day bands are refused: they are a fixed vocabulary the worker's
+ * auto-fill matches on BY NAME (worker/time_of_day.py), so deleting one would silently
+ * change which slots posts are eligible for rather than just tidying a label.
+ */
+export function deleteTopicTag(tagId: number): { deleted: boolean; postCount: number } {
+  const db = getDb();
+  const tag = db.prepare("SELECT id, name, kind FROM tags WHERE id = ?").get(tagId) as
+    | Tag
+    | undefined;
+  if (!tag) return { deleted: false, postCount: 0 };
+  if (tag.kind !== "topic") {
+    throw new ProtectedTagError(
+      `"${tag.name}" is a time-of-day band used for scheduling and cannot be deleted.`
+    );
+  }
+  const tx = db.transaction(() => {
+    const { n } = db
+      .prepare("SELECT COUNT(*) AS n FROM post_tags WHERE tag_id = ?")
+      .get(tagId) as { n: number };
+    db.prepare("DELETE FROM tags WHERE id = ?").run(tagId);
+    return n;
+  });
+  return { deleted: true, postCount: tx() };
+}
+
 export function getPostTags(postId: number): Tag[] {
   const db = getDb();
   return db
