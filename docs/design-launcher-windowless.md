@@ -36,7 +36,7 @@ stop. No console windows in between.
 | `Stop-SocialScheduler-Mac.command` | new | Stop dashboard + worker, report, close |
 | `Start-SocialScheduler-Windows.bat` | rewrite | Same |
 | `Stop-SocialScheduler-Windows.bat` | new | Same |
-| `scripts/run-hidden.vbs` | new | Windows-only helper; launches a command with no console window |
+| `scripts/run-hidden.ps1` | new | Windows-only helper; launches a command with no console window |
 | `.env.example` | edit | Document `WORKER_AUTO_STOP_HOURS` |
 
 ## What does not change
@@ -63,7 +63,7 @@ Replacing step 8.
    therefore also the "is it on?" check — no separate Status file to explain.
 2. **Launch the dashboard detached.**
    - Mac: `nohup env PORT=3939 npm --prefix dashboard run dev > data/logs/dashboard.log 2>&1 & disown`
-   - Windows: via `scripts/run-hidden.vbs`, logging to `data\logs\dashboard.log`
+   - Windows: via `scripts/run-hidden.ps1`, logging to `data\logs\dashboard.log`
 3. **Launch the worker detached** if the user chose Go live.
    - Mac: `nohup .venv/bin/python -m worker.run >> data/logs/worker-daemon.out 2>&1 & disown`
    - Windows: via the same `.vbs` helper, using `.venv\Scripts\python`
@@ -97,10 +97,22 @@ A double-clicked `.bat` closes its console automatically when the script ends. T
 rewrite just removes the trailing `pause` and stops running `npm run dev` in the
 foreground. No trick needed.
 
-`run-hidden.vbs` exists because `start /b` and `start /min` both still leave a console
-window associated with the process. The `.vbs` shim launches a process with window style
-0 (hidden) via `Win32_Process.Create`, which — unlike `WScript.Shell.Run` — also hands
+`run-hidden.ps1` exists because `start /b` and `start /min` both still leave a console
+window associated with the process. The shim launches a process with window style
+0 (hidden) via `Win32_Process.Create`, which — unlike `Start-Process` — also hands
 back a PID so Stop can find it later.
+
+**Changed after Windows testing (2026-08-07, issue #1):** this was originally a `.vbs`.
+McAfee quarantines a VBScript that spawns a hidden process — the textbook malware-dropper
+signature — deleting it from the checkout on `git pull` and blocking execution with exit
+225. A false positive, but it left a Windows clone unable to start *anything*, since both
+the worker and the dashboard launch through this shim. VBScript is deprecated besides: on
+Windows 11 24H2+ it is a Feature on Demand slated for removal.
+
+It must keep using `Win32_Process.Create`. `Start-Process` and `ProcessStartInfo` both set
+`bInheritHandles=TRUE` when a stream is redirected, so the spawned daemon inherits the
+calling `.bat`'s `for /f` pipe and holds it open for life — `for /f` then blocks forever
+with no error.
 
 **Changed during implementation:** the shim takes a **`.cmd` file path**, not a command
 line. The commands it launches contain redirects, quotes, and paths with spaces (this

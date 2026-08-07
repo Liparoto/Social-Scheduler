@@ -178,7 +178,7 @@ if not errorlevel 1 (
     del /q "!RUN_DIR!\watchdog.pid" "!RUN_DIR!\worker.deadline" >NUL 2>&1
   )
 
-  schtasks /Create /F /SC ONLOGON /TN "%TASKNAME%" /TR "wscript //nologo \"%~dp0scripts\run-hidden.vbs\" \"!RUN_DIR!\run-worker-autostart.cmd\"" >NUL 2>&1
+  schtasks /Create /F /SC ONLOGON /TN "%TASKNAME%" /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0scripts\run-hidden.ps1\" \"!RUN_DIR!\run-worker-autostart.cmd\"" >NUL 2>&1
   if errorlevel 1 (
     echo         ^(Could not register autostart - running it just for this session.^)
     set "MANUAL_WORKER=1"
@@ -198,7 +198,7 @@ if "!MANUAL_WORKER!"=="1" (
   >>"!RUN_DIR!\run-worker.cmd" echo ".venv\Scripts\python" -m worker.run ^>^> "!LOG_DIR!\worker-daemon.out" 2^>^&1
 
   set "WORKER_PID="
-  for /f %%p in ('cscript //nologo "%~dp0scripts\run-hidden.vbs" "!RUN_DIR!\run-worker.cmd"') do set "WORKER_PID=%%p"
+  for /f %%p in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run-hidden.ps1" "!RUN_DIR!\run-worker.cmd"') do set "WORKER_PID=%%p"
   if defined WORKER_PID >"!RUN_DIR!\worker.pid" echo !WORKER_PID!
   echo Worker running in the background ^(logs are in data\logs\^).
   echo.
@@ -214,7 +214,7 @@ echo Starting the dashboard...
 >>"%RUN_DIR%\run-dashboard.cmd" echo npm run dev ^> "%LOG_DIR%\dashboard.log" 2^>^&1
 
 set "DASH_PID="
-for /f %%p in ('cscript //nologo "%~dp0scripts\run-hidden.vbs" "%RUN_DIR%\run-dashboard.cmd"') do set "DASH_PID=%%p"
+for /f %%p in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run-hidden.ps1" "%RUN_DIR%\run-dashboard.cmd"') do set "DASH_PID=%%p"
 if defined DASH_PID >"%RUN_DIR%\dashboard.pid" echo !DASH_PID!
 
 REM Wait until the dashboard actually answers before opening the browser. This used to
