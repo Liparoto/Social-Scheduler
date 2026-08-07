@@ -99,6 +99,14 @@ REM Run with the venv's Python, not the system one, because it needs certifi for
 REM verification against GitHub (see the note in worker/cloudflared_setup.py).
 ".venv\Scripts\python" -m worker.cloudflared_setup
 
+REM ---- 5d. Make sure ffmpeg is here (it converts iPhone video for Instagram). ----
+REM
+REM Unconditional, exactly like cloudflared above and for a sharper reason: the install
+REM that reported this could not convert at all, and it ALREADY EXISTS. A first-run guard
+REM would skip it there forever. It is a no-op once installed, and failure is never fatal -
+REM photos and carousels need no converter.
+".venv\Scripts\python" -m worker.ffmpeg_setup
+
 REM ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
 set PORT=3939
 set "RUN_DIR=%~dp0data\run"

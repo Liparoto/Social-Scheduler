@@ -62,6 +62,12 @@ Cloudflare program that lets Meta fetch your media at publish time). Nothing to 
 and no Cloudflare account: it downloads into `data/bin/`, and if you already have your own copy
 it uses that instead. Every run it re-checks the database so new updates apply automatically.
 
+> **Video conversion.** iPhone video is usually HEVC, and stores its index at the end of
+> the file — Instagram accepts neither. Start sets up a converter for you the first time
+> it runs. On a Mac this uses `avconvert`, which macOS already provides, so nothing is
+> downloaded; on Windows a converter is installed automatically. Photos and carousels
+> never need it.
+
 There is no menu — starting SocialScheduler starts the whole thing: the dashboard at
 `http://localhost:3939` to compose in, and the worker that publishes what you've scheduled.
 **Whether anything can actually post is decided by `.env`, not by anything you click:**
