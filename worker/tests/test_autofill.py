@@ -370,32 +370,104 @@ def _tag(conn, post_id, band):
     conn.commit()
 
 
-def test_autofill_uses_time_of_day_for_slot_time(conn, config):
-    # Channel posts Mon/Wed/Fri; cadence time 17:00 is the anytime fallback.
+def test_autofill_never_places_a_post_outside_its_band(conn, config):
+    # Cadence is 12:30 only, which derives to AFTERNOON. The evening post must be held back
+    # entirely rather than sent at 12:30; the untagged one fills as normal.
     tz = "America/New_York"
     ch = make_channel(conn, min_depth=3, target=3,
-                      cadence='{"days":["mon","wed","fri"],"time":"17:00"}', tz=tz)
-    # created_at ordering makes selection deterministic (oldest first among never-posted).
+                      cadence='{"days":["mon","tue","wed","thu","fri","sat","sun"],'
+                              '"time":"12:30"}', tz=tz)
     p_even = make_post(conn, ch, created_at="2026-01-01T00:00:00+00:00")
-    p_morn = make_post(conn, ch, created_at="2026-01-02T00:00:00+00:00")
-    p_any = make_post(conn, ch, created_at="2026-01-03T00:00:00+00:00")
+    p_plain = make_post(conn, ch, created_at="2026-01-02T00:00:00+00:00")
     _tag(conn, p_even, "evening")
-    _tag(conn, p_morn, "morning")
-    # p_any: no time_of_day tag -> cadence time.
 
-    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)  # a Sunday
-    made = run_autofill(conn, config, now)
-    assert made == 3
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    run_autofill(conn, config, now)
+
+    placed = [r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM publications WHERE channel_id=?", (ch,)).fetchall()]
+    assert p_plain in placed
+    assert p_even not in placed
+
+
+def test_autofill_places_a_banded_post_once_its_band_has_a_time(conn, config):
+    # Same library, but the cadence now books an evening slot too.
+    tz = "America/New_York"
+    ch = make_channel(conn, min_depth=3, target=3,
+                      cadence='{"mode":"times","slots":['
+                              '{"time":"12:30","days":["mon","tue","wed","thu","fri","sat","sun"]},'
+                              '{"time":"18:00","days":["mon","tue","wed","thu","fri","sat","sun"]}]}',
+                      tz=tz)
+    p_even = make_post(conn, ch, created_at="2026-01-01T00:00:00+00:00")
+    p_plain = make_post(conn, ch, created_at="2026-01-02T00:00:00+00:00")
+    _tag(conn, p_even, "evening")
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    run_autofill(conn, config, now)
 
     rows = conn.execute(
-        "SELECT post_id, scheduled_at FROM publications WHERE channel_id=? "
-        "ORDER BY scheduled_at ASC", (ch,)
-    ).fetchall()
-    times = {r["post_id"]: datetime.fromisoformat(r["scheduled_at"]).astimezone(ZoneInfo(tz))
-             for r in rows}
-    assert (times[p_even].hour, times[p_even].minute) == (18, 0)
-    assert (times[p_morn].hour, times[p_morn].minute) == (9, 0)
-    assert (times[p_any].hour, times[p_any].minute) == (17, 0)  # cadence fallback
+        "SELECT post_id, scheduled_at FROM publications WHERE channel_id=?", (ch,)).fetchall()
+    at = {r["post_id"]: datetime.fromisoformat(r["scheduled_at"]).astimezone(ZoneInfo(tz))
+          for r in rows}
+    assert (at[p_even].hour, at[p_even].minute) == (18, 0)
+    assert p_plain in at
+
+
+def test_autofill_looks_past_the_top_ranked_candidates_to_find_a_fitting_one(conn, config):
+    # The bug the uncapped fetch fixes: the top `need` ranked posts are ALL evening-tagged
+    # while the cadence covers only afternoon. Fetching just `need` would place nothing.
+    tz = "UTC"
+    ch = make_channel(conn, min_depth=2, target=2,
+                      cadence='{"days":["mon","tue","wed","thu","fri","sat","sun"],'
+                              '"time":"12:30"}', tz=tz)
+    for i in range(5):  # oldest first -> these rank ahead of the plain ones
+        _tag(conn, make_post(conn, ch, created_at=f"2026-01-0{i + 1}T00:00:00+00:00"), "evening")
+    plain = [make_post(conn, ch, created_at="2026-02-01T00:00:00+00:00"),
+             make_post(conn, ch, created_at="2026-02-02T00:00:00+00:00")]
+
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    made = run_autofill(conn, config, now)
+    assert made == 2
+    placed = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM publications WHERE channel_id=?", (ch,)).fetchall()}
+    assert placed == set(plain)
+
+
+def test_autofill_logs_which_posts_are_held_back(conn, config):
+    class Recorder:
+        def __init__(self):
+            self.lines = []
+
+        def info(self, msg, *args):
+            self.lines.append(msg % args if args else msg)
+
+    ch = make_channel(conn, min_depth=2, target=2,
+                      cadence='{"days":["mon","tue","wed","thu","fri","sat","sun"],'
+                              '"time":"12:30"}', tz="UTC")
+    for i in range(3):
+        _tag(conn, make_post(conn, ch, created_at=f"2026-01-0{i + 1}T00:00:00+00:00"), "evening")
+    make_post(conn, ch, created_at="2026-02-01T00:00:00+00:00")
+
+    log = Recorder()
+    run_autofill(conn, config, datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc), log)
+    held = [line for line in log.lines if "held back" in line]
+    assert held, log.lines
+    assert "3" in held[0] and "evening" in held[0]
+
+
+def test_autofill_interval_cadence_drifts(conn, config):
+    ch = make_channel(conn, min_depth=3, target=3, tz="UTC",
+                      cadence='{"mode":"interval","every_minutes":585,'
+                              '"window":{"from":"08:00","to":"21:00"}}')
+    for i in range(3):
+        make_post(conn, ch, created_at=f"2026-01-0{i + 1}T00:00:00+00:00")
+
+    now = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)  # Monday 09:00
+    assert run_autofill(conn, config, now) == 3
+    at = [datetime.fromisoformat(r["scheduled_at"]) for r in conn.execute(
+        "SELECT scheduled_at FROM publications WHERE channel_id=? ORDER BY scheduled_at",
+        (ch,)).fetchall()]
+    assert [(d.hour, d.minute) for d in at] == [(18, 45), (14, 15), (9, 45)]
 
 
 def test_story_only_post_is_never_autofilled_into_the_feed(conn):

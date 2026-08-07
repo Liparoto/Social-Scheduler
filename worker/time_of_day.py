@@ -1,9 +1,8 @@
-"""Time-of-day bands: resolve a post's time_of_day tag(s) into a clock time.
+"""Time-of-day bands: which slots a post's time_of_day tag(s) permit.
 
-A post's slot TIME comes from its time_of_day tag; its slot DAY comes from the
-channel cadence (see autofill). morning/afternoon/evening map to configured clock
-times; `anytime` (and no time_of_day tag at all) fall back to the channel's own
-cadence time. When several specific bands are present, the earliest wins.
+A cadence TIME carries a band (`derive_band`), and a post's tags say which bands it will
+accept (`post_allows_band`). morning/afternoon/evening are the specific bands; `anytime` (and
+no time_of_day tag at all) place no constraint, so such a post fits any slot.
 """
 
 from __future__ import annotations
@@ -40,18 +39,6 @@ def post_bands(conn, post_id: int) -> set[str]:
         (post_id,),
     ).fetchall()
     return {r["name"] for r in rows}
-
-
-def resolve_slot_time(
-    bands: set[str],
-    band_times_map: dict[str, tuple[int, int]],
-    cadence_hm: tuple[int, int],
-) -> tuple[int, int]:
-    """Earliest specific band wins; anytime/none -> the channel cadence time."""
-    for b in BAND_ORDER:
-        if b in bands:
-            return band_times_map[b]
-    return cadence_hm
 
 
 def derive_band(hour: int, minute: int, band_times_map: dict[str, tuple[int, int]]) -> str:

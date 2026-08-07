@@ -34,11 +34,9 @@ from .clients import PLATFORM_CAPS
 from .config import Config
 from .periods import in_season, local_date, period_from_row
 from .publisher import _select_caption
-from .scheduling import (
-    daily_slots, parse_cadence_times, parse_iso, parse_weekly_cadence,
-    weekly_date_slots,
-)
-from .time_of_day import band_times, post_allows_band, post_bands, resolve_slot_time
+from .scheduling import iter_slots, parse_cadence, parse_iso
+from .time_of_day import BAND_ORDER, band_times, post_allows_band, post_bands
+from .time_of_day import derive_band
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
 
@@ -510,39 +508,32 @@ def _last_bpp_date(conn, member_ids: list[int]):
     return parse_iso(row["d"]).date()
 
 
-def _apply_bpp(conn, unit, settings, now, need, candidates, every_days, cadence, config,
-               last_future, logger):
-    """Place BPPs into the slots whose dates fall due, and pick whose turn it is.
+def _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post, band_of,
+               covered, every_days, logger):
+    """Re-fill the slots pass 1 chose, giving the due ones to the owner's marked posts.
 
-    Returns the reordered candidate list plus {post_id: was_recycled}.
+    Two passes, because the two facts depend on each other in opposite directions: a BPP's
+    due-ness depends on the slot DATES, while which post lands in a slot depends on band
+    matching. So pass 1 (already done, in `placed`) fixes the dates, and this re-runs the same
+    slots with the pool available at the due positions.
 
-    The slot DATES have to be known before it can be decided which are due, but a slot's
-    TIME depends on the post that lands in it (time-of-day tags). So the dates are
-    projected first using the cadence's own time — dates come from the weekday pattern and
-    are unaffected by that choice — and _fill_unit recomputes the real times afterwards
-    from whatever ends up selected.
+    A due slot whose band no pool post fits falls through to normal selection and is not
+    flagged — the same behaviour as a due slot with an empty pool.
     """
-    weekdays, hour, minute = cadence
-    after = parse_iso(last_future) if last_future else now
-    projected = weekly_date_slots(
-        weekdays, settings["timezone"], after, [(hour, minute)] * max(need, 0)
-    )
-    if not projected:
-        return candidates, {}
-
+    slots = [(slot, hhmm) for _, slot, hhmm, _ in placed]
     due = bpp_slot_indices(
-        [slot.date() for slot in projected],
+        [slot.date() for slot, _ in slots],
         _last_bpp_date(conn, [m["id"] for m in unit.members]),
         every_days,
     )
     if not due:
-        return candidates, {}
+        return placed
 
     if unit.is_group:
         pool = _group_bpp_pool(conn, settings, unit.members, now)
     else:
-        ch = unit.members[0]
-        pool = [(r, [ch]) for r in bpp_pool(conn, ch, now)]
+        channel = unit.members[0]
+        pool = [(r, [channel]) for r in bpp_pool(conn, channel, now)]
 
     if not pool:
         if logger:
@@ -550,18 +541,36 @@ def _apply_bpp(conn, unit, settings, now, need, candidates, every_days, cadence,
                 "[autofill %s] a BPP slot came due but the pool is empty — mark some posts "
                 "in the dashboard, or this stays ordinary auto-fill", unit.label,
             )
-        return candidates, {}
+        return placed
 
-    merged = _merge_bpp_slots(candidates, pool, due, len(projected))
-    ordered = [item for item, _ in merged]
-    flags = {item[0]["post_id"]: was_bpp for item, was_bpp in merged}
-    if logger and any(flags.values()):
-        chosen = [pid for pid, yes in flags.items() if yes]
+    for row, _ in pool:
+        bands_by_post.setdefault(row["post_id"], post_bands(conn, row["post_id"]))
+
+    refilled = _assign(slots, candidates, bands_by_post, band_of, len(slots), covered,
+                       pool=pool, due=due)
+    if logger and any(flag for _, _, _, flag in refilled):
+        chosen = [item[0]["post_id"] for item, _, _, flag in refilled if flag]
         logger.info(
             "[autofill %s] BPP: %d slot(s) from a pool of %d — post(s) %s",
             unit.label, len(chosen), len(pool), ", ".join(str(p) for p in chosen),
         )
-    return ordered, flags
+    return refilled
+
+
+def _stranded_by_band(candidates, bands_by_post, covered) -> dict[str, int]:
+    """How many eligible candidates carry a band the cadence has no slot for.
+
+    This is the number behind the held-back log line. It counts over the FULL eligible list
+    (the fetch is uncapped for exactly this reason), so it reports the real size of the
+    problem rather than however many happened to fit in one cycle's need.
+    """
+    counts: dict[str, int] = {}
+    for row, _ in candidates:
+        bands = bands_by_post.get(row["post_id"], set()) & set(BAND_ORDER)
+        if bands and not (bands & covered):
+            for band in sorted(bands):
+                counts[band] = counts.get(band, 0) + 1
+    return counts
 
 
 def _group_bpp_pool(conn, group, members, now) -> list:
@@ -586,40 +595,6 @@ def _group_bpp_pool(conn, group, members, now) -> list:
     ]
     pairs.sort(key=lambda rm: (rm[0]["last_posted"] is not None, rm[0]["last_posted"] or ""))
     return pairs
-
-
-def _merge_bpp_slots(normal, pool, due_positions, total):
-    """Put a pool pick in each due slot, everything else as usual.
-
-    Returns [(item, is_bpp), ...]. No post can appear twice — the pool and the normal
-    list are drawn from the same library, so without the guard a BPP could be queued
-    again by the very next ordinary slot. A due slot with the pool exhausted falls back
-    to normal selection and is NOT flagged, because it is not one.
-    """
-    used: set = set()
-    out: list = []
-    normal_i = pool_i = 0
-
-    def take(items, index):
-        while index < len(items):
-            candidate = items[index]
-            index += 1
-            if candidate[0]["post_id"] not in used:
-                return candidate, index
-        return None, index
-
-    for position in range(total):
-        item, is_bpp = None, False
-        if position in due_positions:
-            item, pool_i = take(pool, pool_i)
-            is_bpp = item is not None
-        if item is None:
-            item, normal_i = take(normal, normal_i)
-        if item is None:
-            break
-        used.add(item[0]["post_id"])
-        out.append((item, is_bpp))
-    return out
 
 
 def _unit_publication_count(conn, member_ids: list[int]) -> int:
@@ -708,7 +683,7 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
         return 0
 
     settings = unit.settings
-    cadence = parse_weekly_cadence(settings["cadence_config"])
+    cadence = parse_cadence(settings["cadence_config"])
     if cadence is None:
         if logger:
             logger.info("[autofill %s] no valid cadence — skipping", unit.label)
@@ -728,24 +703,15 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     if need <= 0:
         return 0
 
+    # Uncapped on purpose. Under band matching, a `need`-sized fetch is a bug: if the top-ranked
+    # few all sit in a band this cadence has no slot for, auto-fill would place nothing while
+    # hundreds of usable posts sat further down the ranking. The SLOTS do the limiting instead —
+    # which is already how the group and BPP paths have always worked.
     if unit.is_group:
-        candidates = group_eligible_candidates(conn, settings, unit.members, now, need)
+        candidates = group_eligible_candidates(conn, settings, unit.members, now, None)
     else:
         ch = unit.members[0]
-        candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, need)]
-
-    # BPP: give some slots to posts the OWNER marked as worth reposting, on their own
-    # cadence in days. Nothing here judges content — the mark is the judgement, made by a
-    # person looking at the stats (see worker/bpp.py for why an algorithm cannot).
-    #
-    # Off unless the unit sets a cadence, and when off none of this runs.
-    every_days = _setting(settings, "bpp_every_days")
-    recycled_flags: dict[int, bool] = {}
-    if every_days > 0:
-        candidates, recycled_flags = _apply_bpp(
-            conn, unit, settings, now, need, candidates, every_days, cadence, config,
-            last_future, logger,
-        )
+        candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, None)]
 
     if not candidates:
         if logger:
@@ -755,44 +721,48 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
             )
         return 0
 
-    weekdays, hour, minute = cadence
-    cadence_hm = (hour, minute)
     bt_map = band_times(config)
-    after = parse_iso(last_future) if last_future else now
-    day_times = parse_cadence_times(settings["cadence_config"])
-    if len(day_times) > 1:
-        # Several posts a day. Slots are day x time, so a day genuinely carries more than
-        # one send — weekly_date_slots advances a whole day after each placement by
-        # design (it exists to spread a queue out) and can never do this.
-        #
-        # Time-of-day tags are not consulted on this path: the cadence already states the
-        # times, and letting a post's band override one would collapse two sends onto the
-        # same minute or leave a booked slot empty. With a single daily time the band
-        # still decides, exactly as before.
-        slots = daily_slots(weekdays, settings["timezone"], after, day_times, len(candidates))
-    else:
-        # Each candidate's slot TIME comes from its time_of_day tag; the cadence still
-        # supplies which DAYS (one auto-post per active day).
-        per_candidate_times = [
-            resolve_slot_time(post_bands(conn, row["post_id"]), bt_map, cadence_hm)
-            for row, _ in candidates
-        ]
-        slots = weekly_date_slots(weekdays, settings["timezone"], after, per_candidate_times)
 
-    # All-or-nothing. sqlite3's default isolation means these inserts sit in an implicit
-    # transaction, and run.py catches errors and REUSES this connection — so without the
-    # rollback a failure mid-group (e.g. a member channel deleted in the dashboard since
-    # _autofill_units read it; foreign keys are ON) would be silently committed by the
-    # next cycle's heartbeat, leaving one member scheduled and the other not: exactly the
-    # drift groups exist to prevent. The open transaction would also hold SQLite's writer
-    # lock for a full poll interval, blocking the dashboard.
+    def band_of(hhmm):
+        return derive_band(hhmm[0], hhmm[1], bt_map)
+
+    covered = {band_of(hm) for hm in cadence.candidate_local_times()}
+    bands_by_post = {row["post_id"]: post_bands(conn, row["post_id"]) for row, _ in candidates}
+
+    after = parse_iso(last_future) if last_future else now
+    placed = _assign(
+        iter_slots(cadence, settings["timezone"], after),
+        candidates, bands_by_post, band_of, need, covered,
+    )
+
+    # BPP: give some slots to posts the OWNER marked as worth reposting, on their own cadence
+    # in days. Nothing here judges content — the mark is the judgement, made by a person
+    # looking at the stats (see worker/bpp.py for why an algorithm cannot).
+    every_days = _setting(settings, "bpp_every_days")
+    if every_days > 0 and placed:
+        placed = _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post,
+                            band_of, covered, every_days, logger)
+
+    stranded = _stranded_by_band(candidates, bands_by_post, covered)
+    if stranded and logger:
+        detail = ", ".join(f"{count} tagged {band}" for band, count in sorted(stranded.items()))
+        logger.info(
+            "[autofill %s] %s held back — this cadence has no slot in that band. Add a time "
+            "in the dashboard, or retag the posts.", unit.label, detail,
+        )
+
+    if not placed:
+        if logger:
+            logger.info(
+                "[autofill %s] queue low (%d/%d) but nothing could be placed",
+                unit.label, ahead, settings["min_queue_depth"],
+            )
+        return 0
+
     made = 0
     try:
-        for (row, recipients), slot in zip(candidates, slots):
+        for (row, recipients), slot, _hhmm, is_bpp in placed:
             for member in recipients:
-                # requires_approval stays a CHANNEL property — it describes the account,
-                # not the schedule, so one member of a group may need approval and
-                # another not.
                 status = "pending_approval" if member["requires_approval"] else "scheduled"
                 conn.execute(
                     """INSERT INTO publications
@@ -800,7 +770,7 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
                           is_recycled)
                        VALUES (?, ?, ?, ?, 'autofill', ?)""",
                     (row["post_id"], member["id"], slot.isoformat(), status,
-                     1 if recycled_flags.get(row["post_id"]) else 0),
+                     1 if is_bpp else 0),
                 )
                 made += 1
         conn.commit()
