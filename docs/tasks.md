@@ -2056,3 +2056,32 @@ published emoji is a Unicode codepoint drawn by the viewer's device, so an iPhon
 sees Apple's artwork regardless of the composing machine. Apple Color Emoji is proprietary and
 can never be bundled; Noto (SIL OFL) is the closest legal equivalent and fixes the author's
 own view, which was the real problem.
+
+### Emoji picker — three rendering bugs found on the owner's screen, 2026-08-07
+
+Shipped broken and reported immediately. All three were visual, and all three slipped past a
+verification pass that measured the DOM but never actually LOOKED at the page — the earlier
+screenshots came back blank and I read computed styles instead of treating that as a blocker.
+The lesson is narrow and worth keeping: **a computed `font-family` proves the CSS resolved, not
+that anything rendered.**
+
+1. **Captions rendered at roughly triple size, overlapping their own lines.** `font-emoji` was
+   applied to the textareas, and Noto Color Emoji is an emoji-only font with no Latin glyphs —
+   so every ordinary word fell through to next/font's metric-matched "Noto Color Emoji
+   Fallback", which inherits an EMOJI font's metrics. Fixed by never leading a mixed-content
+   element with it: `"Noto Color Emoji"` is now appended LAST to `--font-sans`/`--font-display`/
+   `--font-mono`, so letters resolve from Inter and only emoji reach Noto. `--font-emoji`
+   (emoji-first) survives for the picker grid, which contains nothing but emoji.
+2. **The picker trigger was an invisible empty box.** It was the 🙂 character, so on any machine
+   where the emoji font has not loaded it renders as nothing — the exact machines this feature
+   exists for. Replaced with an inline SVG face plus the word "Emoji", which cannot fail that
+   way and also removes the guesswork about whether it is a button.
+3. **The caption row's Emoji button was clipped outside its card.** `fieldCls` carries `w-full`
+   and the select also had `w-40`; two same-specificity width utilities resolve by stylesheet
+   order, not by the order written in the className, so `w-full` won and pushed the button out.
+   Fixed by boxing the select in a `w-40 shrink-0` wrapper instead.
+
+Re-verified by screenshot this time, not by measurement alone: caption text at normal size with
+colour emoji inline, both Emoji buttons inside their cards, picker opens to 302 buttons, insert
+at caret gives `Hello😀 world` with the caret at 7, textarea font stack leading with Inter.
+`npm test` 470 passed, `npm run lint` 0 errors, `pytest` 797 passed.

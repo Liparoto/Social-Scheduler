@@ -38,18 +38,27 @@
   --color-status-failed: #dc2626;
   --color-status-publishing: #b45309;
 
-  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
-  /* Scoped to the picker and the caption fields via `font-emoji` rather than applied
-     app-wide, so it never overrides display/body/mono anywhere else.
+  /* "Noto Color Emoji" is appended LAST to every text stack, never first.
 
-     The fallback chain matters: if the bundled webfont fails to load, the machine's own
-     emoji font still draws something rather than leaving blank space. Apple Color Emoji is
-     listed only as a FALLBACK to a font already installed on the reader's Mac — it is never
-     shipped, because it is proprietary. */
-  --font-emoji: var(--font-noto-emoji), "Apple Color Emoji", "Segoe UI Emoji",
-    "Noto Color Emoji", sans-serif;
+     It is an emoji-only font with no Latin glyphs, so a stack that leads with it sends every
+     ordinary word to the next family — and next/font's metric-matched "Noto Color Emoji
+     Fallback" inherits an EMOJI font's metrics, which rendered captions at roughly triple
+     size, overlapping their own lines. Named literally rather than via
+     var(--font-noto-emoji) so only the real family is referenced, not that fallback.
+
+     Last position is what makes emoji work here: letters resolve from Inter/Space Grotesk as
+     before, and only characters those fonts lack — emoji — reach Noto. That is what stops
+     an older Windows drawing newer emoji as empty boxes, inside ordinary text. */
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif,
+    "Noto Color Emoji";
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif, "Noto Color Emoji";
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace, "Noto Color Emoji";
+  /* Emoji-FIRST, and therefore only ever applied to elements whose content is nothing but
+     emoji — the picker's grid and recents. Never put this on a textarea or a label.
+
+     Apple Color Emoji is listed only as a fallback to a font already installed on the
+     reader's own Mac; it is proprietary and is never shipped. */
+  --font-emoji: var(--font-noto-emoji), "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 
   --radius-card: 12px;
 }

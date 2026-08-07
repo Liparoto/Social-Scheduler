@@ -544,7 +544,7 @@ export function Composer({
             </div>
             <textarea
               ref={firstCommentRef}
-              className={`${fieldCls} font-emoji min-h-16 resize-y`}
+              className={`${fieldCls} min-h-16 resize-y`}
               placeholder="#hashtags #go #here"
               value={firstComment}
               onChange={(e) => setFirstComment(e.target.value)}

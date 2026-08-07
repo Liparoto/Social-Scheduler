@@ -418,7 +418,7 @@ export function PostEditor({
         </p>
         <textarea
           ref={firstCommentRef}
-          className="font-emoji min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
+          className="min-h-16 w-full resize-y rounded-md border border-border bg-canvas px-3 py-2 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-none"
           placeholder="#hashtags #go #here"
           value={firstComment}
           onChange={(e) => setFirstComment(e.target.value)}

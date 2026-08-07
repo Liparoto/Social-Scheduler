@@ -47,8 +47,35 @@ function writeRecents(list: string[]): void {
 }
 
 const triggerCls =
-  "rounded-md border border-border px-2 py-1 text-sm leading-none hover:bg-surface-sunken " +
-  "focus:border-brand focus:outline-none";
+  "inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs " +
+  "font-medium text-ink-soft hover:bg-surface-sunken focus:border-brand focus:outline-none";
+
+/**
+ * An inline SVG face, not the 🙂 character.
+ *
+ * The first version used the emoji itself, which made the control invisible on the very
+ * machines this feature exists for: if the emoji font has not loaded (or lacks the glyph)
+ * the button renders as an empty rounded box with nothing in it, and nobody can tell it is
+ * a button. An SVG draws from the same stylesheet as everything else and cannot fail that
+ * way. The word "Emoji" beside it removes the remaining guesswork.
+ */
+function SmileyIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+    >
+      <circle cx="10" cy="10" r="7.25" />
+      <circle cx="7.5" cy="8.25" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="8.25" r="0.9" fill="currentColor" stroke="none" />
+      <path d="M6.75 12.25a4 4 0 0 0 6.5 0" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 const chipCls =
   "rounded-md px-2 py-1 text-xs whitespace-nowrap border border-border text-ink-soft " +
@@ -143,7 +170,8 @@ export function EmojiPicker({ onInsert }: { onInsert: (emoji: string) => void })
         aria-expanded={open}
         onClick={toggle}
       >
-        <span className="font-emoji">🙂</span>
+        <SmileyIcon />
+        Emoji
       </button>
 
       {open ? (

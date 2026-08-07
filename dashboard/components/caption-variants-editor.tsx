@@ -109,18 +109,25 @@ export function CaptionVariantsEditor({
           return (
             <div key={i} className="space-y-2">
               <div className="flex items-center gap-2">
-                <select
-                  className={`${fieldCls} w-40 shrink-0`}
-                  value={v.platform}
-                  onChange={(e) => update(i, { platform: e.target.value })}
-                >
-                  <option value="">Any</option>
-                  {PLATFORMS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
+                {/* The select is boxed at a fixed width by its WRAPPER, not by a w-40 on the
+                    element itself. fieldCls already carries w-full, and two same-specificity
+                    width utilities on one element resolve by stylesheet order rather than by
+                    the order written here — w-full was winning, so the select ate the row and
+                    pushed the Emoji button outside the card, where it rendered clipped. */}
+                <div className="w-40 shrink-0">
+                  <select
+                    className={fieldCls}
+                    value={v.platform}
+                    onChange={(e) => update(i, { platform: e.target.value })}
+                  >
+                    <option value="">Any</option>
+                    {PLATFORMS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {value.length > 1 ? (
                   <button
                     type="button"
@@ -130,7 +137,7 @@ export function CaptionVariantsEditor({
                     Remove
                   </button>
                 ) : null}
-                <div className="ml-auto">
+                <div className="ml-auto shrink-0">
                   <EmojiPicker onInsert={(emoji) => insertEmoji(i, emoji)} />
                 </div>
               </div>
@@ -139,7 +146,7 @@ export function CaptionVariantsEditor({
                   if (el) textareas.current.set(i, el);
                   else textareas.current.delete(i);
                 }}
-                className={`${fieldCls} font-emoji min-h-24 resize-y`}
+                className={`${fieldCls} min-h-24 resize-y`}
                 placeholder="Write the caption…"
                 value={v.body}
                 onChange={(e) => update(i, { body: e.target.value })}
