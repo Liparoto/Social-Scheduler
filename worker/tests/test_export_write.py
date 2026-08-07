@@ -287,7 +287,7 @@ def test_write_json_round_trips_the_bundle(tmp_path):
     bundle.channels = [_channel()]
 
     path = write_json(bundle, tmp_path)
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
 
     assert path.name == "export.json"
     assert data["generated_at"] == GENERATED_AT
@@ -300,7 +300,7 @@ def test_write_json_contains_no_token_field_anywhere(tmp_path):
     bundle = _bundle([_post(42, [])])
     bundle.channels = [_channel()]
 
-    raw = write_json(bundle, tmp_path).read_text()
+    raw = write_json(bundle, tmp_path).read_text(encoding="utf-8")
 
     assert "access_token" not in raw
     assert "token_expires_at" not in raw
@@ -311,7 +311,7 @@ def test_write_json_preserves_non_ascii_captions(tmp_path):
     post.caption = "Café ☕ mobility"
     bundle = _bundle([post])
 
-    data = json.loads(write_json(bundle, tmp_path).read_text())
+    data = json.loads(write_json(bundle, tmp_path).read_text(encoding="utf-8"))
 
     assert data["posts"][0]["caption"] == "Café ☕ mobility"
 
@@ -325,7 +325,7 @@ def test_write_json_includes_sends_and_records_schema_version(tmp_path):
         is_dry_run=False, attempt_count=0, last_error=None, remote_post_id=None,
     )]
 
-    data = json.loads(write_json(bundle, tmp_path).read_text())
+    data = json.loads(write_json(bundle, tmp_path).read_text(encoding="utf-8"))
 
     assert data["sends"][0]["publication_id"] == 7
     assert data["format_version"] == 1
@@ -337,7 +337,7 @@ def test_write_json_keeps_control_characters_unstripped(tmp_path):
     post.caption = "Line one\x0bLine two\x0cLine three"
     bundle = _bundle([post])
 
-    data = json.loads(write_json(bundle, tmp_path).read_text())
+    data = json.loads(write_json(bundle, tmp_path).read_text(encoding="utf-8"))
 
     assert data["posts"][0]["caption"] == "Line one\x0bLine two\x0cLine three"
 
@@ -586,7 +586,7 @@ def test_readme_summarizes_the_contents(tmp_path):
     bundle = _bundle([_post(42, [])])
     bundle.channels = [_channel()]
 
-    text = write_readme(bundle, tmp_path, CopyResult(copied=3)).read_text()
+    text = write_readme(bundle, tmp_path, CopyResult(copied=3)).read_text(encoding="utf-8")
 
     assert "1 post" in text
     assert "3 image file" in text
@@ -597,14 +597,14 @@ def test_readme_reports_missing_files_prominently(tmp_path):
     result = CopyResult(copied=1, missing_asset_ids={2, 3},
                         problems=["asset 2: file not found at /x/gone.jpg"])
 
-    text = write_readme(_bundle([]), tmp_path, result).read_text()
+    text = write_readme(_bundle([]), tmp_path, result).read_text(encoding="utf-8")
 
     assert "2 image file(s) could not be found" in text
     assert "gone.jpg" in text
 
 
 def test_readme_says_so_when_nothing_was_missing(tmp_path):
-    text = write_readme(_bundle([]), tmp_path, CopyResult(copied=1)).read_text()
+    text = write_readme(_bundle([]), tmp_path, CopyResult(copied=1)).read_text(encoding="utf-8")
 
     assert "could not be found" not in text
     assert "No problems" in text
@@ -614,7 +614,7 @@ def test_readme_never_mentions_tokens(tmp_path):
     bundle = _bundle([])
     bundle.channels = [_channel()]
 
-    text = write_readme(bundle, tmp_path, CopyResult()).read_text()
+    text = write_readme(bundle, tmp_path, CopyResult()).read_text(encoding="utf-8")
 
     assert "access_token" not in text
 
@@ -627,7 +627,7 @@ def test_readme_surfaces_conformed_copy_only_failures(tmp_path):
         problems=["asset 7: conformed copy not found at /x/c.jpg"],
     )
 
-    text = write_readme(_bundle([]), tmp_path, result).read_text()
+    text = write_readme(_bundle([]), tmp_path, result).read_text(encoding="utf-8")
 
     assert "No problems" not in text
     assert "asset 7: conformed copy not found at /x/c.jpg" in text
@@ -647,7 +647,7 @@ def test_readme_reports_asset_count_and_problem_count_as_distinct_figures(tmp_pa
         ],
     )
 
-    text = write_readme(_bundle([]), tmp_path, result).read_text()
+    text = write_readme(_bundle([]), tmp_path, result).read_text(encoding="utf-8")
 
     # Asset count: exactly "1 image file(s) could not be found" sentence
     assert "1 image file(s) could not be found" in text
@@ -665,7 +665,7 @@ def test_readme_mentions_images_unlinked_only_when_there_are_orphaned_assets(tmp
         storage_path="orphan.jpg", publish_path=None, conform_mode="none",
         needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
     )]
-    text_with = write_readme(bundle_with, tmp_path, CopyResult(copied=1)).read_text()
+    text_with = write_readme(bundle_with, tmp_path, CopyResult(copied=1)).read_text(encoding="utf-8")
     assert "images-unlinked" in text_with
     assert "not attached to any post" in text_with.lower()
 
@@ -675,7 +675,7 @@ def test_readme_mentions_images_unlinked_only_when_there_are_orphaned_assets(tmp
         storage_path="a.jpg", publish_path=None, conform_mode="none",
         needs_review=False, mime_type="image/jpeg", width=None, height=None, byte_size=None,
     )]
-    text_without = write_readme(bundle_without, tmp_path, CopyResult(copied=1)).read_text()
+    text_without = write_readme(bundle_without, tmp_path, CopyResult(copied=1)).read_text(encoding="utf-8")
     assert "images-unlinked" not in text_without
 
 
@@ -683,7 +683,7 @@ def test_readme_truncates_a_long_problem_list(tmp_path):
     problems = [f"asset {n}: original not found at /x/gone{n}.jpg" for n in range(25)]
     result = CopyResult(copied=0, missing_asset_ids=set(range(25)), problems=problems)
 
-    text = write_readme(_bundle([]), tmp_path, result).read_text()
+    text = write_readme(_bundle([]), tmp_path, result).read_text(encoding="utf-8")
 
     printed = [p for p in problems if p in text]
     assert len(printed) == 20

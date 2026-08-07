@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from worker.cloudflared_setup import vendored_path
+
 from worker.tunnel import resolve_binary
 
 
@@ -33,7 +35,9 @@ def test_an_explicit_path_is_honored_even_when_not_on_the_path(tmp_path, monkeyp
 def test_falls_back_to_this_installs_own_copy(tmp_path, monkeypatch):
     """The whole point: nothing on PATH, but data/bin has one, so publishing works."""
     monkeypatch.setattr("worker.tunnel.shutil.which", lambda name: None)
-    local = tmp_path / "data" / "bin" / "cloudflared"
+    # vendored_path, not a hand-built name: production looks for cloudflared.EXE on
+    # Windows, so a hardcoded POSIX name made these fail there against correct code.
+    local = vendored_path(tmp_path)
     local.parent.mkdir(parents=True)
     local.touch()
 
@@ -43,7 +47,9 @@ def test_falls_back_to_this_installs_own_copy(tmp_path, monkeypatch):
 def test_returns_an_absolute_path_for_the_local_copy(tmp_path, monkeypatch):
     """launchd's PATH excludes Homebrew, so a bare name would never resolve there."""
     monkeypatch.setattr("worker.tunnel.shutil.which", lambda name: None)
-    local = tmp_path / "data" / "bin" / "cloudflared"
+    # vendored_path, not a hand-built name: production looks for cloudflared.EXE on
+    # Windows, so a hardcoded POSIX name made these fail there against correct code.
+    local = vendored_path(tmp_path)
     local.parent.mkdir(parents=True)
     local.touch()
 
