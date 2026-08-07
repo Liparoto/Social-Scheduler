@@ -12,10 +12,13 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
 from worker import single_instance
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
@@ -37,23 +40,52 @@ def test_the_lock_file_records_the_holder_for_a_human(tmp_path):
 
 
 def _child_holding_lock(lock_path):
-    """A real second process holding the lock — flock is per-process, so a same-process
-    second acquire would succeed and prove nothing."""
+    """A real second process holding the lock — the lock is per-process, so a same-process
+    second acquire would succeed and prove nothing.
+
+    The child calls `single_instance.acquire` rather than reimplementing the lock with raw
+    `fcntl`. The old probe did the latter, which meant every test in this file failed on
+    Windows even once the guard itself was platform-aware: the probe was testing a primitive
+    the platform does not have. Going through acquire() exercises whichever one is actually
+    in use.
+    """
     code = textwrap.dedent(
         f"""
-        import fcntl, sys, time
-        h = open({str(lock_path)!r}, "a+")
-        fcntl.flock(h.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        h.seek(0); h.truncate(); h.write(str(__import__("os").getpid())); h.flush()
-        sys.stdout.write("locked\\n"); sys.stdout.flush()
+        import os, sys, time
+        sys.path.insert(0, {str(REPO_ROOT)!r})
+        from pathlib import Path
+        from worker import single_instance
+        single_instance.acquire(Path({str(lock_path)!r}), wait_seconds=0)
+        # Report the REAL pid rather than letting the parent trust Popen.pid: on Windows a
+        # venv's python.exe can be a stub that re-execs the interpreter as a CHILD, so
+        # Popen.pid names the stub and not the process holding the lock.
+        sys.stdout.write(str(os.getpid()) + "\\n"); sys.stdout.flush()
         time.sleep(30)
         """
     )
     proc = subprocess.Popen(
         [sys.executable, "-c", code], stdout=subprocess.PIPE, text=True
     )
-    assert proc.stdout.readline().strip() == "locked"
+    holder_pid = proc.stdout.readline().strip()
+    assert holder_pid.isdigit(), f"child did not take the lock: {holder_pid!r}"
+    proc.holder_pid = holder_pid
     return proc
+
+
+def _kill_holder(proc):
+    """Kill the holder and wait for the lock to actually drop.
+
+    `proc.kill()` is not enough on Windows: if python.exe was a stub, it kills the stub and
+    leaves the real holder — and the lock — alive, so the crash-recovery test would never
+    see the lock released. /T takes the whole tree.
+    """
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True
+        )
+    else:
+        proc.kill()
+    proc.wait()
 
 
 def test_a_second_worker_on_the_same_install_is_refused(tmp_path):
@@ -62,12 +94,11 @@ def test_a_second_worker_on_the_same_install_is_refused(tmp_path):
     try:
         with pytest.raises(single_instance.AlreadyRunning) as caught:
             single_instance.acquire(lock, wait_seconds=0)
-        assert caught.value.holder_pid == str(holder.pid), (
+        assert caught.value.holder_pid == holder.holder_pid, (
             "the error should name the process actually holding it"
         )
     finally:
-        holder.kill()
-        holder.wait()
+        _kill_holder(holder)
 
 
 def test_a_worker_on_a_different_install_is_unaffected(tmp_path):
@@ -77,8 +108,7 @@ def test_a_worker_on_a_different_install_is_unaffected(tmp_path):
     try:
         single_instance.acquire(tmp_path / "install-a.lock", wait_seconds=0)
     finally:
-        other.kill()
-        other.wait()
+        _kill_holder(other)
 
 
 def test_a_lock_from_a_killed_process_does_not_block_the_next_start(tmp_path):
@@ -88,8 +118,7 @@ def test_a_lock_from_a_killed_process_does_not_block_the_next_start(tmp_path):
     kernel drops a flock when the holder dies, whatever killed it."""
     lock = tmp_path / "worker.lock"
     holder = _child_holding_lock(lock)
-    holder.kill()
-    holder.wait()
+    _kill_holder(holder)
 
     single_instance.acquire(lock, wait_seconds=0)  # must not raise
     assert lock.read_text().strip() == str(os.getpid())
@@ -104,7 +133,7 @@ def test_acquire_waits_briefly_so_a_restart_handover_is_not_a_failure(tmp_path):
 
     import threading
 
-    threading.Timer(0.6, lambda: (holder.kill(), holder.wait())).start()
+    threading.Timer(0.6, lambda: _kill_holder(holder)).start()
     single_instance.acquire(lock, wait_seconds=5)  # must not raise
     assert lock.read_text().strip() == str(os.getpid())
 
@@ -130,10 +159,9 @@ def test_an_existing_lock_file_is_not_truncated_before_the_lock_is_won(tmp_path)
     try:
         with pytest.raises(single_instance.AlreadyRunning):
             single_instance.acquire(lock, wait_seconds=0)
-        assert lock.read_text().strip() == str(holder.pid), "holder's pid must survive"
+        assert lock.read_text().strip() == holder.holder_pid, "holder's pid must survive"
     finally:
-        holder.kill()
-        holder.wait()
+        _kill_holder(holder)
 
 
 # ---- the guard must not be Unix-only ------------------------------------------------
