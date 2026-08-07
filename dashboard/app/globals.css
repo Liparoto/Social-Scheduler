@@ -38,27 +38,34 @@
   --color-status-failed: #dc2626;
   --color-status-publishing: #b45309;
 
-  /* "Noto Color Emoji" is appended LAST to every text stack, never first.
+  /* Emoji come from the READER'S OWN system font, appended last to every text stack.
 
-     It is an emoji-only font with no Latin glyphs, so a stack that leads with it sends every
-     ordinary word to the next family — and next/font's metric-matched "Noto Color Emoji
-     Fallback" inherits an EMOJI font's metrics, which rendered captions at roughly triple
-     size, overlapping their own lines. Named literally rather than via
-     var(--font-noto-emoji) so only the real family is referenced, not that fallback.
+     We tried bundling Noto Color Emoji through next/font and it failed in two ways at once.
+     Google serves that face as ten narrowly-subsetted files, so most emoji fall outside every
+     unicode-range it ships — and next/font pairs it with a metric-matched fallback that is
+     literally `local("Arial")` declared over `unicode-range: ALL`. Arial therefore claimed
+     every emoji the subsets missed and drew blank boxes, while shadowing the system emoji
+     font that would have rendered them. The same Arial metrics rendered ordinary caption text
+     at roughly triple size when the family led a stack.
 
-     Last position is what makes emoji work here: letters resolve from Inter/Space Grotesk as
-     before, and only characters those fonts lack — emoji — reach Noto. That is what stops
-     an older Windows drawing newer emoji as empty boxes, inside ordinary text. */
+     Apple Color Emoji and Segoe UI Emoji are already installed on the machines this app runs
+     on, cover the full standard set, and cost nothing to download. Neither is shipped — they
+     are referenced on the reader's own system, which is the only lawful way to use Apple's.
+     The trailing "Noto Color Emoji" picks up a locally installed copy (usual on Linux).
+
+     Emoji designs therefore differ between a Mac and a Windows PC. That is cosmetic and
+     affects only the author's own screen: a published emoji is a Unicode codepoint drawn by
+     the VIEWER's device, so an iPhone follower sees Apple's artwork either way. */
+  --font-emoji-fallback: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
   --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif,
-    "Noto Color Emoji";
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif, "Noto Color Emoji";
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace, "Noto Color Emoji";
-  /* Emoji-FIRST, and therefore only ever applied to elements whose content is nothing but
-     emoji — the picker's grid and recents. Never put this on a textarea or a label.
-
-     Apple Color Emoji is listed only as a fallback to a font already installed on the
-     reader's own Mac; it is proprietary and is never shipped. */
-  --font-emoji: var(--font-noto-emoji), "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace, "Apple Color Emoji",
+    "Segoe UI Emoji", "Noto Color Emoji";
+  /* Emoji-only, for the picker's grid and recents — never put this on a textarea or a label,
+     because a font with no Latin glyphs leading a stack is exactly what broke captions. */
+  --font-emoji: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 
   --radius-card: 12px;
 }

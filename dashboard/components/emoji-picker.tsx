@@ -24,7 +24,13 @@ const RECENTS_KEY = "ss.emoji.recents";
 const RECENTS_MAX = 24;
 // The grid is capped so the DOM never holds ~1,900 buttons at once, which makes both the
 // first open and every keystroke visibly slow.
-const GRID_CAP = 300;
+//
+// 400 rather than a rounder 300 because it is sized to the LARGEST category: People & Body
+// has 388 entries, and a lower cap silently truncated it — someone browsing that category
+// would simply never see the last 88 emoji, with only a "keep typing" note to explain it.
+// The cap now bites only in the unfiltered "All" view, where a limit is genuinely wanted and
+// the note below the grid says exactly how many are hidden.
+const GRID_CAP = 400;
 
 function readRecents(): string[] {
   // A browser with storage disabled (or a private window that throws on access) must

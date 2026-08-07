@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Inter, JetBrains_Mono, Noto_Color_Emoji } from "next/font/google";
+import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/sidebar";
 
@@ -11,20 +11,6 @@ const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
   subsets: ["latin"],
-});
-// Bundled so emoji look the SAME on macOS and Windows, and so an emoji newer than the
-// machine's own emoji font still renders instead of showing an empty box — the actual
-// complaint from the Windows install. Noto is SIL OFL licensed, so shipping it is allowed;
-// Apple Color Emoji is proprietary and is not an option, which is why the picker shows
-// Google's designs rather than Apple's.
-//
-// This changes nothing for the AUDIENCE: a published emoji is a Unicode codepoint drawn by
-// the viewer's own device, so an iPhone follower still sees Apple's artwork. This is purely
-// about what the author sees while composing.
-const notoColorEmoji = Noto_Color_Emoji({
-  variable: "--font-noto-emoji",
-  subsets: ["emoji"],
-  weight: "400",
 });
 
 export const metadata: Metadata = {
@@ -41,7 +27,7 @@ export default function RootLayout({
       data-theme="socialscheduler"
       data-mode="light"
       suppressHydrationWarning
-      className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} ${notoColorEmoji.variable} h-full`}
+      className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} h-full`}
     >
       {/* Browser extensions (Grammarly and friends) inject attributes and classes onto
           <body> before React hydrates, which React then reports as a hydration mismatch.

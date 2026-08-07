@@ -2085,3 +2085,40 @@ Re-verified by screenshot this time, not by measurement alone: caption text at n
 colour emoji inline, both Emoji buttons inside their cards, picker opens to 302 buttons, insert
 at caret gives `Hello😀 world` with the caret at 7, textarea font stack leading with Inter.
 `npm test` 470 passed, `npm run lint` 0 errors, `pytest` 797 passed.
+
+### Emoji picker — the bundled font was the problem, not the fix, 2026-08-07
+
+Reported as "when the box is open its not really showing all of them": the grid opened but
+almost every cell was blank, with only a handful of emoji visible.
+
+**Root cause, found by dumping the live `@font-face` rules rather than reading computed
+styles.** `next/font/google`'s Noto Color Emoji emits ELEVEN faces: ten narrowly-subsetted
+woff2 files, plus this one —
+
+    family: "Noto Color Emoji Fallback"
+    unicode-range: ALL
+    src: local("Arial")
+
+Google serves that face subsetted, so most emoji fall outside every range it ships; the
+metric-matched fallback then claimed **every** remaining codepoint as Arial and drew nothing,
+while shadowing the system emoji font that would have rendered them. The same Arial metrics
+are what rendered caption text at triple size earlier. One bad font declaration caused both
+symptoms.
+
+**Fix: stop bundling it.** Emoji now come from `"Apple Color Emoji", "Segoe UI Emoji",
+"Noto Color Emoji"` — already installed on the machines this runs on, complete coverage, zero
+download, and no font is redistributed (which is also the only lawful way to reference Apple's).
+The trailing entry picks up a locally installed Noto, usual on Linux.
+
+Accepted trade-off: emoji artwork differs between a Mac and a Windows PC. That is cosmetic and
+author-only — a published emoji is a codepoint drawn by the VIEWER's device, so followers see
+their own platform's artwork regardless. Delivering identical artwork would mean committing a
+full (non-subsetted) ~1.8 MB Noto woff2 to the repo; not done, and not needed for correctness.
+
+Also raised the grid cap 300 → 400. It was sized below the largest category (People & Body,
+388), so browsing that category silently hid 88 emoji behind a "keep typing" note.
+
+**Verified by rendering, not by CSS.** Each of the 302 visible buttons was drawn to a canvas
+and its pixels inspected: **302 drawn, 0 blank**, Arial fallback face gone. People & Body shows
+all 388 with no truncation note. Confirmed by screenshot. `npm test` 470, `pytest` 797,
+`npm run lint` 0 errors.
