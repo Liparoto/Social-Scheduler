@@ -1,5 +1,5 @@
 import { getBppPool } from "@/lib/insights-queries";
-import { getChannels, listChannelGroups, getGroupMembers } from "@/lib/queries";
+import { getChannels, listChannelGroups, getGroupMembers, getBandCounts } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { accountIdLabel, usesAccountId } from "@/lib/platforms";
 import { PageHeader, ChannelChip, ChannelAvatar, EmptyState } from "@/components/ui";
@@ -30,6 +30,7 @@ export default function ChannelsPage() {
     bpp_every_days: g.bpp_every_days,
     // Pool is measured against a MEMBER: a group sends what its members can send.
     bpp_pool_size: getBppPool(getGroupMembers(g.id)[0]?.id ?? 0).usable,
+    band_counts: getBandCounts(getGroupMembers(g.id).map((m) => m.id)),
     members: getGroupMembers(g.id).map((m) => ({
       id: m.id,
       account_name: m.account_name,
@@ -60,7 +61,11 @@ export default function ChannelsPage() {
           </EmptyState>
         ) : (
           <>
-          <ChannelGroups groups={groups} defaultTimezone={config.defaultTimezone} />
+          <ChannelGroups
+            groups={groups}
+            defaultTimezone={config.defaultTimezone}
+            bandTimes={config.bandTimes}
+          />
           <div className="grid gap-4 md:grid-cols-2">
             {channels.map((c) => (
               <div
@@ -184,6 +189,8 @@ export default function ChannelsPage() {
                     reuseMinAgeDays={c.reuse_min_age_days}
                     bppEveryDays={c.bpp_every_days ?? 0}
                     bppPoolSize={getBppPool(c.id).usable}
+                    bandTimes={config.bandTimes}
+                    bandCounts={getBandCounts([c.id])}
                   />
                 ) : (
                   <p className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3 text-xs text-muted">

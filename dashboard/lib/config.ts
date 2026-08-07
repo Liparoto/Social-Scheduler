@@ -76,6 +76,14 @@ export const config = {
     (Number.isFinite(videoConvertTimeoutSec) && videoConvertTimeoutSec > 0
       ? videoConvertTimeoutSec
       : 300) * 1000,
+  // The worker derives a cadence time's band from these (worker/time_of_day.py derive_band).
+  // The form reads the SAME values purely to print the band label next to a time, so it can
+  // never show a band the worker would disagree with.
+  bandTimes: {
+    morning: get("TOD_MORNING", "09:00"),
+    afternoon: get("TOD_AFTERNOON", "13:00"),
+    evening: get("TOD_EVENING", "18:00"),
+  },
 };
 
 // ---- Live safety-switch reads (DRY_RUN / KILL_SWITCH) -----------------------------

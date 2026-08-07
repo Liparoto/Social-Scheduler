@@ -18,18 +18,24 @@ export interface GroupRow {
   reuse_min_age_days: number;
   bpp_every_days: number;
   bpp_pool_size: number;
+  /** Ready feed posts per time_of_day band, across every member — see getBandCounts. */
+  band_counts: Record<string, number>;
   members: { id: number; account_name: string; platform: string }[];
 }
 
 export function ChannelGroups({
   groups,
   defaultTimezone,
+  bandTimes,
 }: {
   groups: GroupRow[];
   /** The install's DEFAULT_TIMEZONE (from lib/config). A new group starts here rather
    *  than at a hardcoded "UTC" — a group left on the wrong zone posts to real accounts
    *  at the wrong wall-clock hour. */
   defaultTimezone: string;
+  /** config.bandTimes, passed down from the server page — this is a client component and
+   *  lib/config.ts is server-only, so it cannot import it directly. */
+  bandTimes: { morning: string; afternoon: string; evening: string };
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -119,8 +125,10 @@ export function ChannelGroups({
               minQueueDepth={g.min_queue_depth}
               targetQueueDepth={g.target_queue_depth}
               reuseMinAgeDays={g.reuse_min_age_days}
-                    bppEveryDays={g.bpp_every_days ?? 0}
-                    bppPoolSize={g.bpp_pool_size ?? 0}
+              bppEveryDays={g.bpp_every_days ?? 0}
+              bppPoolSize={g.bpp_pool_size ?? 0}
+              bandTimes={bandTimes}
+              bandCounts={g.band_counts ?? {}}
             />
           </div>
         ))}

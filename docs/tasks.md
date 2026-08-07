@@ -1916,3 +1916,44 @@ three days at 3/day in a test, and single-time cadences still produce one per da
       numbers are not read as current. NULL is deliberately not treated as deletion: a
       Story never appears on the /media edge and anything published before syncing began
       has no mirror row, so absence means unknown, not gone.
+
+- [x] **Time-of-day tags decide WHICH slot, days per posting time, drifting intervals
+      (2026-08-06).** Auto-fill had two rules fighting: with one daily time a post's band
+      replaced the cadence time, and with two or more the band was discarded outright, so
+      an account posting several times a day could not say that its evening content goes
+      out in the evening. Days-of-week were one shared list, so "twice a day at the
+      weekend, once on weekdays" could not be said at all.
+
+      Both collapse into one rule: **a cadence time is a slot, a slot's band is derived
+      from its clock, and a post is only placed in a slot its tags allow.** Band stops
+      being a time source and becomes a filter — which deleted more than it added
+      (`resolve_slot_time`, `weekly_date_slots`, `daily_slots`, `parse_cadence_times`,
+      `parse_weekly_cadence`, `_merge_bpp_slots` are all gone, replaced by one slot
+      generator and one predicate). Each posting time now carries its own days. No
+      migration: `cadence_config` is opaque to both API routes and all three older JSON
+      shapes are still read, so a stored cadence keeps working untouched until it is saved.
+
+      A third mode was added in the same pass: **post every N, drifting** — "every 9h45m",
+      with an allowed window and days, so the send time sweeps every hour of the window
+      over several days instead of landing at a fixed time. It needed no special case: an
+      interval slot still lands at a definite clock time, so it still derives a band and
+      the same filter applies. A step landing outside the window is skipped and the cursor
+      keeps its phase, which is the one thing a naive implementation gets wrong.
+
+      The owner chose the strict reading — a post whose band has no slot is held back
+      rather than sent at the wrong hour. That is not a stall (89 of 111 ready posts carry
+      no tag and fill any slot) but it is silent, so a coverage warning in the form and a
+      held-back line in the worker log are part of the feature, not a nicety.
+
+**Verified:** 764 worker + 413 dashboard tests, 0 lint errors. Browser pass on port 3940
+against a `sqlite3 .backup` copy, never the live DB: the legacy `{"days":[7],"time":"12:30"}`
+row renders as "12:30 daily"; the live library's 17 evening + 1 morning posts both raise the
+coverage warning; adding an 18:00 time labels it "Evening" and clears the evening warning;
+weekend-only days give "12:30 daily, 18:00 Sat/Sun"; interval mode defaults to all seven
+days, shows the drift note at 9h45m and the whole-days note at 24h, and clamps 5 minutes up
+to 15. Save wrote the new interval shape to the scratch DB with the live DB untouched, and
+the Python worker parsed that exact string back, agreed on covered bands (morning +
+afternoon, evening absent), and drifted Fri 10:15 → Sun 11:00 → Tue 11:45 → Fri 08:00.
+
+**Not done, deliberately:** the live worker was NOT restarted. It is still running the
+pre-change code it loaded at 09:54, and this branch is unmerged.

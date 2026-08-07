@@ -7,6 +7,16 @@
       "runtimeArgs": ["run", "dev", "--", "-p", "3939"],
       "cwd": "dashboard",
       "port": 3939
+    },
+    {
+      "name": "dashboard-scratch",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_PATH=/private/tmp/claude-501/-Users-kelanliparoto-Documents-Claude-Projects-Apps-SocialScheduler/01b9b2b0-83e8-4a27-a7e2-408a44b5e784/scratchpad/scratch.db npm run dev -- -p 3940"
+      ],
+      "cwd": "dashboard",
+      "port": 3940
     }
   ]
 }
