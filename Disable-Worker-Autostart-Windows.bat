@@ -32,7 +32,7 @@ if not errorlevel 1 (
   schtasks /End /TN "%TASKNAME%" >NUL 2>&1
   schtasks /Delete /TN "%TASKNAME%" /F >NUL 2>&1
   if errorlevel 1 (
-    echo [!] Couldn't remove the scheduled task.
+    echo [^^!] Couldn't remove the scheduled task.
     echo     Try running this file as Administrator, or remove
     echo     "%TASKNAME%" by hand in Task Scheduler.
     echo.

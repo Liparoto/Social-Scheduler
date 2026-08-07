@@ -139,8 +139,9 @@ call :env_value KILL_SWITCH KILL_SWITCH
 if "!DRY_RUN!"=="0" (
   where cloudflared >nul 2>nul
   if errorlevel 1 if not exist "data\bin\cloudflared.exe" (
-    REM [^!] not [!] — with delayed expansion on, a lone ! is swallowed and prints as [].
-    echo [^!] cloudflared isn't available - it's needed to deliver your media to Meta for REAL posts.
+    REM [^^!] not [!] or [^!] — with delayed expansion on a lone ! is swallowed and
+    REM prints as [], and a single caret is swallowed along with it. Two carets survive.
+    echo [^^!] cloudflared isn't available - it's needed to deliver your media to Meta for REAL posts.
     echo     The step above tried to install it and couldn't; check your internet connection
     echo     and run this again, or get it from https://github.com/cloudflare/cloudflared/releases/latest
     echo.
@@ -228,9 +229,9 @@ if "!MANUAL_WORKER!"=="1" (
   REM "Worker running in the background" unconditionally, which is how two blocking bugs
   REM shipped looking healthy: when the launch shim failed, `for /f` captured the first
   REM word of its ERROR message and wrote that to worker.pid instead.
-  echo !WORKER_PID!| findstr /r "^^[0-9][0-9]*$" >NUL
+  echo !WORKER_PID!| findstr /r "^[0-9][0-9]*$" >NUL
   if errorlevel 1 (
-    echo [!] The worker did not start - got "!WORKER_PID!" where a process id was expected.
+    echo [^^!] The worker did not start - got "!WORKER_PID!" where a process id was expected.
     echo     See data\logs\worker-daemon.out
     set "WORKER_PID="
   ) else (
@@ -269,7 +270,7 @@ if defined READY (
   start "" "http://localhost:%PORT%"
   echo [OK] Running at http://localhost:%PORT%
 ) else (
-  echo [^!] The dashboard didn't start within 90 seconds.
+  echo [^^!] The dashboard didn't start within 90 seconds.
   echo     Check data\logs\dashboard.log for the reason.
   echo     If it starts later, open http://localhost:%PORT% yourself.
 )
