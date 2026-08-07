@@ -19,10 +19,52 @@ Two installs are supposed to run at once; two workers on one install are not.
 
 from __future__ import annotations
 
-import fcntl
 import os
 import time
 from pathlib import Path
+
+# The lock primitive differs by platform, and so does the IMPORT: `fcntl` does not exist on
+# Windows and `msvcrt` does not exist anywhere else. That is why this is a module-level
+# branch rather than a check inside acquire() — an unconditional `import fcntl` is what
+# stopped the worker starting at all on Windows, since run.py imports this module before it
+# runs a line. The dashboard came up fine and the worker died into its log file, so the
+# install looked healthy and simply never published (broken 2026-08-05 by the commit that
+# added this guard; Windows launchers have shipped since 2026-07-23).
+#
+# Both primitives keep the property the docstring above rests on: the kernel drops the lock
+# when the holding process dies, however it dies. Neither is a pid file.
+if os.name == "nt":
+    import msvcrt
+
+    # Lock a byte far past the end of the file rather than byte 0. Windows file locks are
+    # MANDATORY, not advisory like flock — locking byte 0 would make the holder's own pid
+    # write below fail. Locking beyond EOF is legal, costs nothing, and never overlaps the
+    # bytes we read and write.
+    _LOCK_BYTE = 0x7FFF_0000
+
+    def _lock_exclusive_nowait(handle) -> None:
+        handle.seek(_LOCK_BYTE)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+
+    def _unlock(handle) -> None:
+        handle.seek(_LOCK_BYTE)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _lock_exclusive_nowait(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+# The pid is written as a FIXED-WIDTH field so recording it never needs truncate(). That
+# matters on Windows, where the file carries a mandatory lock region and a truncate is one
+# more thing that can fail on a platform this project cannot test from a Mac; a fixed field
+# means a shorter pid can never leave digits of a longer predecessor behind. Readers strip.
+_PID_FIELD = 20
 
 
 class AlreadyRunning(Exception):
@@ -59,14 +101,16 @@ def acquire(lock_path: Path, wait_seconds: float = 6.0) -> None:
     global _handle
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    # "a+" so the file is created if absent and never truncated on open — truncating
-    # would destroy the holder's pid before we know whether we can even take the lock.
-    handle = open(lock_path, "a+")
+    # O_RDWR|O_CREAT: created if absent, never truncated on open — truncating would destroy
+    # the holder's pid before we know whether we can even take the lock. Deliberately NOT
+    # append mode: "a+" forces every write to EOF regardless of seek, so overwriting the pid
+    # in place would instead grow the file on each acquire.
+    handle = os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644), "r+")
 
     deadline = time.monotonic() + max(wait_seconds, 0.0)
     while True:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_exclusive_nowait(handle)
             break
         except OSError:
             if time.monotonic() >= deadline:
@@ -79,8 +123,7 @@ def acquire(lock_path: Path, wait_seconds: float = 6.0) -> None:
     # Record who holds it. Diagnostic only — a human reading the file, or the error
     # message above. Nothing decides anything from this value.
     handle.seek(0)
-    handle.truncate()
-    handle.write(str(os.getpid()))
+    handle.write(f"{os.getpid():<{_PID_FIELD}}")
     handle.flush()
     _handle = handle
 
@@ -91,7 +134,7 @@ def release() -> None:
     global _handle
     if _handle is not None:
         try:
-            fcntl.flock(_handle.fileno(), fcntl.LOCK_UN)
+            _unlock(_handle)
         finally:
             _handle.close()
             _handle = None

@@ -134,3 +134,113 @@ def test_an_existing_lock_file_is_not_truncated_before_the_lock_is_won(tmp_path)
     finally:
         holder.kill()
         holder.wait()
+
+
+# ---- the guard must not be Unix-only ------------------------------------------------
+#
+# `import fcntl` at module scope made `python -m worker.run` unstartable on Windows: run.py
+# imports this module before it runs a line, so the worker died with ModuleNotFoundError
+# while the dashboard came up fine — an install that looked healthy and never published.
+# Windows has been a documented, launcher-supported platform since 2026-07-23; this guard
+# landed 2026-08-05 and broke it. These tests fail if anyone makes it Unix-only again.
+
+
+def _import_as_windows(monkeypatch, recorder):
+    """Re-import single_instance with os.name forced to 'nt' and msvcrt stubbed.
+
+    The platform branch is evaluated at IMPORT time — that is the point, since the import
+    itself is what cannot work on the wrong platform — so it can only be exercised by
+    importing again under a different name.
+    """
+    import importlib
+    import types
+
+    fake = types.ModuleType("msvcrt")
+    fake.LK_NBLCK, fake.LK_UNLCK = 1, 0
+    holders: set = set()
+
+    def locking(fd, mode, nbytes):
+        recorder.append((mode, nbytes, os.lseek(fd, 0, os.SEEK_CUR)))
+        key = os.fstat(fd).st_ino
+        if mode == fake.LK_NBLCK:
+            if key in holders:
+                raise OSError(36, "Resource deadlock avoided")
+            holders.add(key)
+        else:
+            holders.discard(key)
+
+    fake.locking = locking
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+
+    # Make `fcntl` genuinely unimportable for the duration. Without this the test proves
+    # nothing on a Mac: fcntl imports fine here, so a module that had gone back to
+    # importing it unconditionally would still load and the Windows failure would sail
+    # through green. Blocking it is what makes this a real simulation of Windows.
+    monkeypatch.delitem(sys.modules, "fcntl", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_FcntlBlocker(), *sys.meta_path])
+    monkeypatch.delitem(sys.modules, "worker.single_instance", raising=False)
+
+    # os.name is restored IMMEDIATELY after the import rather than at teardown. The module's
+    # platform branch is decided at import time, so that is all the window it needs — and
+    # leaving os.name == "nt" in place would make pathlib hand back WindowsPath, which
+    # pytest's own failure reporting cannot instantiate on a Mac. That turns any genuine
+    # failure of these tests into an INTERNALERROR that aborts the whole session instead of
+    # reporting the regression they exist to catch.
+    real_name = os.name
+    os.name = "nt"
+    try:
+        module = importlib.import_module("worker.single_instance")
+    finally:
+        os.name = real_name
+
+    monkeypatch.delitem(sys.modules, "worker.single_instance", raising=False)
+    return module
+
+
+class _FcntlBlocker:
+    """A meta-path finder that makes `import fcntl` raise, the way it does on Windows."""
+
+    def find_module(self, fullname, path=None):  # pragma: no cover - legacy hook
+        return None
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "fcntl":
+            raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+        return None
+
+
+def test_the_guard_imports_and_locks_without_fcntl(tmp_path, monkeypatch):
+    calls: list = []
+    win = _import_as_windows(monkeypatch, calls)
+    lock = tmp_path / "run" / "worker.lock"
+
+    win.acquire(lock, wait_seconds=0)
+
+    assert lock.read_text().strip() == str(os.getpid())
+    # Beyond EOF on purpose: Windows locks are mandatory, so locking byte 0 would block the
+    # holder's own pid write.
+    assert calls[0][2] == 0x7FFF_0000
+
+
+def test_a_second_worker_is_refused_without_fcntl(tmp_path, monkeypatch):
+    win = _import_as_windows(monkeypatch, [])
+    lock = tmp_path / "run" / "worker.lock"
+    win.acquire(lock, wait_seconds=0)
+
+    win._handle = None  # stand in for a genuinely separate process on the same install
+    with pytest.raises(win.AlreadyRunning) as caught:
+        win.acquire(lock, wait_seconds=0)
+    assert caught.value.holder_pid == str(os.getpid())
+
+
+def test_a_shorter_pid_does_not_leave_the_previous_one_behind(tmp_path, monkeypatch):
+    """The pid is a fixed-width field precisely so recording it needs no truncate(), which
+    is one more thing that can fail against a mandatory lock. Without the padding, pid 123
+    replacing pid 99999 would read back as '12399'."""
+    win = _import_as_windows(monkeypatch, [])
+    lock = tmp_path / "run" / "worker.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("999999999999")
+
+    win.acquire(lock, wait_seconds=0)
+    assert lock.read_text().strip() == str(os.getpid())
