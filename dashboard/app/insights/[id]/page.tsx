@@ -73,6 +73,22 @@ const POST_COLUMNS: Record<
     { key: "likes", label: "Likes" },
     { key: "comments", label: "Comments" },
     { key: "saves", label: "Saves" },
+    // Instagram's `shares` — a send to DMs or a story, NOT a repost.
+    //
+    // There is no Reposts column here, but NOT because Instagram lacks the data. Meta
+    // added a `reposts_count` field on IG media on 2026-04-22 (alongside saved_count,
+    // shares_count and the total_*_count family). Every one of them requires the
+    // Instagram-API-with-FACEBOOK-Login path, and this install authenticates via
+    // Instagram Login (META_GRAPH_BASE = graph.instagram.com, no linked Page), so the
+    // whole family answers "nonexisting field" here — as does the long-standing
+    // `view_count`, which is the tell that this is an auth-flavour gap, not a field-name
+    // one. Version is not the lever: identical under v25.0 and v26.0.
+    //
+    // Getting reposts therefore means moving this channel to the Facebook-Login path
+    // (IG Business account linked to a Facebook Page + Page token), not adding a metric
+    // name. clients._BASE_URLS already supports it via config.graph_base.
+    // Probed live 2026-08-07 — re-probe before treating any of this as still true.
+    { key: "shares", label: "Shares" },
   ],
   threads: [
     { key: "likes", label: "Likes" },
