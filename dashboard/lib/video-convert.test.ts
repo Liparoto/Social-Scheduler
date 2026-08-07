@@ -61,6 +61,44 @@ test("forcing a converter that does not exist returns null, not a bare name", ()
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// The .exe branch is the single riskiest line on a feature shipping blind to Windows —
+// nobody here can run this on an actual Windows box. `platform` is threaded through as a
+// parameter (mirroring converterAdvice(platform)) specifically so these three can run on
+// any dev machine instead of never running at all.
+test("on win32, a vendored ffmpeg.exe is found even though this machine isn't Windows", () => {
+  const dir = tmpVendorDir();
+  const exePath = path.join(dir, "ffmpeg.exe");
+  fs.writeFileSync(exePath, "not a real binary");
+
+  assert.equal(vendoredFfmpegPath(dir, "win32"), exePath);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("on win32, ffmpeg.exe is preferred over a bare ffmpeg in the same directory", () => {
+  const dir = tmpVendorDir();
+  const exePath = path.join(dir, "ffmpeg.exe");
+  fs.writeFileSync(path.join(dir, "ffmpeg"), "bare, no extension");
+  fs.writeFileSync(exePath, "the real Windows one");
+
+  assert.equal(vendoredFfmpegPath(dir, "win32"), exePath);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a bare ffmpeg is not mistaken for the Windows binary on a non-Windows platform", () => {
+  // The opposite mistake: a file named exactly "ffmpeg.exe" sitting in the vendor dir
+  // (e.g. copied over from a Windows install by accident) must not be picked up when
+  // resolving for darwin/linux, which only ever look for the bare name.
+  const dir = tmpVendorDir();
+  fs.writeFileSync(path.join(dir, "ffmpeg.exe"), "a Windows binary");
+
+  assert.equal(vendoredFfmpegPath(dir, "darwin"), null);
+  assert.equal(vendoredFfmpegPath(dir, "linux"), null);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("buildArgs still switches on kind and keeps the Instagram-critical flags", () => {
   const args = buildArgs("ffmpeg", "in.mov", "out.mp4");
   const mv = args.indexOf("-movflags");

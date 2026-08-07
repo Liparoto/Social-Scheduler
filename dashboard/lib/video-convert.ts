@@ -39,9 +39,17 @@ export function defaultVendorDir(): string {
   return path.resolve(process.cwd(), "..", "data", "bin");
 }
 
-/** Candidate filenames for an executable, newest-first. Windows needs the .exe. */
-function executableNames(base: string): string[] {
-  return process.platform === "win32" ? [`${base}.exe`, base] : [base];
+/**
+ * Candidate filenames for an executable, newest-first. Windows needs the .exe.
+ *
+ * Takes `platform` rather than reading `process.platform` directly so the Windows branch
+ * — the single riskiest line on a feature shipping blind to Windows — can be exercised
+ * from a macOS test run. Defaults to `process.platform` so every existing caller keeps
+ * its current behaviour unchanged. Mirrors `converterAdvice(platform)` in
+ * `./converter-advice.ts`.
+ */
+function executableNames(base: string, platform: NodeJS.Platform = process.platform): string[] {
+  return platform === "win32" ? [`${base}.exe`, base] : [base];
 }
 
 /**
@@ -52,8 +60,11 @@ function executableNames(base: string): string[] {
  * PATH is minimal, so a bare command name can be unresolvable there even when the same
  * name works in a terminal.
  */
-export function vendoredFfmpegPath(vendorDir: string): string | null {
-  for (const name of executableNames("ffmpeg")) {
+export function vendoredFfmpegPath(
+  vendorDir: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  for (const name of executableNames("ffmpeg", platform)) {
     const candidate = path.join(vendorDir, name);
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -67,11 +78,11 @@ export function vendoredFfmpegPath(vendorDir: string): string | null {
  * exactly `ffmpeg`, but Windows names it `ffmpeg.exe` and `fs.existsSync` does not apply
  * PATHEXT. Anyone who had installed ffmpeg themselves was invisible to this app.
  */
-function findOnPath(base: string): string | null {
-  const sep = process.platform === "win32" ? ";" : ":";
+function findOnPath(base: string, platform: NodeJS.Platform = process.platform): string | null {
+  const sep = platform === "win32" ? ";" : ":";
   for (const dir of (process.env.PATH || "").split(sep)) {
     if (!dir) continue;
-    for (const name of executableNames(base)) {
+    for (const name of executableNames(base, platform)) {
       try {
         const candidate = path.join(dir, name);
         if (fs.existsSync(candidate)) return candidate;
@@ -87,8 +98,11 @@ function resolveAvconvert(): ResolvedConverter | null {
   return fs.existsSync(AVCONVERT_BIN) ? { kind: "avconvert", bin: AVCONVERT_BIN } : null;
 }
 
-function resolveFfmpeg(vendorDir: string): ResolvedConverter | null {
-  const bin = vendoredFfmpegPath(vendorDir) ?? findOnPath("ffmpeg");
+function resolveFfmpeg(
+  vendorDir: string,
+  platform: NodeJS.Platform = process.platform
+): ResolvedConverter | null {
+  const bin = vendoredFfmpegPath(vendorDir, platform) ?? findOnPath("ffmpeg", platform);
   return bin ? { kind: "ffmpeg", bin } : null;
 }
 

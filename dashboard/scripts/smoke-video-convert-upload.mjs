@@ -78,10 +78,14 @@ if (!process.env[REEXEC_FLAG]) {
   // ---- Minor 8 (review follow-up): conversion-failure and derivative-still-invalid --
   // Both scenarios need a converter outcome that's deterministic regardless of what's
   // actually installed on this machine (and regardless of whether real encoded video
-  // data would happen to convert). VIDEO_CONVERTER=ffmpeg bypasses the real
-  // avconvert/ffmpeg probe entirely (findConverter() returns an explicit override
-  // as-is — see lib/video-convert.ts), and a fake "ffmpeg" script placed first on PATH
-  // stands in for the real binary.
+  // data would happen to convert). VIDEO_CONVERTER=ffmpeg forces the KIND, but
+  // findConverter() still requires a real binary to exist (see resolveFfmpeg() in
+  // lib/video-convert.ts) — it does NOT return the override as-is. A fake "ffmpeg"
+  // script placed first on PATH stands in for the real binary; this only works because
+  // vendoredFfmpegPath() (this install's own data/bin, checked BEFORE PATH) finds
+  // nothing on a fresh clone. If this install ever gets a real data/bin/ffmpeg (e.g.
+  // after Start-SocialScheduler-Windows.bat has run once), that vendored copy would be
+  // found first and shadow the fake one here.
   const fakeFfmpegFailDir = makeFakeFfmpegScript();
   const convertFailStatus = runChild("convert-fail", {
     VIDEO_CONVERTER: "ffmpeg",
@@ -339,9 +343,14 @@ async function main() {
       typeof body.error === "string" && body.error.includes("1920"),
       `expected the width-cap message, got ${JSON.stringify(body.error)}`
     );
+    // Not "ffmpeg" — converterAdvice("win32") deliberately contains no such word (see
+    // lib/converter-advice.ts), so that assertion fails on the one platform this whole
+    // branch exists for. Assert the video-defect diagnostic instead: it comes from
+    // classifyReelErrors() in lib/video-spec.ts, is unrelated to which hint the platform
+    // gets, and IMG_3707.MOV — a real iPhone camera original — is expected to trip both.
     assert(
-      body.error.toLowerCase().includes("ffmpeg"),
-      `expected the ffmpeg-install hint, got ${JSON.stringify(body.error)}`
+      body.error.includes("HEVC") || body.error.toLowerCase().includes("moov"),
+      `expected the HEVC/moov diagnostic to still be present, got ${JSON.stringify(body.error)}`
     );
     const afterListing = listFiles(assetDir);
     assert(

@@ -50,6 +50,33 @@ def vendored_path(root: Path) -> Path:
 # ---------------------------------------------------------------- discovery
 
 
+def _which_ffmpeg() -> str | None:
+    """Like shutil.which("ffmpeg"), but only counts a hit named exactly what the
+    dashboard would also accept.
+
+    dashboard/lib/video-convert.ts's findOnPath() only ever probes for `ffmpeg.exe` (or
+    bare `ffmpeg`) on Windows, and bare `ffmpeg` elsewhere. shutil.which("ffmpeg") does
+    not agree: on Windows it also honours PATHEXT (.CMD, .BAT, .PS1, ...) and searches
+    the current directory, so it can resolve to e.g. `ffmpeg.cmd`. If this module trusted
+    that hit, find_existing() would report success, install() would return early writing
+    nothing to data/bin, and the dashboard — which never looks for `ffmpeg.cmd` — would
+    still find no converter. The user would be told to re-run the launcher, which would
+    skip setup again for the same reason: an unfixable loop. The two lookups must agree,
+    or setup silently skips work the dashboard still needs.
+    """
+    found = shutil.which("ffmpeg")
+    if found is None:
+        return found
+    # os.path.basename, not pathlib — Path() picks WindowsPath vs PosixPath from os.name
+    # at instantiation, and tests exercise this with os.name monkeypatched to "nt" on a
+    # POSIX host, which pathlib refuses to do (same trap the vendored_path tests document
+    # in test_ffmpeg_setup.py). os.path.basename has no such restriction.
+    name = os.path.basename(found)
+    if os.name == "nt":
+        return found if name in ("ffmpeg.exe", "ffmpeg") else None
+    return found if name == "ffmpeg" else None
+
+
 def verify(path: Path | str) -> str:
     """Run `-version` and return its first line, or raise SetupError.
 
@@ -87,7 +114,7 @@ def find_existing(root: Path) -> Path | None:
             return local
         except SetupError:
             return None  # present but broken — caller re-copies over it
-    found = shutil.which("ffmpeg")
+    found = _which_ffmpeg()
     if found:
         try:
             verify(found)
@@ -145,7 +172,15 @@ def install(root: Path | None = None, log=print) -> Path | None:
     # Close mkstemp's file descriptor immediately. It hands back an OPEN fd, and on Windows
     # an open handle blocks the .replace() below — the staged copy would be verified, then
     # fail to move, on the one platform this whole module exists for.
-    fd, staged_name = tempfile.mkstemp(dir=str(dest.parent), prefix="tmp")
+    #
+    # suffix=".exe" (Windows only) so verify() below runs a file that is actually named
+    # like an executable. CreateProcessW very probably runs an extension-less file fine
+    # when given a full path — but "very probably" is not something to bet the whole
+    # branch on for an untestable platform, and cloudflared_setup.py already sidesteps the
+    # question entirely by staging under the final name. mkstemp's suffix is the cheapest
+    # way to do the same here without restructuring the mkstemp/mkdtemp choice.
+    suffix = ".exe" if sys.platform == "win32" else ""
+    fd, staged_name = tempfile.mkstemp(dir=str(dest.parent), prefix="tmp", suffix=suffix)
     os.close(fd)
     staged = Path(staged_name)
     try:
@@ -167,6 +202,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         install(root)
         return 0
+    except KeyboardInterrupt:
+        # KeyboardInterrupt subclasses BaseException, not Exception, so `except Exception`
+        # below does not catch it — install()'s ~76 MB copy is squarely long enough for
+        # someone to Ctrl-C it, and this module's whole contract is "never a traceback".
+        print("[!] ffmpeg setup cancelled.", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001
         # Deliberately broad, for the same reason cloudflared_setup is: the whole point of
         # this module is that a non-developer never has to think about ffmpeg, so ANY
