@@ -183,11 +183,28 @@ if not errorlevel 1 (
   REM out", so scheduled posts stop after a reboot and the only clue was one vague line.
   schtasks /Create /F /SC ONLOGON /TN "%TASKNAME%" /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0scripts\run-hidden.ps1\" \"!RUN_DIR!\run-worker-autostart.cmd\"" >"!LOG_DIR!\autostart-register.log" 2>&1
   if errorlevel 1 (
-    echo         ^(Could not register autostart - running it just for this session.^)
-    echo         This means the worker will NOT restart after you log out or reboot.
-    echo         Windows said:
-    for /f "usebackq delims=" %%L in ("!LOG_DIR!\autostart-register.log") do echo             %%L
-    echo         Full output: "!LOG_DIR!\autostart-register.log"
+    REM "Access is denied" here almost always means a STANDARD user account: an ONLOGON
+    REM task can fire for any user who logs in, so Windows requires admin to register one
+    REM and refuses even for yourself. No flag fixes it — /RU does not help, and /SC DAILY
+    REM succeeding is what proves the trigger type is the privileged part. Fall back to the
+    REM per-user Startup folder, which wants no elevation and has the semantics we were
+    REM after anyway. A standard account is the DEFAULT on a shared PC, so this path is
+    REM ordinary, not exotic.
+    set "STARTUP_LNK="
+    for /f "usebackq delims=" %%S in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\startup-shortcut.ps1" -Target "!RUN_DIR!\run-worker-autostart.cmd" -Shim "%~dp0scripts\run-hidden.ps1"`) do set "STARTUP_LNK=%%S"
+    if defined STARTUP_LNK (
+      echo         Registered it in your Startup folder instead - no administrator needed.
+      echo         It will start on its own every time you log in.
+    ) else (
+      echo         ^(Could not register autostart - running it just for this session.^)
+      echo         This means the worker will NOT restart after you log out or reboot.
+      echo         Windows said:
+      for /f "usebackq delims=" %%L in ("!LOG_DIR!\autostart-register.log") do echo             %%L
+      echo         Full output: "!LOG_DIR!\autostart-register.log"
+    )
+    REM Either way the worker is not running YET — a Startup shortcut only fires at the
+    REM next logon — so step 7 still starts one for this session. The single-instance lock
+    REM stops that colliding with the one that starts at logon.
     set "MANUAL_WORKER=1"
   ) else (
     schtasks /Run /TN "%TASKNAME%" >NUL 2>&1
@@ -206,8 +223,20 @@ if "!MANUAL_WORKER!"=="1" (
 
   set "WORKER_PID="
   for /f %%p in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run-hidden.ps1" "!RUN_DIR!\run-worker.cmd"') do set "WORKER_PID=%%p"
-  if defined WORKER_PID >"!RUN_DIR!\worker.pid" echo !WORKER_PID!
-  echo Worker running in the background ^(logs are in data\logs\^).
+
+  REM Check it is actually a process id before reporting success. This block used to print
+  REM "Worker running in the background" unconditionally, which is how two blocking bugs
+  REM shipped looking healthy: when the launch shim failed, `for /f` captured the first
+  REM word of its ERROR message and wrote that to worker.pid instead.
+  echo !WORKER_PID!| findstr /r "^^[0-9][0-9]*$" >NUL
+  if errorlevel 1 (
+    echo [!] The worker did not start - got "!WORKER_PID!" where a process id was expected.
+    echo     See data\logs\worker-daemon.out
+    set "WORKER_PID="
+  ) else (
+    >"!RUN_DIR!\worker.pid" echo !WORKER_PID!
+    echo Worker running in the background ^(logs are in data\logs\^).
+  )
   echo.
 )
 
