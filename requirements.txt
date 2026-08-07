@@ -12,3 +12,8 @@ openpyxl>=3.1
 # ships none, so without this the worker's scheduling and the export's local-time
 # columns silently fall back to UTC there. Unused (but harmless) on macOS/Linux.
 tzdata>=2024.1
+# Bundles an ffmpeg binary (~31 MB wheel) so a Windows install can convert iPhone video
+# without the owner hunting one down. Windows only: macOS ships /usr/bin/avconvert, which
+# the dashboard prefers, so a Mac clone downloads nothing. Copied into data/bin by
+# worker/ffmpeg_setup.py.
+imageio-ffmpeg>=0.6; sys_platform == "win32"
