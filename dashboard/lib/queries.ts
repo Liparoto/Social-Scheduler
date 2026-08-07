@@ -231,6 +231,37 @@ export function getGroupMembers(groupId: number): Channel[] {
     .all(groupId) as Channel[];
 }
 
+/** Ready, feed-targeted posts per time_of_day band, across a set of channels.
+ *
+ *  Feeds the auto-fill form's coverage warning: a band with content but no slot in the
+ *  cadence means those posts silently stop being auto-filled, and the queue goes on looking
+ *  healthy because untagged posts keep filling it.
+ *
+ *  Deliberately approximate — it does NOT re-run cooldown, period or caption-length
+ *  eligibility. Making it exact would mean running the full selection pass on every page
+ *  render to sharpen a number whose only job is "this band has content and nowhere to put it".
+ */
+export function getBandCounts(channelIds: number[]): Record<string, number> {
+  if (channelIds.length === 0) return {};
+  const placeholders = channelIds.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT t.name AS band, COUNT(DISTINCT p.id) AS n
+         FROM posts p
+         JOIN post_tags pt ON pt.post_id = p.id
+         JOIN tags t ON t.id = pt.tag_id AND t.kind = 'time_of_day'
+        WHERE p.content_status = 'ready'
+          AND t.name IN ('morning','afternoon','evening')
+          AND EXISTS (SELECT 1 FROM post_targets ptg
+                       WHERE ptg.post_id = p.id
+                         AND ptg.channel_id IN (${placeholders})
+                         AND ptg.surface = 'feed')
+        GROUP BY t.name`,
+    )
+    .all(...channelIds) as { band: string; n: number }[];
+  return Object.fromEntries(rows.map((r) => [r.band, r.n]));
+}
+
 export function createChannelGroup(input: { name: string; timezone: string }): number {
   const info = getDb()
     .prepare("INSERT INTO channel_groups (name, timezone) VALUES (@name, @timezone)")

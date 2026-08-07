@@ -18,6 +18,13 @@ interface Props {
   bppEveryDays: number;
   /** Marked posts this unit can actually send. */
   bppPoolSize: number;
+  /** config.bandTimes — the worker's derive_band inputs, mirrored here purely to label a
+   *  band next to a cadence time. Not yet rendered; a later change surfaces the coverage
+   *  warning these feed. */
+  bandTimes: { morning: string; afternoon: string; evening: string };
+  /** Ready feed posts per time_of_day band for this unit — see getBandCounts. Not yet
+   *  rendered; a later change surfaces the coverage warning these feed. */
+  bandCounts: Record<string, number>;
 }
 
 /** Accepts both cadence shapes: the original single `time`, and `times` for accounts
