@@ -40,7 +40,12 @@ const DEFAULT_INTERVAL: Cadence = {
   everyMinutes: 1440,
   from: "08:00",
   to: "21:00",
-  days: [],
+  // All seven, not empty — the form always writes an explicit `days`, and an explicitly
+  // empty list is invalid (worker/scheduling.py's _parse_interval rejects it and skips the
+  // unit). This mirrors the worker's rule that an *absent* days key means every day; the
+  // form just has to say so, since it never omits the field. Otherwise the very first click
+  // on "Every…" would land on a cadence that saves as unreachable with no warning shown.
+  days: [...DAYS],
 };
 
 function dayToggleClass(on: boolean): string {

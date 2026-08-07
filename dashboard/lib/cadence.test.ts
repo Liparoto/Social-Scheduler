@@ -67,6 +67,16 @@ test("coveredBands is the slot times in times mode, the window in interval mode"
   assert.deepEqual([...coveredBands(i, BT)].sort(), ["afternoon", "morning"]);
 });
 
+test("coveredBands is empty for an interval with no days — an empty day list is invalid, not \"every day\"", () => {
+  const i = parseCadence(
+    '{"mode":"interval","every_minutes":60,"window":{"from":"08:00","to":"12:00"},'
+    + '"days":[]}',
+  );
+  assert.equal(i.mode, "interval");
+  assert.deepEqual(i.days, []);
+  assert.deepEqual([...coveredBands(i, BT)], []);
+});
+
 test("summarize says daily rather than listing seven days", () => {
   const t = parseCadence(
     `{"mode":"times","slots":[{"time":"12:30","days":${JSON.stringify(ALL)}},`

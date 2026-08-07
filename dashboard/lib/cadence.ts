@@ -111,6 +111,12 @@ export function coveredBands(c: Cadence, bandTimes: Record<string, string>): Set
     }
     return out;
   }
+  // An explicitly empty day list is invalid — worker/scheduling.py's _parse_interval
+  // rejects it and skips the unit entirely, so no minute of the window is actually
+  // reachable. Without this check the loop below would report the whole window as
+  // covered for a cadence that can never fire, silencing the warning that exists to
+  // catch precisely this.
+  if (!c.days.length) return out;
   const start = minutesOf(c.from) ?? 0;
   const end = minutesOf(c.to) ?? 1439;
   const minutes = start <= end
