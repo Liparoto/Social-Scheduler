@@ -211,6 +211,10 @@ fi
 # step, and without that the download fails TLS verification against GitHub.
 .venv/bin/python -m worker.cloudflared_setup
 
+# macOS already has /usr/bin/avconvert, so this exits immediately and downloads nothing.
+# Kept here anyway so this script stays line-for-line comparable with the Windows one.
+.venv/bin/python -m worker.ffmpeg_setup
+
 # ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
 PORT=3939
 RUN_DIR="data/run"

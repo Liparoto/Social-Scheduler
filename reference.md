@@ -410,10 +410,37 @@ attempt on a file that's getting rejected regardless.
 
 1. **`avconvert`** — `/usr/bin/avconvert`, ships with every macOS install, zero extra
    dependency. Preferred.
-2. **`ffmpeg`** — fallback for a clone not on macOS, or where `avconvert` is somehow
-   missing. Probed on `PATH`.
-3. **Refuse** — neither is present (or `VIDEO_CONVERTER=off`): 422, with the same
-   convertible messages plus an "install ffmpeg" hint. No conversion is silently skipped.
+2. **This install's own vendored ffmpeg** — `data/bin/ffmpeg` (`ffmpeg.exe` on Windows),
+   the same gitignored, per-install folder `cloudflared` already uses. On Windows this is
+   put there automatically by `worker/ffmpeg_setup.py` the first time the launcher runs
+   (see below); nothing to install by hand.
+3. **`ffmpeg` on PATH** — someone who already installed their own (e.g.
+   `brew install ffmpeg` on macOS) keeps using it; nothing is copied over it.
+4. **Refuse** — none of the above is present (or `VIDEO_CONVERTER=off`): 422, with the
+   same convertible messages plus a platform-appropriate "get a converter" hint (see
+   `dashboard/lib/converter-advice.ts`). No conversion is silently skipped.
+
+`executableNames()`, `vendoredFfmpegPath()`, and `findOnPath()` (all in
+`video-convert.ts`) take an optional `platform` parameter, defaulting to
+`process.platform`, purely so the Windows `.exe` branch — which nobody here can run for
+real — can still be exercised by the test suite on macOS.
+
+### Automatic ffmpeg install on Windows (`worker/ffmpeg_setup.py`)
+
+`imageio-ffmpeg` is declared in `requirements.txt` for Windows only; pip puts a suitable
+binary inside the venv, and this module's job is to copy it to `data/bin/ffmpeg.exe` — the
+one place `findConverter()` above looks. It is a no-op on macOS (`avconvert` covers it).
+The copy is staged next to the destination with an `.exe` suffix and verified (`-version`
+actually runs) *before* being renamed into place, so a half-written or truncated file is
+never mistaken for a working install.
+
+`shutil.which("ffmpeg")`, used to detect an ffmpeg the user already installed themselves,
+honours Windows' `PATHEXT` and can resolve to a `.cmd`/`.bat` shim that the dashboard's
+`findOnPath()` would never find. The two lookups must agree — otherwise this module skips
+its own copy step (`find_existing()` reports success), the dashboard still finds nothing,
+and the user is stuck re-running the launcher forever for no visible reason. `_which_ffmpeg()`
+narrows the accepted hit to exactly what the dashboard also accepts: `ffmpeg.exe` or bare
+`ffmpeg` on Windows, bare `ffmpeg` elsewhere.
 
 Exact command lines (`buildArgs`):
 

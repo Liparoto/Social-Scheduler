@@ -1957,3 +1957,50 @@ afternoon, evening absent), and drifted Fri 10:15 → Sun 11:00 → Tue 11:45 �
 
 **Not done, deliberately:** the live worker was NOT restarted. It is still running the
 pre-change code it loaded at 09:54, and this branch is unmerged.
+
+## ffmpeg auto-install (Windows) — 2026-08-07
+
+Reported by the second install's owner on Windows: an ordinary iPhone video was refused
+with two convertible reasons (trailing `moov`, HEVC) and told to run `brew install ffmpeg`,
+which does not exist there. Three defects behind one message — no converter available on
+Windows, a PATH probe that never looked for `ffmpeg.exe` so installing one by hand would
+not have helped either, and macOS-only remedy text.
+
+- [x] `.venv/bin/python -m pytest worker/tests -q` — 783 passed (774 before; +9 new).
+- [x] `npm test` — 429 passed (426 before; +3 new). `npm run lint` — 0 errors
+      (13 pre-existing warnings).
+- [x] `scripts/test-video-convert.mjs` — passes. Its `hasFfmpeg` guard now actually guards:
+      it compared `findConverter("ffmpeg") === "ffmpeg"`, which was unconditionally true.
+- [x] Generated an HEVC + trailing-`moov` fixture (`scripts/make-hevc-fixture.mjs`) rather
+      than depending on `~/Downloads/IMG_3707.MOV`, which is absent here — so that branch of
+      the script test had been silently skipping. Confirmed the fixture reproduces BOTH
+      reported problems: `is_hevc: true, moov_before_mdat: false`.
+- [x] Converted with the `imageio-ffmpeg` binary (the exact build Windows receives):
+      `is_hevc: false, moov_before_mdat: true`, 1080x1920 and the audio track preserved.
+- [x] **Uploaded through the real Compose UI in a browser**, against an isolated copy of the
+      dashboard on port 3941 with a `sqlite3 .backup` of the DB and a separate asset store —
+      the live install on 3939 was never touched and nothing was written to the real library.
+      Accepted as `Video · reel`, `conform_mode=downscale`, `publish_path` set. The preview
+      played in Chrome, which **cannot decode HEVC** — that is the proof the transcode really
+      happened — and the cover picker rendered frames.
+- [x] Repeated the same browser upload with `VIDEO_CONVERTER=ffmpeg` and the binary placed at
+      `data/bin/ffmpeg`, the exact path `worker/ffmpeg_setup.py` installs to on Windows. The
+      derivative came back `h264 ... 1080x1920` with `moov_before_mdat: true`, proving the
+      vendored-binary resolution path, not just PATH lookup.
+- [x] `VIDEO_CONVERTER=off` → 422 with the diagnostics preserved and platform-correct advice.
+      `converterAdvice()` verified for all three platforms: win32 mentions no `brew` and
+      points at `Start-SocialScheduler-Windows.bat`.
+- [x] `worker.ffmpeg_setup` on macOS is a genuine no-op: exit 0, no output, nothing written
+      to `data/bin/`.
+
+**Trap found and worth remembering:** the upload route dedups by content hash at
+`route.ts:45`, *before* the video-validation and converter block. Re-uploading the same
+fixture to test a failure path returns `200 {deduped: true}` and proves nothing — the
+`VIDEO_CONVERTER=off` check needed a second fixture with different content.
+
+**NOT VERIFIED — Windows.** No Windows machine is available here, the same caveat already
+written into `Start-SocialScheduler-Windows.bat`. What is proven is that the conversion works
+with the exact binary the wheel ships, resolved from the exact vendored path. What is NOT
+proven is the `.exe` filename handling, the copy into `data/bin`, and the launcher line —
+code-reviewed only. **This closes when the reporting install runs `Update-Windows.bat`, then
+`Start`, and uploads the original video.** Until then it is fixed in principle, not in fact.

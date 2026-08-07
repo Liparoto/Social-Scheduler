@@ -496,8 +496,12 @@ def _fake_binary(path: Path) -> Path:
 
 
 def test_vendored_path_uses_exe_on_windows(monkeypatch):
+    # Construct the Path BEFORE patching os.name. pathlib picks WindowsPath vs PosixPath
+    # from os.name at instantiation, and Python 3.11 refuses to instantiate WindowsPath on
+    # a POSIX host — patching first makes this line raise, which aborts the whole suite.
+    root = Path("/repo")
     monkeypatch.setattr(fs.os, "name", "nt")
-    assert fs.vendored_path(Path("/repo")).name == "ffmpeg.exe"
+    assert fs.vendored_path(root).name == "ffmpeg.exe"
 
 
 def test_vendored_path_is_bare_elsewhere(monkeypatch):

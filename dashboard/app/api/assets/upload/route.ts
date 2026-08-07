@@ -10,6 +10,7 @@ import { conformImage, type ConformMode } from "@/lib/conform";
 import { readVideoMeta, VideoParseError } from "@/lib/video-meta";
 import { validateReel, classifyReelErrors, REEL_MIME_TYPES } from "@/lib/video-spec";
 import { findConverter, convertVideo, ConvertError } from "@/lib/video-convert";
+import { converterAdvice } from "@/lib/converter-advice";
 
 export const runtime = "nodejs";
 
@@ -118,11 +119,7 @@ export async function POST(req: NextRequest) {
     const converter = findConverter(config.videoConverter);
     if (!converter) {
       return NextResponse.json(
-        {
-          error:
-            `${check.convertible.join(" ")} Installing ffmpeg ` +
-            `(\`brew install ffmpeg\`) would let this app convert and publish it automatically.`,
-        },
+        { error: `${check.convertible.join(" ")} ${converterAdvice(process.platform)}` },
         { status: 422 }
       );
     }

@@ -44,7 +44,7 @@ assert.equal(findConverter("off"), null, "off disables conversion");
 
 // On macOS avconvert is always present
 if (process.platform === "darwin") {
-  assert.equal(findConverter(), "avconvert", "macOS must find avconvert");
+  assert.equal(findConverter()?.kind, "avconvert", "macOS must find avconvert");
 }
 
 // A garbage input must reject with the typed error, not hang or resolve
@@ -103,7 +103,7 @@ if (conv) {
     assert.equal(
       stillRunning,
       "",
-      `${conv} must not still be running after a timeout (pgrep found: ${stillRunning})`
+      `${conv.kind} must not still be running after a timeout (pgrep found: ${stillRunning})`
     );
     console.log("  timeout path verified — ConvertError, no partial file, no lingering process");
   } else {
@@ -120,11 +120,12 @@ if (conv) {
 // reproduce avconvert's 1080x1920 shape for the same portrait 4K input — this is the actual
 // regression being fixed.
 {
-  const hasFfmpeg = findConverter("ffmpeg") === "ffmpeg";
+  const ffmpegConv = findConverter("ffmpeg");
+  const hasFfmpeg = ffmpegConv !== null;
   const REAL = path.join(os.homedir(), "Downloads", "IMG_3707.MOV");
   if (hasFfmpeg && fs.existsSync(REAL)) {
     const dst = path.join(os.tmpdir(), `conv-ffmpeg-${process.pid}.mov`);
-    await convertVideo(REAL, dst, { converter: "ffmpeg", timeoutMs: 300_000 });
+    await convertVideo(REAL, dst, { converter: ffmpegConv, timeoutMs: 300_000 });
     const m = readVideoMeta(fs.readFileSync(dst));
     assert.equal(m.width, 1080, `ffmpeg must match avconvert's shape: got width ${m.width}`);
     assert.equal(m.height, 1920, `ffmpeg must match avconvert's shape: got height ${m.height}`);
