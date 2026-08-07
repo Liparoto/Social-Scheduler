@@ -178,9 +178,16 @@ if not errorlevel 1 (
     del /q "!RUN_DIR!\watchdog.pid" "!RUN_DIR!\worker.deadline" >NUL 2>&1
   )
 
-  schtasks /Create /F /SC ONLOGON /TN "%TASKNAME%" /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0scripts\run-hidden.ps1\" \"!RUN_DIR!\run-worker-autostart.cmd\"" >NUL 2>&1
+  REM Keep schtasks' own words. Swallowing them with >NUL 2>&1 made this failure
+  REM undiagnosable: the fallback silently downgrades "always running" to "until you log
+  REM out", so scheduled posts stop after a reboot and the only clue was one vague line.
+  schtasks /Create /F /SC ONLOGON /TN "%TASKNAME%" /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0scripts\run-hidden.ps1\" \"!RUN_DIR!\run-worker-autostart.cmd\"" >"!LOG_DIR!\autostart-register.log" 2>&1
   if errorlevel 1 (
     echo         ^(Could not register autostart - running it just for this session.^)
+    echo         This means the worker will NOT restart after you log out or reboot.
+    echo         Windows said:
+    for /f "usebackq delims=" %%L in ("!LOG_DIR!\autostart-register.log") do echo             %%L
+    echo         Full output: "!LOG_DIR!\autostart-register.log"
     set "MANUAL_WORKER=1"
   ) else (
     schtasks /Run /TN "%TASKNAME%" >NUL 2>&1

@@ -165,6 +165,7 @@ def test_find_existing_treats_a_broken_local_copy_as_missing(tmp_path, monkeypat
     assert cs.find_existing(tmp_path) is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="shell-script stand-in is POSIX-only")
 def test_find_existing_falls_back_to_a_system_install(tmp_path, monkeypatch):
     """Someone who already ran `brew install cloudflared` should download nothing."""
     system_copy = _fake_binary(tmp_path / "usr" / "cloudflared")
@@ -173,6 +174,7 @@ def test_find_existing_falls_back_to_a_system_install(tmp_path, monkeypatch):
     assert cs.find_existing(tmp_path) == system_copy
 
 
+@pytest.mark.skipif(os.name == "nt", reason="shell-script stand-in is POSIX-only")
 def test_install_is_a_no_op_when_one_is_already_here(tmp_path, monkeypatch):
     """Idempotence: safe to run on every single start, never re-downloads."""
     _fake_binary(cs.vendored_path(tmp_path))
