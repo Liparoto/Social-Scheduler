@@ -2004,3 +2004,55 @@ with the exact binary the wheel ships, resolved from the exact vendored path. Wh
 proven is the `.exe` filename handling, the copy into `data/bin`, and the launcher line —
 code-reviewed only. **This closes when the reporting install runs `Update-Windows.bat`, then
 `Start`, and uploads the original video.** Until then it is fixed in principle, not in fact.
+
+## Emoji picker + caption counting — 2026-08-07
+
+Requested as "an emoji keyboard for Mac and Windows" because the second install's owner
+found emoji hard to reach and inconsistent on Windows. Reading the caption code while
+scoping it turned up a second, unrelated bug worth more than the feature.
+
+**The counting bug.** The dashboard counted caption length in UTF-16 code units (JS
+`.length`) while the worker counted code points (Python `len()`). They disagreed by 3 on
+`Great day! 😀🎉🔺` — 14 vs 17 — and the worker is the authoritative gate, so it was the side
+letting an over-length caption through to be refused by the platform at send time. Telegram
+and Discord verifiably count UTF-16 code units; Meta never defines the unit for Threads' 500
+and third-party sources contradict each other, so UTF-16 was chosen as the stricter direction
+and is recorded as a safe default, not a confirmed fact.
+
+- [x] `.venv/bin/python -m pytest worker/tests -q` — 797 passed (788 before; +9 new).
+- [x] `npm test` — 470 passed (426 before; +44 new). `npm run lint` — 0 errors.
+- [x] Both languages assert the same table of strings→counts, so they cannot drift again.
+- [x] Emoji dataset generated from Unicode 17.0's own `emoji-test.txt`: 1,914 fully-qualified
+      emoji, 9 groups, 180 KB, no runtime dependency added.
+
+**Verified in a real browser** against an isolated copy on port 3941 (copy-on-write clone of
+`dashboard/`, `sqlite3 .backup` of the DB, separate asset store). The live install on 3939 was
+never touched and nothing was written to the real library.
+
+- [x] Insert at the caret, not the end: `Hello|world` + 😀 → `Hello😀 world`.
+- [x] **Caret bug found and fixed here.** The first implementation restored the caret in
+      `requestAnimationFrame`, which can fire before React commits the new value — the caret
+      landed at 13 (end) instead of 7. `useLayoutEffect` keyed on the value fixed it;
+      re-verified at 7, and a second insert at 9, proving it tracks across inserts.
+- [x] Search by name: "party popper" → exactly 🎉. Recents persist newest-first.
+- [x] Escape closes the panel and returns focus to the trigger.
+- [x] Dataset lazy-loads on first open only; grid capped at 300 rendered buttons.
+- [x] Counter moves by exactly 2 per emoji (5/500 → 7/500), matching the worker.
+- [x] Themes: panel contrast 17.3:1 light, 14.35:1 dark — both far above WCAG AA. Noto Color
+      Emoji confirmed applied to the grid.
+- [x] Emoji round-trip through SQLite is already proven by production data: 96 stored caption
+      variants contain emoji and render correctly.
+
+**NOT VERIFIED — Windows.** No Windows machine is available. Bundling Noto Color Emoji is what
+should make the picker render identically there and stop older Windows builds showing newer
+emoji as boxes, but that is reasoning, not observation.
+
+**NOT VERIFIED — the Threads counting unit.** A deliberate safe default. Being wrong warns
+early rather than failing a publish. If Meta ever documents it, the citation belongs in the
+table in `docs/superpowers/specs/2026-08-07-emoji-picker-design.md`.
+
+**Worth remembering:** an emoji picker does NOT change how emoji look to the audience. A
+published emoji is a Unicode codepoint drawn by the viewer's device, so an iPhone follower
+sees Apple's artwork regardless of the composing machine. Apple Color Emoji is proprietary and
+can never be bundled; Noto (SIL OFL) is the closest legal equivalent and fixes the author's
+own view, which was the real problem.

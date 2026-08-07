@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BppMark } from "@/components/bpp-mark";
 import type {
@@ -113,6 +113,25 @@ export function PostEditor({
   );
   const [firstComment, setFirstComment] = useState(post.first_comment ?? "");
   const firstCommentRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once the new value reaches the DOM. See the layout effect below.
+  const pendingCaret = useRef<number | null>(null);
+
+  /**
+   * Put the caret back after an emoji insert.
+   *
+   * useLayoutEffect keyed on the value, NOT requestAnimationFrame. rAF can fire before React
+   * commits the new text, so setSelectionRange lands on the OLD string and the re-render
+   * then throws the caret to the end — verified in a browser.
+   */
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current;
+    if (caret === null) return;
+    pendingCaret.current = null;
+    const el = firstCommentRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  }, [firstComment]);
 
   /** Splice a picked emoji into the first-comment box at the caret, not at the end. */
   function insertFirstCommentEmoji(emoji: string) {
@@ -120,12 +139,8 @@ export function PostEditor({
     const start = el?.selectionStart ?? firstComment.length;
     const end = el?.selectionEnd ?? firstComment.length;
     const next = insertAtCaret(firstComment, emoji, start, end);
+    pendingCaret.current = next.caret;
     setFirstComment(next.text);
-    // After React commits the new value, or the caret gets overwritten by the re-render.
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(next.caret, next.caret);
-    });
   }
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

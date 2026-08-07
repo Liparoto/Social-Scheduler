@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useLayoutEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
@@ -65,6 +65,25 @@ export function Composer({
   const [variants, setVariants] = useState<CaptionVariantDraft[]>([{ platform: "", body: "" }]);
   const [firstComment, setFirstComment] = useState("");
   const firstCommentRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once the new value reaches the DOM. See the layout effect below.
+  const pendingCaret = useRef<number | null>(null);
+
+  /**
+   * Put the caret back after an emoji insert.
+   *
+   * useLayoutEffect keyed on the value, NOT requestAnimationFrame. rAF can fire before React
+   * commits the new text, so setSelectionRange lands on the OLD string and the re-render
+   * then throws the caret to the end — verified in a browser.
+   */
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current;
+    if (caret === null) return;
+    pendingCaret.current = null;
+    const el = firstCommentRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  }, [firstComment]);
 
   /** Splice a picked emoji into the first-comment box at the caret, not at the end. */
   function insertFirstCommentEmoji(emoji: string) {
@@ -72,12 +91,8 @@ export function Composer({
     const start = el?.selectionStart ?? firstComment.length;
     const end = el?.selectionEnd ?? firstComment.length;
     const next = insertAtCaret(firstComment, emoji, start, end);
+    pendingCaret.current = next.caret;
     setFirstComment(next.text);
-    // After React commits the new value, or the caret gets overwritten by the re-render.
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(next.caret, next.caret);
-    });
   }
   // Targets, not channel ids: an Instagram channel can be picked for its Feed, its
   // Story, or both, and each is an independent send. See channel-surface-picker.

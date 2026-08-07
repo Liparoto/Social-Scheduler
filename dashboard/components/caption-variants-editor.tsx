@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { PLATFORMS, captionLimit, platformLabel } from "@/lib/platforms";
 import { captionLength } from "@/lib/caption-length";
 import { insertAtCaret } from "@/lib/insert-at-caret";
@@ -57,6 +57,30 @@ export function CaptionVariantsEditor({
   // splice into. A Map rather than an array because rows are added and removed.
   const textareas = useRef(new Map<number, HTMLTextAreaElement>());
 
+  // Where the caret should go once the new caption value has actually reached the DOM.
+  // A ref, not state, so setting it cannot itself trigger a render.
+  const pendingCaret = useRef<{ i: number; caret: number } | null>(null);
+
+  /**
+   * Put the caret back after an emoji insert.
+   *
+   * useLayoutEffect keyed on `value`, NOT requestAnimationFrame. rAF was the first attempt
+   * and it is genuinely wrong: it can fire before React commits the new caption, so
+   * setSelectionRange lands on the OLD string and the subsequent re-render throws the caret
+   * to the end. Verified in a browser — inserting into "Hello|world" left the caret at 13
+   * instead of 7. A layout effect runs after the DOM is updated and before paint, so the
+   * caret is already correct the first time anyone sees it.
+   */
+  useLayoutEffect(() => {
+    const pending = pendingCaret.current;
+    if (!pending) return;
+    pendingCaret.current = null;
+    const el = textareas.current.get(pending.i);
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(pending.caret, pending.caret);
+  }, [value]);
+
   function insertEmoji(i: number, emoji: string) {
     const el = textareas.current.get(i);
     const body = value[i]?.body ?? "";
@@ -65,15 +89,8 @@ export function CaptionVariantsEditor({
     const start = el?.selectionStart ?? body.length;
     const end = el?.selectionEnd ?? body.length;
     const next = insertAtCaret(body, emoji, start, end);
+    pendingCaret.current = { i, caret: next.caret };
     update(i, { body: next.text });
-    // Restore focus and the caret AFTER React commits the new value; doing it synchronously
-    // would put the caret back before the re-render overwrites it.
-    requestAnimationFrame(() => {
-      const live = textareas.current.get(i);
-      if (!live) return;
-      live.focus();
-      live.setSelectionRange(next.caret, next.caret);
-    });
   }
 
   return (
