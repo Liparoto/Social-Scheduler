@@ -4,6 +4,7 @@ import { useEffect, useMemo, useReducer, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
+import { usePersistedToggle } from "@/components/use-persisted-toggle";
 import {
   createLibraryCheckboxFilterState,
   libraryCheckboxFilterReducer,
@@ -148,6 +149,9 @@ export function LibraryView({
     expectedCount: number;
   } | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
+  // Remembered per install. Default TRUE (expanded) so a fresh clone behaves exactly as it
+  // did before this existed — the bar only ever hides because someone asked it to.
+  const [barOpen, setBarOpen] = usePersistedToggle("ss.library.bulkBarOpen", true);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   // Which card's quick-edit dialog is open, if any. Held as an id rather than the post
   // object so a router.refresh() flowing new props in doesn't leave the dialog rendering
@@ -780,7 +784,35 @@ export function LibraryView({
       {/* Bulk schedule bar. z-20 is load-bearing: the thumbnails' MediaBadge sits at z-10,
           and without a higher layer here those badges punched through the bar's opaque
           background as the grid scrolled under it. Stays below the lightbox's z-50. */}
-      <div className="sticky bottom-4 z-20 rounded-card border border-border-strong bg-surface p-4 shadow-lg">
+      <div className="sticky bottom-4 z-20 rounded-card border border-border-strong bg-surface shadow-lg">
+        {/* The whole header row toggles, not just the chevron — a 16px icon is a poor target
+            for something used this often. The selection count stays visible while collapsed,
+            so ticking posts visibly registers without the panel springing open over the grid
+            being reviewed. */}
+        <button
+          type="button"
+          onClick={() => setBarOpen(!barOpen)}
+          aria-expanded={barOpen}
+          aria-controls="bulk-bar-panel"
+          className="flex w-full items-center gap-3 rounded-card px-4 py-3 text-left hover:bg-surface-sunken"
+        >
+          <span className="text-sm font-semibold text-ink">Scheduler &amp; bulk edits</span>
+          <span className="text-xs text-muted">
+            <span className="data font-semibold text-ink">{selected.length}</span> selected
+          </span>
+          <svg
+            viewBox="0 0 20 20"
+            className={`ml-auto h-4 w-4 text-muted transition-transform ${barOpen ? "" : "rotate-180"}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            aria-hidden="true"
+          >
+            <path d="M5 12.5 10 7.5l5 5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        {barOpen ? (
+        <div id="bulk-bar-panel" className="border-t border-border p-4">
         <div className="flex flex-wrap items-end gap-4">
           <div className="text-sm">
             <span className="data text-lg font-semibold text-ink">{selected.length}</span>
@@ -929,6 +961,8 @@ export function LibraryView({
             Merge into carousel
           </button>
         </div>
+        </div>
+        ) : null}
       </div>
 
       {openMedia ? (

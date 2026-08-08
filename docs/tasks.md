@@ -2122,3 +2122,44 @@ Also raised the grid cap 300 → 400. It was sized below the largest category (P
 and its pixels inspected: **302 drawn, 0 blank**, Arial fallback face gone. People & Body shows
 all 388 with no truncation note. Confirmed by screenshot. `npm test` 470, `pytest` 797,
 `npm run lint` 0 errors.
+
+## Collapsible bulk bar on the Library page — 2026-08-07
+
+The bulk bar stacks six sections and is `sticky bottom-4`, so the space it cost followed the
+grid down the page — and every action in it is disabled while nothing is selected, which is
+exactly when someone is reviewing content.
+
+- [x] `npm test` — 478 passed (470 before; +8 new). `npm run lint` — 0 errors.
+- [x] `.venv/bin/python -m pytest worker/tests -q` — 797 passed, no worker file touched.
+
+**Measured, not claimed** (browser, isolated copy on port 3941, live install never touched):
+
+- [x] Expanded **490 px** → collapsed **46 px** = **444 px reclaimed**. On the 820 px laptop
+      viewport tested that is **54% of the screen**; the collapsed page shows three full rows
+      of posts where it previously showed one.
+- [x] Collapse → reload → still collapsed. Expand → reload → still expanded.
+      `localStorage['ss.library.bulkBarOpen']` reads `"false"` then `"true"`.
+- [x] **Selecting while collapsed does not auto-expand.** Clicking two post cards moved the
+      header from `0 selected` to `2 selected` with `aria-expanded="false"` and the panel
+      absent from the DOM. This is the specific behaviour chosen in the spec.
+- [x] `z-20` regression check: with the bar collapsed and the grid scrolled beneath it,
+      `elementFromPoint` at the bar's centre returns the bar's own header, not a media badge.
+      Computed `z-index` still `20`.
+- [x] Light and dark both legible — label contrast 14.35:1 in dark. Confirmed by screenshot in
+      both modes, collapsed and expanded.
+
+**Two traps worth remembering:**
+
+1. **`lib/*.test.ts` runs under `--conditions=react-server`**, where `react` resolves to a
+   CommonJS build and `useSyncExternalStore` is **not** a named export. A `lib/` module that
+   imports React hooks cannot be unit-tested at all — it fails at import. The storage logic
+   therefore lives in `lib/persisted-toggle.ts` (no React, fully tested) and the hook in
+   `components/use-persisted-toggle.ts`.
+2. **Do not run `prettier` on this repo.** It is not configured here, and running it on
+   `library-view.tsx` reformatted 711 lines for a 35-line feature — a diff that buries the
+   change it is meant to show. The change was reverted and re-applied by hand; the final diff
+   is 35 insertions, 1 deletion.
+
+**Not done, deliberately:** `library-view.tsx` stays at ~990 lines. The bar reads a dozen
+pieces of parent state, so extracting it is a far larger change than a collapse toggle should
+drag in.
