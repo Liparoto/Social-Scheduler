@@ -284,7 +284,17 @@ export function PublicationQueue({
                       <p className="data mt-1 text-[10px] text-faint">metrics pending…</p>
                     ) : null}
                     {p.last_error ? (
-                      <p className="mt-1 max-w-xs text-[11px] text-status-failed line-clamp-2">
+                      // Red is for a post that is actually dead. A still-scheduled post
+                      // carrying an error was only deferred (e.g. no network at publish
+                      // time) and will retry on its own, so it reads as a muted note.
+                      // title= because the text is clamped to two lines — hovering must
+                      // still give the whole reason rather than losing it to the clamp.
+                      <p
+                        title={p.last_error}
+                        className={`mt-1 max-w-xs text-[11px] line-clamp-2 ${
+                          p.status === "failed" ? "text-status-failed" : "text-faint"
+                        }`}
+                      >
                         {p.last_error}
                       </p>
                     ) : null}
