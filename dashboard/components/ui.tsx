@@ -2,11 +2,22 @@ import type { PublicationStatus } from "@/lib/types";
 import { channelColor } from "@/lib/format";
 import { platformBadge } from "@/lib/platforms";
 
-const STATUS_META: Record<
-  PublicationStatus,
-  { label: string; varName: string }
-> = {
+/**
+ * 'blocked' is a DERIVED state, not a database status — see isBlocked() in lib/format.
+ *
+ * A send that is still 'scheduled' but is overdue and recorded an error last attempt is
+ * neither of the two things the schema can say. It isn't failed: nothing was lost and the
+ * worker will try again on its own. But it isn't quietly on track either, and rendering
+ * it as plain blue "Scheduled" is actively misleading — a post held up by something
+ * persistent (a VPN or mesh-network app owning DNS, say) will sit there looking perfectly
+ * healthy indefinitely. The third badge is what makes "not moving" visible without
+ * crying wolf.
+ */
+export type BadgeState = PublicationStatus | "blocked";
+
+const STATUS_META: Record<BadgeState, { label: string; varName: string }> = {
   scheduled: { label: "Scheduled", varName: "--color-status-scheduled" },
+  blocked: { label: "Blocked", varName: "--color-status-blocked" },
   pending_approval: { label: "Needs approval", varName: "--color-status-draft" },
   publishing: { label: "Publishing", varName: "--color-status-publishing" },
   posted: { label: "Posted", varName: "--color-status-posted" },
@@ -18,7 +29,7 @@ export function StatusBadge({
   status,
   dryRun,
 }: {
-  status: PublicationStatus;
+  status: BadgeState;
   dryRun?: boolean;
 }) {
   const meta = STATUS_META[status];

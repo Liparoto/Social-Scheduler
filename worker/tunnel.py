@@ -33,6 +33,83 @@ from .config import Config
 
 _URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
+# Hosts under trycloudflare.com that are Cloudflare's own control plane and never a
+# tunnel. This matters because cloudflared prints https://api.trycloudflare.com/tunnel
+# INSIDE its failure message, which a bare hostname regex happily matches — so a tunnel
+# that never came up looked like one that did, and Meta was handed a URL serving an API
+# response instead of an image ("Only photo or video can be accepted as media type").
+_NOT_A_TUNNEL = frozenset({"api.trycloudflare.com"})
+
+# cloudflared's wording when it cannot reach Cloudflare to create the tunnel at all.
+_FAILURE_RE = re.compile(r"failed to (?:request|create|serve|start)\b.*tunnel", re.I)
+
+
+# A name that won't resolve and a host that won't accept a connection are different
+# problems with different fixes, and cloudflared says which one it hit. Splitting them
+# is what stops the message sending someone to check a firewall when their DNS is the
+# thing at fault.
+_DNS_FAILURE_RE = re.compile(
+    r"no such host|lookup\s+\S+|name resolution|server misbehaving|\bdns\b", re.I
+)
+
+
+def _unavailable(detail: str, probe=None) -> str:
+    """Explain a missing tunnel in terms of what it means for the post.
+
+    The cause is DIAGNOSED, not guessed. Every plausible cause — offline laptop, a VPN or
+    mesh-network client owning the resolver, a school/corporate filter, a firewall, a
+    Cloudflare outage — produces the same "no tunnel" symptom, and cloudflared's own text
+    only distinguishes a failed name lookup from a failed connection. So on the DNS path
+    we additionally ask a public resolver (1.1.1.1, reached by literal IP, so it needs no
+    working DNS itself) whether the name resolves out in the world:
+
+      * we can't reach 1.1.1.1 at all  -> this machine is offline; blame nothing else
+      * 1.1.1.1 HAS the record          -> the name is fine publicly and broken here, so
+                                          something local is overriding DNS
+      * 1.1.1.1 lacks the record        -> it's genuinely unresolvable; Cloudflare's end
+
+    That middle branch is the one worth the network call: it turns "maybe a VPN?" into a
+    fact. Saying "your VPN" without it gets truthfully dismissed by anyone whose VPN is
+    off — including someone running a mesh-network client (NordVPN Meshnet, Tailscale and
+    friends), which takes over the system resolver while never being "connected" to any
+    VPN server. That exact wording sent a real person looking in the wrong place.
+
+    Front-loaded on purpose: the dashboard clamps this to two lines, so the meaning — and
+    the fact that nothing was lost — has to land before the raw cloudflared text.
+    """
+    # Looked up at call time, not bound as a default, so a test (or a caller) can swap
+    # the probe and this never reaches the network unless it is genuinely meant to.
+    probe = probe or _doh_has_answer
+    try:
+        publicly_resolvable = probe("api.trycloudflare.com")
+    except Exception:  # noqa: BLE001 — can't even reach a public resolver by IP
+        publicly_resolvable = None
+
+    if publicly_resolvable is None:
+        cause = (
+            "This computer looks offline — it couldn't reach the internet at all, and "
+            "publishing needs to reach trycloudflare.com to give Meta a public image URL."
+        )
+    elif not _DNS_FAILURE_RE.search(detail):
+        cause = (
+            "Can't reach trycloudflare.com, which publishing needs in order to give Meta "
+            "a public image URL — commonly a firewall, a proxy, or captive-portal wifi."
+        )
+    elif publicly_resolvable:
+        cause = (
+            "Can't look up trycloudflare.com, which publishing needs in order to give "
+            "Meta a public image URL — though a public resolver can see it fine, so "
+            "something on this computer is overriding DNS: usually a VPN or "
+            "mesh-network app (which can do this even when it isn't connected to a VPN "
+            "server), or a network-level filter."
+        )
+    else:
+        cause = (
+            "trycloudflare.com isn't resolving publicly either, so this is Cloudflare's "
+            "end rather than anything on this computer. Usually temporary."
+        )
+    return f"Not posted — will be retried automatically. {cause} cloudflared said: {detail}"
+
 # Readiness is checked with a public resolver (not this host's system resolver), because
 # that's what Meta uses to fetch the image — and some networks' system DNS filters fresh
 # *.trycloudflare.com subdomains even though public resolvers serve them. We query 1.1.1.1
@@ -71,10 +148,18 @@ def resolve_binary(configured: str, root: Path | None = None) -> str | None:
 def parse_tunnel_url(text: str) -> str | None:
     """Extract the trycloudflare URL from cloudflared's output, or None.
 
-    Plain function so it's unit-testable against captured sample output.
+    Scans line by line so a URL quoted inside a FAILURE line can be skipped: a failed
+    tunnel must yield None, so the caller takes the retry path instead of publishing to
+    an address that was never a tunnel. Plain function so it's unit-testable against
+    captured sample output.
     """
-    m = _URL_RE.search(text)
-    return m.group(0) if m else None
+    for line in text.splitlines():
+        if _FAILURE_RE.search(line):
+            continue
+        for match in _URL_RE.finditer(line):
+            if urlparse(match.group(0)).hostname not in _NOT_A_TUNNEL:
+                return match.group(0)
+    return None
 
 
 def _doh_has_answer(host: str) -> bool:
@@ -140,25 +225,39 @@ class CloudflaredTunnel:
         )
 
         found = threading.Event()
+        failures: list[str] = []
 
         def _reader() -> None:
             assert self._proc and self._proc.stdout
             for line in self._proc.stdout:
                 if self.base_url is None:
+                    if _FAILURE_RE.search(line):
+                        # Recorded as the likely reason, but deliberately NOT treated as
+                        # fatal on its own: cloudflared also logs transient trouble
+                        # ("failed to serve tunnel connection") and then recovers, and
+                        # aborting on those would break tunnels that were going to work.
+                        # A genuinely fatal failure makes cloudflared exit, which closes
+                        # stdout and ends this loop — that is what wakes the caller.
+                        failures.append(line.strip())
+                        continue
                     url = parse_tunnel_url(line)
                     if url:
                         self.base_url = url
                         found.set()
+                        return
+            # Output ended without a URL: the process died. Wake the caller now rather
+            # than making every publish cycle sit out the full startup timeout.
+            found.set()
 
         threading.Thread(target=_reader, daemon=True).start()
 
-        if not found.wait(timeout=self.timeout):
+        found.wait(timeout=self.timeout)
+        if self.base_url is None:
             self.stop()
-            raise TunnelError(
-                f"cloudflared did not report a public URL within {self.timeout}s "
-                "(check your network connection)."
-            )
-        assert self.base_url is not None
+            raise TunnelError(_unavailable(
+                failures[-1] if failures  # the last one is the one it died on
+                else f"cloudflared reported no public URL within {self.timeout}s"
+            ))
         return self.base_url
 
     def stop(self) -> None:

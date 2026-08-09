@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { getActiveChannels, getPublicationsOverview, getWorkerStatus } from "@/lib/queries";
+import {
+  blockedPublicationIds,
+  getActiveChannels,
+  getPublicationsOverview,
+  getWorkerStatus,
+} from "@/lib/queries";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { RefreshAllMetrics } from "@/components/refresh-all-metrics";
 import { PublicationQueue } from "@/components/publication-queue";
@@ -21,7 +26,17 @@ export default function OverviewPage() {
       if (!nextByChannel.has(p.channel_id)) nextByChannel.set(p.channel_id, p.scheduled_at);
     }
   }
+  // Derived once, on the server, and handed down — so the rows and the counter below
+  // judge "overdue" against the SAME instant, and the value is baked into the HTML
+  // rather than recomputed at hydration (which would flash or mismatch).
+  const blockedIds = blockedPublicationIds(pubs);
   const failedCount = pubs.filter((p) => p.status === "failed").length;
+  // Blocked sends need a human too — they are stuck, just not dead. Leaving them out of
+  // this line is what let a post sit "Scheduled" and unnoticed.
+  const attention = [
+    failedCount > 0 ? `${failedCount} failed` : null,
+    blockedIds.length > 0 ? `${blockedIds.length} blocked` : null,
+  ].filter(Boolean);
 
   return (
     <div>
@@ -46,9 +61,13 @@ export default function OverviewPage() {
               <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-muted">
                 Channel queues
               </h2>
-              {failedCount > 0 ? (
-                <span className="data text-xs font-medium text-status-failed">
-                  {failedCount} failed · needs attention
+              {attention.length > 0 ? (
+                <span
+                  className={`data text-xs font-medium ${
+                    failedCount > 0 ? "text-status-failed" : "text-status-blocked"
+                  }`}
+                >
+                  {attention.join(" · ")} · needs attention
                 </span>
               ) : null}
             </div>
@@ -106,7 +125,12 @@ export default function OverviewPage() {
               top so they&rsquo;re never silent.
             </EmptyState>
           ) : (
-            <PublicationQueue pubs={pubs} channels={channels} workerOnline={worker.online} />
+            <PublicationQueue
+              pubs={pubs}
+              channels={channels}
+              workerOnline={worker.online}
+              blockedIds={blockedIds}
+            />
           )}
         </section>
       </div>

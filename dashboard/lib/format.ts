@@ -111,6 +111,32 @@ export function channelColor(
 }
 
 /**
+ * A send the worker has tried and could not get out, which will nonetheless try again.
+ *
+ * Derived rather than stored, so nothing in the schema or the worker has to change: the
+ * three facts are already in the row. All three are required —
+ *   - still `scheduled`  : 'failed' is terminal and already reads as urgent
+ *   - has a `last_error` : it actually attempted and something went wrong
+ *   - overdue            : a future send carrying a stale error is simply waiting
+ *
+ * Without the overdue check a rescheduled send would keep wearing the badge purely
+ * because an old error string is still on the row.
+ *
+ * Callers pass `now` so the queue's rows and the overview's counter judge against one
+ * instant, instead of each re-reading the clock and disagreeing at a tick boundary.
+ */
+export function isBlocked(
+  p: { status: string; last_error: string | null; scheduled_at: string },
+  now: number = Date.now()
+): boolean {
+  if (p.status !== "scheduled") return false;
+  if (!p.last_error) return false;
+  const due = Date.parse(p.scheduled_at);
+  // An unparseable date must not silently mark everything blocked.
+  return Number.isFinite(due) && due <= now;
+}
+
+/**
  * Preset swatches for the accent-colour picker — evenly spread (36° apart) so every
  * choice stays visually distinct, with a human name for the accessible label/tooltip
  * (a hue number reads worse than a colour name).

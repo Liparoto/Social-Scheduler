@@ -31,12 +31,25 @@
   --color-brand-strong: #0a4437;
   --color-accent-strong: #b23c17;
 
-  /* Status semantics (draft / scheduled / posted / failed / publishing) */
+  /* Status semantics (draft / scheduled / posted / failed / publishing / blocked)
+
+     'blocked' is not a database status — it is derived in the UI for a send that is
+     still 'scheduled' but whose time has passed and which recorded an error on its last
+     attempt. It sits deliberately between scheduled and failed: the post is not lost and
+     will retry, but it is NOT quietly on track either, and showing it as plain blue
+     "Scheduled" reads as healthy when it isn't. Amber, distinct from the red of a
+     genuinely dead send. */
   --color-status-draft: #64748b;
   --color-status-scheduled: #2563eb;
   --color-status-posted: #0e5c4a;
   --color-status-failed: #dc2626;
   --color-status-publishing: #b45309;
+  /* Amber, deliberately NOT the orange-red end of the ramp: the distinction that has to
+     survive a glance is blocked-vs-failed, and a redder blocked reads as failed. Landing
+     near --color-status-publishing is the accepted cost — 'publishing' is a sub-second
+     state that is almost never on screen, and the labels differ. 4.24:1 on its own 12%
+     tint, in line with the rest of the light set (failed 4.01, publishing 4.25). */
+  --color-status-blocked: #b8500b;
 
   /* Emoji come from the READER'S OWN system font, appended last to every text stack.
 
@@ -128,6 +141,7 @@ html[data-mode="dark"] {
   --color-status-posted: #34d399;
   --color-status-failed: #f87171;
   --color-status-publishing: #fbbf24;
+  --color-status-blocked: #fb923c;
 }
 
 html[data-theme="socialscheduler"][data-mode="dark"] {

@@ -72,6 +72,55 @@ def test_run_once_tunnel_unavailable_is_visible_not_fatal(conn, config, fake_cli
     assert "endpoint unavailable" in (row["last_error"] or "")
 
 
+def test_run_once_blocked_tunnel_defers_instead_of_failing(conn, config, fake_client, make_publication, monkeypatch):
+    """cloudflared INSTALLED but unable to reach Cloudflare — the real-world case.
+
+    A filtering VPN, DNS filter, or firewall blocks trycloudflare.com, so no tunnel
+    exists. Regression test: cloudflared names api.trycloudflare.com in its failure line,
+    the worker mistook that for a live tunnel, published to it, and Meta rejected the
+    fetch — burning every retry until the post died at 'failed'. It must defer instead.
+    """
+    monkeypatch.setenv("KILL_SWITCH", "0")
+    monkeypatch.setenv("DRY_RUN", "0")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+
+    blocked = (
+        "2026-08-09T00:05:59Z INF Requesting new quick Tunnel on trycloudflare.com...\n"
+        'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": '
+        "dial tcp: lookup api.trycloudflare.com: no such host\n"
+    )
+
+    class _FakeProc:
+        def __init__(self) -> None:
+            self.stdout = iter(blocked.splitlines(keepends=True))
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr("worker.tunnel.resolve_binary", lambda *a, **k: "/usr/bin/fake")
+    monkeypatch.setattr("worker.tunnel._doh_has_answer", lambda host: True)
+    monkeypatch.setattr("worker.tunnel.subprocess.Popen", lambda *a, **k: _FakeProc())
+
+    pub = make_publication(post_type="single", n_assets=1, public_url=None, now=NOW)
+
+    n = run_once(conn, config, fake_client, now=NOW)  # must not raise
+
+    assert n == 0
+    assert fake_client.calls == []  # nothing reached the platform
+    row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
+    assert row["status"] == "scheduled"  # deferred, NOT failed
+    assert row["attempt_count"] == 0  # a blocked network must not burn a retry
+    # The recorded reason has to be actionable without reading any code.
+    assert "trycloudflare.com" in (row["last_error"] or "")
+    assert "retried" in (row["last_error"] or "")
+
+
 def test_run_once_stamps_heartbeat(conn, config, fake_client, monkeypatch):
     """Every poll records the worker's liveness for the dashboard to read."""
     monkeypatch.setenv("KILL_SWITCH", "0")
