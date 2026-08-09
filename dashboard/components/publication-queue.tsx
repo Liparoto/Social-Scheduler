@@ -27,11 +27,20 @@ export function PublicationQueue({
   pubs,
   channels,
   workerOnline = true,
+  blockedIds = [],
 }: {
   pubs: PublicationRow[];
   channels: { id: number; account_name: string; platform: string }[];
   workerOnline?: boolean;
+  /**
+   * Ids the SERVER judged blocked (see isBlocked in lib/format). Passed in rather than
+   * derived here so the overview's counter and these rows agree on one instant, and so
+   * "overdue" isn't recomputed at hydration — which would either flash the badge or
+   * mismatch the server's HTML.
+   */
+  blockedIds?: number[];
 }) {
+  const blocked = new Set(blockedIds);
   const [account, setAccount] = useState<"all" | number>("all");
   const [platform, setPlatform] = useState<"all" | Platform>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
@@ -213,7 +222,10 @@ export function PublicationQueue({
                   </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-1.5">
-                      <StatusBadge status={p.status} dryRun={p.is_dry_run === 1} />
+                      <StatusBadge
+                        status={blocked.has(p.id) ? "blocked" : p.status}
+                        dryRun={p.is_dry_run === 1}
+                      />
                       {/* Answers "why is this old post going out again?" at the point the
                           question gets asked. Auto-fill normally sends unposted content
                           first, so a repeat with no explanation reads as a bug. */}
@@ -284,15 +296,21 @@ export function PublicationQueue({
                       <p className="data mt-1 text-[10px] text-faint">metrics pending…</p>
                     ) : null}
                     {p.last_error ? (
-                      // Red is for a post that is actually dead. A still-scheduled post
-                      // carrying an error was only deferred (e.g. no network at publish
-                      // time) and will retry on its own, so it reads as a muted note.
+                      // Three weights, matching the badge. Red = dead, needs you. Amber =
+                      // tried and couldn't, will try again, still needs your eye. Muted =
+                      // a stale error on a send that is genuinely just waiting its turn.
+                      // Muting a BLOCKED send was the earlier mistake: nothing was lost,
+                      // but it isn't moving either, and grey-on-"Scheduled" read as fine.
                       // title= because the text is clamped to two lines — hovering must
                       // still give the whole reason rather than losing it to the clamp.
                       <p
                         title={p.last_error}
                         className={`mt-1 max-w-xs text-[11px] line-clamp-2 ${
-                          p.status === "failed" ? "text-status-failed" : "text-faint"
+                          p.status === "failed"
+                            ? "text-status-failed"
+                            : blocked.has(p.id)
+                              ? "text-status-blocked"
+                              : "text-faint"
                         }`}
                       >
                         {p.last_error}

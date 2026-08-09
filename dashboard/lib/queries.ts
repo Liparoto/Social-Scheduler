@@ -1,6 +1,7 @@
 import "server-only";
 import type DatabaseType from "better-sqlite3";
 import { getDb, nowIso } from "./db";
+import { isBlocked } from "./format";
 import type {
   Asset,
   CaptionVariant,
@@ -1616,6 +1617,19 @@ export interface PublicationRow extends Publication {
   m_shares: number | null;
   m_impressions: number | null;
   m_fetched_at: string | null;
+}
+
+/**
+ * Ids of sends that tried, couldn't get out, and will try again (see isBlocked).
+ *
+ * Lives here rather than in the page because reading the clock is request-time data, the
+ * same as every other query in this file — doing it inside a component's render is an
+ * impure call, and React's lint rule is right to reject it. One clock read for the whole
+ * request, so the queue's badges and the overview's counter cannot disagree.
+ */
+export function blockedPublicationIds(pubs: PublicationRow[]): number[] {
+  const now = Date.now();
+  return pubs.filter((p) => isBlocked(p, now)).map((p) => p.id);
 }
 
 export function getPublicationsOverview(limit = 200): PublicationRow[] {
