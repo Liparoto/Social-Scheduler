@@ -1607,6 +1607,11 @@ export interface PublicationRow extends Publication {
   channel_avatar_path: string | null;
   asset_count: number;
   first_asset_id: number | null;
+  /** Describes first_asset_id — i.e. a story send's OWN slide, not the post's first. */
+  first_asset_media_kind: "image" | "video" | null;
+  first_asset_cover_frame_ms: number | null;
+  first_asset_width: number | null;
+  first_asset_height: number | null;
   /** 1-based slide number for a story send, NULL for a feed send. Lets the queue say
    *  "Story 2 of 4" instead of the post's type, which describes the SOURCE not this send. */
   story_slide_no: number | null;
@@ -1652,6 +1657,13 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
               WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1)) AS first_asset_id,
          (SELECT pa.sort_order + 1 FROM post_assets pa
             WHERE pa.post_id = p.id AND pa.asset_id = pub.asset_id) AS story_slide_no,
+         -- Enough to open this send in the lightbox without a round trip. Joined off the
+         -- SAME resolved asset as first_asset_id above (fa), so a story send describes
+         -- its own slide rather than the post's first one.
+         fa.media_kind     AS first_asset_media_kind,
+         fa.cover_frame_ms AS first_asset_cover_frame_ms,
+         fa.width          AS first_asset_width,
+         fa.height         AS first_asset_height,
          lm.reach       AS m_reach,
          lm.saves       AS m_saves,
          lm.likes       AS m_likes,
@@ -1662,6 +1674,11 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
        FROM publications pub
        JOIN posts p    ON p.id = pub.post_id
        JOIN channels c ON c.id = pub.channel_id
+       -- The COALESCE is repeated rather than aliased because SQLite cannot reference a
+       -- SELECT alias from a JOIN clause. It must stay identical to first_asset_id above.
+       LEFT JOIN assets fa ON fa.id = COALESCE(pub.asset_id,
+         (SELECT pa.asset_id FROM post_assets pa
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order ASC LIMIT 1))
        LEFT JOIN post_metrics lm ON lm.id = (
          SELECT pm.id FROM post_metrics pm
          WHERE pm.publication_id = pub.id
