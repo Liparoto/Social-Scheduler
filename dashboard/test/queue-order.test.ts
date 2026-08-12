@@ -1,12 +1,19 @@
 /**
  * The order of the Overview queue.
  *
- * Status comes first (what needs you, then what is coming, then what is done), and within
- * a status the queue reads chronologically. The subtlety is which clock: a posted send is
- * placed by when it ACTUALLY went out, everything else by when it is due. Sorting posted
- * rows by scheduled_at put a send that slipped overnight back among the posts it was
- * planned beside rather than the ones it actually landed among — the same lie the WHEN
- * column used to tell (see lib/send-time).
+ * Status ranks first: what needs you, then what is coming, then what is done. Within a
+ * rank the queue reads chronologically, and BOTH the clock and the direction depend on
+ * which rank it is:
+ *
+ *   - Upcoming work (failed, publishing, scheduled) runs FORWARD from now — the next
+ *     thing to happen is the thing you care about, so soonest first.
+ *   - Finished work runs BACKWARD from now — history is read newest first, and the most
+ *     recent post is the one you want without scrolling past a month of older ones.
+ *
+ * And the clock: a posted send is placed by when it ACTUALLY went out, everything else by
+ * when it is due. Sorting posted rows by scheduled_at put a send that slipped overnight
+ * back among the posts it was planned beside rather than the ones it actually landed
+ * among — the same lie the WHEN column used to tell (see lib/send-time).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -64,9 +71,12 @@ function order(): string[] {
   return q.getPublicationsOverview().map((r) => r.post_caption ?? "");
 }
 
-test("a posted send is placed by when it went out, not when it was due", () => {
-  // The decisive pair. "slipped" was due FIRST but did not go out until the next morning,
-  // so it belongs AFTER "punctual", which was due later and went out on time.
+test("posted sends read newest first, by when they actually went out", () => {
+  // The decisive pair, and it pins down BOTH rules at once. "slipped" was due first but
+  // did not go out until the next afternoon, so it is the more RECENT post and leads.
+  // Sorting by scheduled_at — in either direction — cannot produce this order:
+  //   published_at DESC -> slipped (Aug 12 14:20), punctual (Aug 12 01:00)  <- wanted
+  //   scheduled_at DESC -> punctual (Aug 12 01:00), slipped (Aug 11 19:30)
   send({
     label: "slipped",
     scheduledAt: "2026-08-11T19:30:00+00:00",
@@ -80,8 +90,23 @@ test("a posted send is placed by when it went out, not when it was due", () => {
 
   const seen = order();
   assert.ok(
-    seen.indexOf("punctual") < seen.indexOf("slipped"),
-    `expected punctual before slipped, got ${JSON.stringify(seen)}`
+    seen.indexOf("slipped") < seen.indexOf("punctual"),
+    `expected slipped (posted later) first, got ${JSON.stringify(seen)}`
+  );
+});
+
+test("an older post sits below a newer one", () => {
+  // The plain reading of "newest first", independent of any delay.
+  send({
+    label: "last-month",
+    scheduledAt: "2026-07-01T12:00:00+00:00",
+    publishedAt: "2026-07-01T12:00:05+00:00",
+  });
+
+  const seen = order();
+  assert.ok(
+    seen.indexOf("slipped") < seen.indexOf("last-month"),
+    `expected August above July, got ${JSON.stringify(seen)}`
   );
 });
 
@@ -104,6 +129,20 @@ test("a send that has not gone out is still placed by when it is due", () => {
 
   const seen = order();
   assert.ok(seen.indexOf("due-sooner") < seen.indexOf("due-later"));
+});
+
+test("a canceled send reads newest first too — it is finished work, not upcoming", () => {
+  // Cancel is reachable from the queue, so these rows are real. They share the 'done'
+  // rank with posted sends, and reversing only half a rank would interleave two
+  // directions into one block that reads as neither.
+  send({ label: "scrapped-jan", status: "canceled", scheduledAt: "2026-01-05T12:00:00+00:00" });
+  send({ label: "scrapped-jun", status: "canceled", scheduledAt: "2026-06-05T12:00:00+00:00" });
+
+  const seen = order();
+  assert.ok(
+    seen.indexOf("scrapped-jun") < seen.indexOf("scrapped-jan"),
+    `expected June above January, got ${JSON.stringify(seen)}`
+  );
 });
 
 test("the slides of one Story keep slide order when their times tie", () => {

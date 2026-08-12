@@ -1687,18 +1687,33 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
        ORDER BY
          CASE pub.status WHEN 'failed' THEN 0 WHEN 'publishing' THEN 1
                          WHEN 'scheduled' THEN 2 ELSE 3 END,
-         -- Place a send by when it ACTUALLY went out, falling back to when it is due.
-         -- published_at is only ever written on the transition to 'posted', so the
-         -- COALESCE selects itself: posted rows sort by their real time, everything else
-         -- keeps sorting by scheduled_at. Sorting a delayed post by its original slot put
-         -- it back among the posts it was PLANNED beside instead of the ones it actually
+         -- Both the clock and the DIRECTION depend on the rank above.
+         --
+         -- Clock: place a send by when it ACTUALLY went out, falling back to when it is
+         -- due. published_at is only ever written on the transition to 'posted', so the
+         -- COALESCE selects itself. Sorting a delayed post by its original slot put it
+         -- back among the posts it was PLANNED beside instead of the ones it actually
          -- landed among — the same lie the WHEN column told before lib/send-time.
-         COALESCE(pub.published_at, pub.scheduled_at) ASC,
+         --
+         -- Direction: upcoming work runs forward, because the next thing to happen is the
+         -- thing you care about. Finished work runs backward, because history reads newest
+         -- first — otherwise the post that just went out sits below every older one.
+         --
+         -- Two keys rather than one, since SQLite cannot flip direction per group. Each is
+         -- NULL for the ranks it does not govern, and rank membership is decided by the
+         -- same statuses as the CASE above, so within any one rank the key that applies is
+         -- the only one that varies and the other is a constant that cannot disturb it.
+         CASE WHEN pub.status IN ('failed', 'publishing', 'scheduled')
+              THEN COALESCE(pub.published_at, pub.scheduled_at) END ASC,
+         CASE WHEN pub.status NOT IN ('failed', 'publishing', 'scheduled')
+              THEN COALESCE(pub.published_at, pub.scheduled_at) END DESC,
          -- Tie-break, and load-bearing for Stories: the slides of one fan-out share a
          -- scheduled_at, and when they publish in a single worker cycle they share a
          -- published_at too. Ascending id is slide order (slides are inserted in
          -- sort_order); without this, tied rows come back in whatever order the query
-         -- plan happens to produce, which is luck rather than a guarantee.
+         -- plan happens to produce, which is luck rather than a guarantee. It stays
+         -- ascending inside the newest-first block too: slide 1 → 2 → 3 reads the same
+         -- way wherever the Story itself sits.
          pub.id ASC
        LIMIT ?`
     )
