@@ -7,6 +7,7 @@ import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
+import { sendTime, formatLateness } from "@/lib/send-time";
 import { groupQueueRows, cancelableIds } from "@/lib/queue-groups";
 import { StoryGroupHeader } from "@/components/story-group-header";
 import { MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
@@ -349,12 +350,37 @@ export function PublicationQueue({
                     />
                   </td>
                   <td className="px-4 py-3">
-                    <span className="data text-xs text-ink-soft">
-                      {formatInTz(p.scheduled_at, p.channel_timezone)}
-                    </span>
-                    <span className="data block text-[10px] text-faint">
-                      {tzAbbrev(p.channel_timezone)}
-                    </span>
+                    {(() => {
+                      // A posted send shows when it ACTUALLY went out. Showing scheduled_at
+                      // here made every delayed post look punctual — real sends on this
+                      // install drifted by hours when the Mac slept past their slot.
+                      const when = sendTime(p);
+                      return (
+                        <>
+                          <span
+                            className="data text-xs text-ink-soft"
+                            title={
+                              when.actual
+                                ? `Actually posted ${formatInTz(p.published_at, p.channel_timezone)} · scheduled for ${formatInTz(p.scheduled_at, p.channel_timezone)}`
+                                : undefined
+                            }
+                          >
+                            {formatInTz(when.iso, p.channel_timezone)}
+                          </span>
+                          <span className="data block text-[10px] text-faint">
+                            {tzAbbrev(p.channel_timezone)}
+                          </span>
+                          {/* Only when the gap is big enough to mean something. Without it
+                              the corrected time silently disagrees with the slot the owner
+                              chose, and there is nothing on screen to explain why. */}
+                          {when.lateMinutes !== null ? (
+                            <span className="data mt-0.5 block text-[10px] text-status-blocked">
+                              {formatLateness(when.lateMinutes)}
+                            </span>
+                          ) : null}
+                        </>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-1.5">

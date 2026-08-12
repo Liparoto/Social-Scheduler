@@ -6,6 +6,7 @@ import type { PostPublicationRow, PostTarget, PostType } from "@/lib/types";
 import type { Channel } from "@/lib/types";
 import { ChannelAvatar, ChannelChip, StatusBadge } from "@/components/ui";
 import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
+import { sendTime, formatLateness } from "@/lib/send-time";
 import { incompatibleChannelsForPostType } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
@@ -26,7 +27,10 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
   const [error, setError] = useState<string | null>(null);
   const [showReschedule, setShowReschedule] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // Reschedule always prefills the PLANNED time — it edits scheduled_at, so seeding it
+  // from an actual publish time would quietly move the slot.
   const prefill = splitInTz(send.scheduled_at, send.channel_timezone);
+  const when = sendTime(send);
   const [date, setDate] = useState(prefill.date);
   const [time, setTime] = useState(prefill.time);
 
@@ -102,9 +106,23 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
             colorHue={send.channel_color_hue}
             avatarPath={send.channel_avatar_path}
           />
-          <span className="data text-xs text-ink-soft">
-            {formatInTz(send.scheduled_at, send.channel_timezone)} {tzAbbrev(send.channel_timezone)}
+          {/* Same rule as the Overview queue (lib/send-time): once a send is out, show
+              when it actually went, not the slot it was aimed at. */}
+          <span
+            className="data text-xs text-ink-soft"
+            title={
+              when.actual
+                ? `Actually posted ${formatInTz(send.published_at, send.channel_timezone)} · scheduled for ${formatInTz(send.scheduled_at, send.channel_timezone)}`
+                : undefined
+            }
+          >
+            {formatInTz(when.iso, send.channel_timezone)} {tzAbbrev(send.channel_timezone)}
           </span>
+          {when.lateMinutes !== null ? (
+            <span className="data text-[10px] text-status-blocked">
+              {formatLateness(when.lateMinutes)}
+            </span>
+          ) : null}
           {/* How THIS run did. Per run, not per post: the same content going out twice
               produces two results, and reposting only earns its place if you can see
               whether the second run beat the first.
