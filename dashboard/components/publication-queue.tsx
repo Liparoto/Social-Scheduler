@@ -9,6 +9,7 @@ import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
 import { sendTime, formatLateness } from "@/lib/send-time";
 import { groupQueueRows, cancelableIds } from "@/lib/queue-groups";
+import { splitQueueSections } from "@/lib/queue-sections";
 import { StoryGroupHeader } from "@/components/story-group-header";
 import { MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 
@@ -237,7 +238,36 @@ export function PublicationQueue({
               </tr>
             </thead>
             <tbody>
-              {groupQueueRows(shown).map((group) => (
+              {splitQueueSections(shown).map((section, sectionIndex, all) => (
+                <Fragment key={section.key}>
+                  {/* Only headed when both halves are on screen. A single heading over the
+                      whole table says nothing the status filter has not already said. */}
+                  {all.length > 1 ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className={`border-b border-border bg-surface-sunken px-4 py-2 ${
+                          sectionIndex > 0 ? "border-t-4 border-t-border" : ""
+                        }`}
+                      >
+                        <span className="flex items-baseline gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+                            {section.title}
+                          </span>
+                          <span className="data text-[11px] text-faint">
+                            {section.rows.length}
+                          </span>
+                          {/* The two halves run in opposite directions, which looks like a
+                              glitch unless something says it is deliberate. */}
+                          <span className="text-[11px] text-faint">· {section.hint}</span>
+                        </span>
+                      </td>
+                    </tr>
+                  ) : null}
+                  {/* Grouped WITHIN a section, not across it: a Story whose slide 3 failed
+                      while 1, 2 and 4 posted genuinely belongs to both halves, and the
+                      failed slide needs to appear with the work that still needs you. */}
+                  {groupQueueRows(section.rows).map((group) => (
                 <Fragment key={group.key}>
                   {group.isStoryGroup ? (
                     <StoryGroupHeader
@@ -498,6 +528,8 @@ export function PublicationQueue({
                     />
                   </td>
                 </tr>
+                  ))}
+                </Fragment>
                   ))}
                 </Fragment>
               ))}

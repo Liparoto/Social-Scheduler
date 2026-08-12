@@ -131,6 +131,27 @@ test("a send that has not gone out is still placed by when it is due", () => {
   assert.ok(seen.indexOf("due-sooner") < seen.indexOf("due-later"));
 });
 
+test("a send awaiting approval sorts with live work, above the queue", () => {
+  // It used to land in the ORDER BY's ELSE branch and sort down among posted sends —
+  // invisible only because no channel here requires approval. Nothing goes out until a
+  // human acts on it, so it belongs at the top, not filed under Done.
+  send({
+    label: "needs-approval",
+    status: "pending_approval",
+    scheduledAt: "2027-06-01T12:00:00+00:00", // far future: only the rank can lift it
+  });
+
+  const seen = order();
+  assert.ok(
+    seen.indexOf("needs-approval") < seen.indexOf("due-sooner"),
+    `expected approval above scheduled work, got ${JSON.stringify(seen.slice(0, 6))}`
+  );
+  assert.ok(
+    seen.indexOf("needs-approval") < seen.indexOf("slipped"),
+    "and well above the posted block"
+  );
+});
+
 test("a canceled send reads newest first too — it is finished work, not upcoming", () => {
   // Cancel is reachable from the queue, so these rows are real. They share the 'done'
   // rank with posted sends, and reversing only half a rank would interleave two

@@ -2,6 +2,7 @@ import "server-only";
 import type DatabaseType from "better-sqlite3";
 import { getDb, nowIso } from "./db";
 import { isBlocked } from "./format";
+import { FINISHED_STATUSES_SQL } from "./queue-sections";
 import type {
   Asset,
   CaptionVariant,
@@ -1685,8 +1686,21 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          ORDER BY pm.fetched_at DESC, pm.id DESC LIMIT 1
        )
        ORDER BY
-         CASE pub.status WHEN 'failed' THEN 0 WHEN 'publishing' THEN 1
-                         WHEN 'scheduled' THEN 2 ELSE 3 END,
+         -- Live work first, most urgent kind first, then the history block. 'posted' and
+         -- 'canceled' share the last rank because both are over; everything above is still
+         -- waiting on something. An unrecognised status lands at 4 — just above the
+         -- history block rather than inside it — so a status added to the schema and
+         -- forgotten here surfaces among live work instead of being buried (the same
+         -- fallback direction as lib/queue-sections.isFinished, which labels these).
+         CASE pub.status
+           WHEN 'failed'           THEN 0
+           WHEN 'publishing'       THEN 1
+           WHEN 'pending_approval' THEN 2
+           WHEN 'scheduled'        THEN 3
+           WHEN 'posted'           THEN 5
+           WHEN 'canceled'         THEN 5
+           ELSE 4
+         END,
          -- Both the clock and the DIRECTION depend on the rank above.
          --
          -- Clock: place a send by when it ACTUALLY went out, falling back to when it is
@@ -1700,12 +1714,13 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          -- first — otherwise the post that just went out sits below every older one.
          --
          -- Two keys rather than one, since SQLite cannot flip direction per group. Each is
-         -- NULL for the ranks it does not govern, and rank membership is decided by the
-         -- same statuses as the CASE above, so within any one rank the key that applies is
-         -- the only one that varies and the other is a constant that cannot disturb it.
-         CASE WHEN pub.status IN ('failed', 'publishing', 'scheduled')
+         -- NULL for the rows it does not govern, and the split is the SAME one the section
+         -- headings use (lib/queue-sections.FINISHED_STATUSES, interpolated so the two
+         -- cannot drift), so within any one block the key that applies is the only one
+         -- that varies and the other is a constant that cannot disturb it.
+         CASE WHEN pub.status NOT IN (${FINISHED_STATUSES_SQL})
               THEN COALESCE(pub.published_at, pub.scheduled_at) END ASC,
-         CASE WHEN pub.status NOT IN ('failed', 'publishing', 'scheduled')
+         CASE WHEN pub.status IN (${FINISHED_STATUSES_SQL})
               THEN COALESCE(pub.published_at, pub.scheduled_at) END DESC,
          -- Tie-break, and load-bearing for Stories: the slides of one fan-out share a
          -- scheduled_at, and when they publish in a single worker cycle they share a
