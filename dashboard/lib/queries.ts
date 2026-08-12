@@ -1713,6 +1713,41 @@ export function retryPublication(id: number): boolean {
 }
 
 /**
+ * Cancel a retry backoff so a waiting send goes out on the next poll.
+ *
+ * Narrower than it sounds, and deliberately so. The only rows this can touch are ones the
+ * worker ALREADY committed to retrying on its own: `scheduled` with a `next_retry_at` it
+ * wrote on the way out of a failed attempt. Clearing that timestamp changes WHEN the retry
+ * happens, never WHETHER — so it cannot produce a double-post that the automatic retry
+ * would not have produced anyway.
+ *
+ * Each guard earns its place:
+ *   - `status = 'scheduled'` keeps 'publishing' out of reach. That row is either in flight
+ *     or was orphaned by a restart and may already be live on the platform; forcing it is
+ *     exactly the double-post that claiming exists to prevent. It recovers to 'failed'
+ *     instead (worker/db.recover_stale_claims) and a human uses Retry after checking.
+ *   - `is_held = 0` because a hold is a person saying stop.
+ *   - `next_retry_at IS NOT NULL` so a click that would change nothing reports 409 rather
+ *     than a success it did not earn.
+ *
+ * `attempt_count` is deliberately NOT reset (unlike retryPublication, where the send has
+ * come to rest and the human is starting over). Resetting it would restart the backoff
+ * ladder and push max_attempts out of reach, letting repeated clicks keep a doomed send
+ * cycling forever instead of coming to rest in 'failed'.
+ */
+export function sendPublicationNow(id: number): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE publications
+       SET next_retry_at = NULL, updated_at = @now
+       WHERE id = @id AND status = 'scheduled' AND is_held = 0
+         AND next_retry_at IS NOT NULL`
+    )
+    .run({ id, now: nowIso() });
+  return info.changes > 0;
+}
+
+/**
  * Ask the worker to have one more go at a failed first comment.
  *
  * Deliberately NOT the same shape as retryPublication above: that one re-queues the post

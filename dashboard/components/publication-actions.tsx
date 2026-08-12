@@ -24,6 +24,7 @@ export function PublicationActions({
   workerOnline = true,
   isHeld = false,
   scheduledAt = null,
+  nextRetryAt = null,
   channelTimezone = "UTC",
   platform,
 }: {
@@ -33,6 +34,9 @@ export function PublicationActions({
   workerOnline?: boolean;
   isHeld?: boolean;
   scheduledAt?: string | null;
+  /** Set only while the worker is waiting out a backoff after a failed attempt. Its
+   *  presence is what makes "Try again now" meaningful — see sendNowControl. */
+  nextRetryAt?: string | null;
   channelTimezone?: string;
   platform?: string;
 }) {
@@ -48,7 +52,9 @@ export function PublicationActions({
   const [date, setDate] = useState(prefill.date);
   const [time, setTime] = useState(prefill.time);
 
-  async function act(action: "retry" | "approve" | "cancel" | "hold" | "resume") {
+  async function act(
+    action: "retry" | "approve" | "cancel" | "hold" | "resume" | "send-now"
+  ) {
     setError(null);
     const res = await fetch(`/api/publications/${id}/${action}`, { method: "POST" });
     if (!res.ok) {
@@ -149,6 +155,29 @@ export function PublicationActions({
       {isHeld ? (pending ? "Resuming…" : "Resume") : pending ? "Holding…" : "Hold"}
     </button>
   );
+
+  // Only offered while the worker is deliberately waiting: a failed attempt left a
+  // next_retry_at some minutes out (60s, then 120s, 240s...), and until then the send just
+  // sits there looking stuck. This cancels the wait — it does not publish from the browser,
+  // and it cannot reach a send that is mid-flight. A held row is excluded because the API
+  // refuses it; offering a button that always 409s would be worse than offering none.
+  const sendNowControl =
+    nextRetryAt && !isHeld ? (
+      <button
+        onClick={() => act("send-now")}
+        disabled={pending}
+        // nowrap: the action column is narrow, and without it the three words stack into
+        // a triple-height button that towers over Hold/Cancel beside it.
+        className="whitespace-nowrap rounded-md border border-border-strong px-2.5 py-1 text-xs font-medium text-ink-soft hover:bg-surface-sunken disabled:opacity-50"
+        title={
+          workerOnline
+            ? "Stop waiting for the retry timer — the worker picks this up on its next check, within 30 seconds."
+            : "Worker looks offline — this clears the wait now and sends once you start it."
+        }
+      >
+        {pending ? "Sending…" : "Try again now"}
+      </button>
+    ) : null;
 
   const moreToggle = (
     <button
@@ -270,6 +299,12 @@ export function PublicationActions({
   if (status === "scheduled") {
     return (
       <div className="flex flex-col items-end gap-1">
+        {/* Its own line, not inline with Hold/Cancel. The action cell is clipped
+            (overflow-hidden, no scroll), and at a 1280px window a fourth button pushed
+            Cancel and More off the edge with no way to reach them. Only blocked rows pay
+            the extra height, and those are already the tall ones — they carry an error
+            message and an attempt count. */}
+        {sendNowControl ? <div className="flex">{sendNowControl}</div> : null}
         <div className="flex items-center gap-1.5">
           {holdResumeControl}
           {cancelControl}

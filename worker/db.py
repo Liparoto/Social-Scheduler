@@ -91,9 +91,14 @@ def claim_publication(conn: sqlite3.Connection, publication_id: int, now_iso: st
 
     is_held is re-checked here even though fetch_due_publications already filters it —
     a hold applied between the fetch and the claim should still win.
+
+    last_error is cleared here because it describes the PREVIOUS attempt, and this call
+    starts a new one. Leaving it made a live in-flight send wear the last failure's red
+    text, which is how an orphaned claim came to look like an ordinary retry. Nothing is
+    lost: a failure writes a fresh error, and an abandoned claim gets STALE_CLAIM_ERROR.
     """
     cur = conn.execute(
-        "UPDATE publications SET status = 'publishing', updated_at = ? "
+        "UPDATE publications SET status = 'publishing', last_error = NULL, updated_at = ? "
         "WHERE id = ? AND status = 'scheduled' AND is_held = 0",
         (now_iso, publication_id),
     )

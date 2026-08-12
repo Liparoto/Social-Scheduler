@@ -116,6 +116,43 @@ def test_a_fresh_row_with_no_updated_at_is_left_alone(conn):
     assert _status(conn, pub_id)["status"] == "publishing"
 
 
+# ---- lease 0: the first cycle of a fresh process --------------------------------------
+# main() takes an exclusive OS lock before any cycle runs, and the kernel drops that lock
+# when the holder dies however it dies. So on the FIRST cycle of a new process, a row at
+# 'publishing' provably belongs to no live worker — waiting out the full lease only keeps
+# a dead send invisible for another half hour. run.py passes lease 0 there; these cover
+# what that argument actually buys, and that it changes nothing else.
+def test_lease_zero_recovers_a_row_claimed_moments_ago(conn):
+    pub_id = _publication(conn, updated_ago_seconds=1)
+
+    recovered = db.recover_stale_claims(conn, NOW.isoformat(), 0)
+
+    assert [r["id"] for r in recovered] == [pub_id]
+    assert _status(conn, pub_id)["status"] == "failed"
+
+
+def test_lease_zero_still_never_re_queues(conn):
+    """Recovering sooner must not become recovering differently: the post may already be
+    live, so the destination is still 'failed' for a human to judge."""
+    pub_id = _publication(conn, updated_ago_seconds=1)
+
+    db.recover_stale_claims(conn, NOW.isoformat(), 0)
+
+    row = _status(conn, pub_id)
+    assert row["status"] == "failed"
+    assert row["next_retry_at"] is None
+    assert "may or may not have reached the platform" in row["last_error"]
+
+
+def test_lease_zero_still_only_touches_publishing_rows(conn):
+    scheduled = _publication(conn, status="scheduled", updated_ago_seconds=1)
+    posted = _publication(conn, status="posted", updated_ago_seconds=1)
+
+    assert db.recover_stale_claims(conn, NOW.isoformat(), 0) == []
+    assert _status(conn, scheduled)["status"] == "scheduled"
+    assert _status(conn, posted)["status"] == "posted"
+
+
 def test_recovery_is_idempotent(conn):
     """Every cycle calls this. The second pass must find nothing rather than rewriting
     the error and resetting updated_at forever."""

@@ -37,11 +37,15 @@ def _request_stop(signum, _frame):
 
 
 def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=None,
-             sleep_fn=time.sleep) -> int:
+             sleep_fn=time.sleep, recover_all_claims: bool = False) -> int:
     """Process one batch of due publications. Returns how many were acted on.
 
     Respects the live kill switch (checked here AND between items, so flipping it
     mid-batch stops further publishing promptly).
+
+    `recover_all_claims` skips the claim lease for this cycle — see the recovery block
+    below. Opt-in, and False by default, so only a caller that has actually proved no
+    other worker exists can turn it on.
     """
     # A channel's platform decides which Graph host to use (see clients.base_url_for).
     # Without a resolver (tests, --once with a single client) everything uses `client`.
@@ -60,9 +64,19 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
     # of 'publishing', where nothing would ever look at it again. Running it above the
     # switch is deliberate: flipping the kill switch mid-send is one of the ways a row
     # gets stranded, so that is precisely when the operator needs to be told.
-    stale = db.recover_stale_claims(
-        conn, now.isoformat(), config.publish_claim_lease_seconds
-    )
+    #
+    # On the first cycle of a fresh process the lease is skipped entirely. main() takes
+    # the exclusive single-instance lock before any cycle runs, and the kernel releases
+    # that lock when the holder dies however it dies — so a row still at 'publishing'
+    # here provably belongs to no live worker, whatever its age. Waiting out the full
+    # 30 minutes only kept a dead send looking healthy for another half hour, which is
+    # exactly how a restart mid-send read as "stuck" with nothing to act on.
+    #
+    # Later cycles in the same process keep the lease, because then the row may genuinely
+    # be in flight: a Reel holds 'publishing' through minutes of transcode polling, and
+    # sweeping that one mid-send is how you publish twice.
+    lease = 0 if recover_all_claims else config.publish_claim_lease_seconds
+    stale = db.recover_stale_claims(conn, now.isoformat(), lease)
     if stale and logger:
         # WARNING, not info: each of these is a scheduled post that did not go out, and
         # may or may not be live on the platform. It should never scroll past unnoticed.
@@ -233,14 +247,22 @@ def run_forever(config: Config, client, logger, *, client_for=None) -> None:
     signal.signal(signal.SIGTERM, _request_stop)
     conn = db.connect(config.database_path)
     logger.info("Worker started. DB=%s poll=%ss", config.database_path, config.poll_interval)
+    # The first cycle of this process recovers claims abandoned by a previous one without
+    # waiting out the lease — see run_once. Cleared after the first attempt whether or not
+    # it raised: the recovery step runs before anything that can throw, so a cycle that
+    # failed later has still done it, and repeating it would apply lease-free recovery to
+    # a row this process may legitimately have in flight.
+    first_cycle = True
     try:
         while not _stop:
             # Defense in depth: a bug or unexpected error in one cycle must never take the
             # daemon down. Log it and keep polling — the kill switch is the only stop.
             try:
-                run_once(conn, config, client, client_for=client_for, logger=logger)
+                run_once(conn, config, client, client_for=client_for, logger=logger,
+                         recover_all_claims=first_cycle)
             except Exception:  # noqa: BLE001
                 logger.exception("run_once failed; continuing to next cycle")
+            first_cycle = False
             for _ in range(config.poll_interval):
                 if _stop:
                     break
@@ -277,7 +299,11 @@ def main() -> int:
     if "--once" in sys.argv:
         conn = db.connect(config.database_path)
         try:
-            n = run_once(conn, config, client, client_for=registry.for_platform, logger=logger)
+            # A --once run is its own fresh process holding the same exclusive lock (the
+            # guard above already refused to start alongside a daemon), so it is a first
+            # cycle in exactly the sense run_once means.
+            n = run_once(conn, config, client, client_for=registry.for_platform,
+                         logger=logger, recover_all_claims=True)
             logger.info("Processed %d publication(s).", n)
         finally:
             conn.close()

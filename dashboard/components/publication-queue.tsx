@@ -466,6 +466,7 @@ export function PublicationQueue({
                       workerOnline={workerOnline}
                       isHeld={p.is_held === 1}
                       scheduledAt={p.scheduled_at}
+                      nextRetryAt={p.next_retry_at}
                       channelTimezone={p.channel_timezone}
                       platform={p.channel_platform}
                     />

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from worker import db
 from worker.run import run_once
@@ -164,3 +164,69 @@ def test_run_once_external_url_publishes_without_tunnel(conn, config, fake_clien
     assert n == 1
     row = conn.execute("SELECT * FROM publications WHERE id = ?", (pub["id"],)).fetchone()
     assert row["status"] == "posted"
+
+
+# ---- first-cycle recovery of an orphaned claim ----------------------------------------
+# The kill switch is ON in these: recovery deliberately runs ABOVE that check (see
+# run_once), so leaving it on isolates the recovery step from autofill, publishing and
+# every metrics job.
+def _orphaned_claim(conn, make_publication, claimed_at):
+    """A row a previous process claimed and never finished."""
+    pub = make_publication(post_type="single", n_assets=1, now=NOW)
+    db.update_publication(conn, pub["id"], status="publishing",
+                          updated_at=claimed_at.isoformat())
+    return pub["id"]
+
+
+def test_first_cycle_recovers_a_claim_orphaned_seconds_ago(
+    conn, config, fake_client, make_publication, monkeypatch
+):
+    """The real failure this fixes: a worker restarted mid-send, leaving the row at
+    'publishing' where fetch_due_publications never looks. The old code waited out the
+    full 30-minute lease before saying so, and the send just sat there looking fine.
+
+    A fresh process holds the exclusive single-instance lock before any cycle runs, so on
+    its first cycle nothing else can own this row — it is abandoned, whatever its age.
+    """
+    monkeypatch.setenv("KILL_SWITCH", "1")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+    pub_id = _orphaned_claim(conn, make_publication, NOW - timedelta(seconds=5))
+
+    run_once(conn, config, fake_client, now=NOW, recover_all_claims=True)
+
+    row = conn.execute("SELECT * FROM publications WHERE id=?", (pub_id,)).fetchone()
+    assert row["status"] == "failed"
+    assert "may or may not have reached the platform" in row["last_error"]
+    # Never re-queued: the post may already be live, so a human decides.
+    assert row["next_retry_at"] is None
+
+
+def test_a_later_cycle_leaves_a_recent_claim_alone(
+    conn, config, fake_client, make_publication, monkeypatch
+):
+    """The dangerous direction, and why this is first-cycle-only. Later cycles in the same
+    process keep the full lease: a Reel legitimately holds 'publishing' for minutes of
+    transcode polling, and sweeping it mid-send is how you publish twice."""
+    monkeypatch.setenv("KILL_SWITCH", "1")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+    pub_id = _orphaned_claim(conn, make_publication, NOW - timedelta(seconds=5))
+
+    run_once(conn, config, fake_client, now=NOW, recover_all_claims=False)
+
+    row = conn.execute("SELECT status FROM publications WHERE id=?", (pub_id,)).fetchone()
+    assert row["status"] == "publishing"
+
+
+def test_run_once_defaults_to_the_full_lease(
+    conn, config, fake_client, make_publication, monkeypatch
+):
+    """Recovering everything is opt-in. A caller that says nothing gets the conservative
+    behaviour, so only the paths that have actually proved exclusivity skip the lease."""
+    monkeypatch.setenv("KILL_SWITCH", "1")
+    monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+    pub_id = _orphaned_claim(conn, make_publication, NOW - timedelta(seconds=5))
+
+    run_once(conn, config, fake_client, now=NOW)
+
+    row = conn.execute("SELECT status FROM publications WHERE id=?", (pub_id,)).fetchone()
+    assert row["status"] == "publishing"

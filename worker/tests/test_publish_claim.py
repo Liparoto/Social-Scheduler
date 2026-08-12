@@ -64,6 +64,26 @@ def test_claim_fails_on_an_already_posted_row(conn, make_publication):
     assert db.claim_publication(conn, pub["id"], NOW.isoformat()) is False
 
 
+def test_claim_clears_a_stale_error_from_an_earlier_attempt(conn, make_publication):
+    """last_error describes the LAST attempt, so it must not outlive the start of a new
+    one. A row that carried "publish endpoint unavailable" from a failed cycle, then got
+    claimed by the next cycle once the tunnel came back, displayed a red failure next to
+    a live in-flight send — and when the worker restarted mid-send, that stale text was
+    the only explanation on screen for a row that was actually orphaned. Nothing is lost
+    by clearing it: a failure writes a fresh error, and an abandoned claim gets
+    STALE_CLAIM_ERROR from recover_stale_claims.
+    """
+    pub = make_publication(post_type="single", n_assets=1, now=NOW)
+    db.update_publication(conn, pub["id"], last_error="publish endpoint unavailable: DNS")
+
+    assert db.claim_publication(conn, pub["id"], NOW.isoformat()) is True
+
+    row = conn.execute(
+        "SELECT last_error FROM publications WHERE id=?", (pub["id"],)
+    ).fetchone()
+    assert row["last_error"] is None
+
+
 def test_claim_fails_on_a_held_row(conn, make_publication):
     """Queue control can hold a send; a held row must not be claimable."""
     pub = make_publication(post_type="single", n_assets=1, now=NOW)
