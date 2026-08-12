@@ -1687,7 +1687,19 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
        ORDER BY
          CASE pub.status WHEN 'failed' THEN 0 WHEN 'publishing' THEN 1
                          WHEN 'scheduled' THEN 2 ELSE 3 END,
-         pub.scheduled_at ASC
+         -- Place a send by when it ACTUALLY went out, falling back to when it is due.
+         -- published_at is only ever written on the transition to 'posted', so the
+         -- COALESCE selects itself: posted rows sort by their real time, everything else
+         -- keeps sorting by scheduled_at. Sorting a delayed post by its original slot put
+         -- it back among the posts it was PLANNED beside instead of the ones it actually
+         -- landed among — the same lie the WHEN column told before lib/send-time.
+         COALESCE(pub.published_at, pub.scheduled_at) ASC,
+         -- Tie-break, and load-bearing for Stories: the slides of one fan-out share a
+         -- scheduled_at, and when they publish in a single worker cycle they share a
+         -- published_at too. Ascending id is slide order (slides are inserted in
+         -- sort_order); without this, tied rows come back in whatever order the query
+         -- plan happens to produce, which is luck rather than a guarantee.
+         pub.id ASC
        LIMIT ?`
     )
     .all(limit) as PublicationRow[];
