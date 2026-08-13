@@ -44,6 +44,29 @@ interface UploadedAsset {
   converted?: { from: string; to: string };
 }
 
+/**
+ * Render a `datetime-local` value ("2026-09-04T09:00") as "Fri, Sep 4 at 9:00 AM".
+ *
+ * The digits are a WALL CLOCK with no zone — the Timezone control beside the field says
+ * which zone they belong to. So they are pinned to UTC purely to be formatted, and read
+ * back in UTC, which reproduces them exactly. Handing the raw string to `new Date()` and
+ * formatting in the viewer's zone would be the same mistake that briefly titled August's
+ * calendar grid "July".
+ */
+function formatWallClock(value: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi)));
+}
+
 export function Composer({
   channels,
   defaultTimezone,
@@ -108,6 +131,7 @@ export function Composer({
   // when postNow is on, since that path never converts a wall clock.
   const [tzValid, setTzValid] = useState(true);
   const [scheduledLocal, setScheduledLocal] = useState(defaultScheduledLocal);
+  const whenLabel = formatWallClock(scheduledLocal);
   const [postNow, setPostNow] = useState(false);
   const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
   const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>({});
@@ -702,6 +726,24 @@ export function Composer({
               Carousel · {assets.length} images
             </p>
           ) : null}
+        </div>
+
+        {/* When, before where. The date & time controls live far down the left column,
+            below the fold — arriving from the calendar's empty-day "+" the date is already
+            filled in, but nothing on the first screen said so, which is no better than
+            having to remember it. This card is visible the moment the page loads. */}
+        <div className="rounded-card border border-border bg-surface p-4">
+          <p className="mb-2 text-xs font-medium text-ink-soft">When</p>
+          {postNow ? (
+            <p className="text-sm text-ink">As soon as you press Post now</p>
+          ) : whenLabel ? (
+            <>
+              <p className="text-sm text-ink">{whenLabel}</p>
+              <p className="data mt-0.5 text-[11px] text-faint">{timezone}</p>
+            </>
+          ) : (
+            <p className="text-xs text-faint">No date picked yet.</p>
+          )}
         </div>
 
         <div className="rounded-card border border-border bg-surface p-4">
