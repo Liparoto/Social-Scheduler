@@ -20,6 +20,7 @@ export function ComposeSwitcher({
   libraryPosts,
   defaultDate,
   defaultTime,
+  defaultScheduledLocal,
   readiness,
 }: {
   channels: ChannelLite[];
@@ -30,6 +31,8 @@ export function ComposeSwitcher({
   libraryPosts: LibraryPickItem[];
   defaultDate: string;
   defaultTime: string;
+  /** Prefilled only when the calendar sent a day; empty otherwise. */
+  defaultScheduledLocal: string;
   readiness: PublishReadiness;
 }) {
   const [mode, setMode] = useState<"new" | "library">("new");
@@ -43,6 +46,7 @@ export function ComposeSwitcher({
         <Composer
           channels={channels}
           defaultTimezone={defaultTimezone}
+          defaultScheduledLocal={defaultScheduledLocal}
           periods={periods}
           timeOfDayTags={timeOfDayTags}
           topicTags={topicTags}

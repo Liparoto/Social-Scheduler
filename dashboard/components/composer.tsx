@@ -47,6 +47,7 @@ interface UploadedAsset {
 export function Composer({
   channels,
   defaultTimezone,
+  defaultScheduledLocal = "",
   periods,
   timeOfDayTags,
   topicTags,
@@ -54,6 +55,9 @@ export function Composer({
 }: {
   channels: ChannelLite[];
   defaultTimezone: string;
+  /** Prefilled date+time when arriving from the calendar's empty-day "+"; empty on a
+   *  plain visit, where "Pick a date and time" is a deliberate prompt. */
+  defaultScheduledLocal?: string;
   periods: Period[];
   timeOfDayTags: Tag[];
   topicTags: Tag[];
@@ -103,7 +107,7 @@ export function Composer({
   // Reported up by TimezonePicker; gates scheduling on a valid zone. Irrelevant
   // when postNow is on, since that path never converts a wall clock.
   const [tzValid, setTzValid] = useState(true);
-  const [scheduledLocal, setScheduledLocal] = useState("");
+  const [scheduledLocal, setScheduledLocal] = useState(defaultScheduledLocal);
   const [postNow, setPostNow] = useState(false);
   const [contentKind, setContentKind] = useState<"evergreen" | "one_time">("evergreen");
   const [periodModes, setPeriodModes] = useState<Record<number, PeriodMode>>({});

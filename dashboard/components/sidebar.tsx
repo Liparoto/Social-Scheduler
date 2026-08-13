@@ -7,6 +7,7 @@ import { UpdateBanner } from "@/components/update-banner";
 
 const NAV = [
   { href: "/", label: "Overview", hint: "Queue & status" },
+  { href: "/calendar", label: "Calendar", hint: "Week & month view" },
   { href: "/compose", label: "Compose", hint: "New post" },
   { href: "/import", label: "Import", hint: "Bulk add images" },
   { href: "/library", label: "Library", hint: "Posts & bulk schedule" },

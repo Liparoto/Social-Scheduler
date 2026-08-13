@@ -1638,10 +1638,16 @@ export function blockedPublicationIds(pubs: PublicationRow[]): number[] {
   return pubs.filter((p) => isBlocked(p, now)).map((p) => p.id);
 }
 
-export function getPublicationsOverview(limit = 200): PublicationRow[] {
-  return getDb()
-    .prepare(
-      `SELECT
+/**
+ * Everything a queue or calendar row needs, in one shape.
+ *
+ * Shared rather than copied because the Overview and the calendar must agree about what a
+ * send IS — the same thumbnail, the same channel, the same metrics. Two hand-maintained
+ * copies of a forty-line SELECT drift, and the drift shows up as one screen quietly
+ * missing a column the other has. Callers append their own WHERE and ORDER BY.
+ */
+const PUBLICATION_ROW_SELECT = `
+      SELECT
          pub.*,
          p.caption   AS post_caption,
          p.post_type AS post_type,
@@ -1684,7 +1690,12 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
          SELECT pm.id FROM post_metrics pm
          WHERE pm.publication_id = pub.id
          ORDER BY pm.fetched_at DESC, pm.id DESC LIMIT 1
-       )
+       )`;
+
+export function getPublicationsOverview(limit = 200): PublicationRow[] {
+  return getDb()
+    .prepare(
+      `${PUBLICATION_ROW_SELECT}
        ORDER BY
          -- Live work first, most urgent kind first, then the history block. 'posted' and
          -- 'canceled' share the last rank because both are over; everything above is still
@@ -1733,6 +1744,33 @@ export function getPublicationsOverview(limit = 200): PublicationRow[] {
        LIMIT ?`
     )
     .all(limit) as PublicationRow[];
+}
+
+/**
+ * Sends whose effective moment falls in [startIso, endIso) — the calendar's data.
+ *
+ * "Effective moment" is the same COALESCE the queue sorts by: a posted send is placed by
+ * when it actually went out, everything else by when it is due. Filtering on scheduled_at
+ * alone would drop a post that slipped into the range from the day before, and show a
+ * ghost of it on a day it never appeared.
+ *
+ * Ordered by that moment ascending regardless of status. The queue's two-directional sort
+ * exists to put live work at the top of a list; a grid has no top, and a day cell reading
+ * backwards would be nonsense.
+ *
+ * The CALLER widens the range. A channel-local date can resolve outside the UTC window
+ * that produced it (an evening send in New York is already tomorrow in UTC), so the page
+ * asks for a day's slack at each end and lets bucketByDay discard what falls outside.
+ */
+export function getPublicationsInRange(startIso: string, endIso: string): PublicationRow[] {
+  return getDb()
+    .prepare(
+      `${PUBLICATION_ROW_SELECT}
+       WHERE COALESCE(pub.published_at, pub.scheduled_at) >= @start
+         AND COALESCE(pub.published_at, pub.scheduled_at) <  @end
+       ORDER BY COALESCE(pub.published_at, pub.scheduled_at) ASC, pub.id ASC`
+    )
+    .all({ start: startIso, end: endIso }) as PublicationRow[];
 }
 
 export function getPublication(id: number): Publication | undefined {
