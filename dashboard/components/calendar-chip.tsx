@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { channelColor, videoPreviewSrc } from "@/lib/format";
+import { truncateChars } from "@/lib/truncate";
 
 export interface ChipSend {
   id: number;
@@ -18,20 +19,6 @@ export interface ChipSend {
   assetMediaKind: "image" | "video" | null;
   assetCoverFrameMs: number | null;
   canMove: boolean;
-}
-
-/**
- * Truncate by code point, never by UTF-16 unit.
- *
- * `"…🔺".slice(0, n)` can cut an emoji in half and leave a lone surrogate. React then
- * renders one thing on the server and another after the browser's HTML parser has
- * replaced the orphan with U+FFFD, and the whole tree fails to hydrate — which is exactly
- * what happened here, on a caption ending in an emoji. Array.from splits on code points,
- * so a surrogate pair travels together.
- */
-function snippet(text: string, max: number): string {
-  const chars = Array.from(text);
-  return chars.length > max ? `${chars.slice(0, max).join("")}…` : text;
 }
 
 /** Tints a chip by what the send is doing, without spending a whole badge on it —
@@ -82,7 +69,7 @@ export function CalendarChip({
       onDragEnd={onDragEnd}
       title={
         `${send.time} · ${send.channelName}` +
-        (send.caption ? ` · ${snippet(send.caption, 60)}` : "") +
+        (send.caption ? ` · ${truncateChars(send.caption, 60)}` : "") +
         (send.canMove ? " — drag to another day to reschedule" : "")
       }
       className={`group flex items-center gap-1.5 overflow-hidden rounded-md border border-border bg-surface px-1.5 py-1 text-left transition-colors hover:border-border-strong hover:bg-surface-sunken ${

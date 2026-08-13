@@ -4,6 +4,7 @@ import { useEffect, useMemo, useReducer, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { channelColor, formatInTz, videoPreviewSrc } from "@/lib/format";
+import { truncateChars } from "@/lib/truncate";
 import { usePersistedToggle } from "@/components/use-persisted-toggle";
 import {
   createLibraryCheckboxFilterState,
@@ -84,18 +85,6 @@ function tomorrow(): string {
 
 function splitTags(value: string | null): string[] {
   return value ? value.split(",") : [];
-}
-
-/**
- * Shorten a caption for a screen-reader label. Array.from splits by code point, not by
- * UTF-16 code unit — a plain .slice() can cut an emoji in half, and the lone surrogate
- * that leaves behind gets replaced with U+FFFD when the browser parses the server HTML.
- * The client then renders the original surrogate, and React reports a hydration mismatch.
- * Captions here are full of emoji, so this is routine, not an edge case.
- */
-function truncateForLabel(caption: string, max = 40): string {
-  const points = Array.from(caption);
-  return points.length <= max ? caption : `${points.slice(0, max).join("").trimEnd()}…`;
 }
 
 export function LibraryView({
@@ -684,7 +673,7 @@ export function LibraryView({
                       e.stopPropagation();
                       setQuickEditId(p.id);
                     }}
-                    aria-label={`Quick edit ${p.caption ? truncateForLabel(p.caption) : `post ${p.id}`}`}
+                    aria-label={`Quick edit ${p.caption ? truncateChars(p.caption, 40) : `post ${p.id}`}`}
                     className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:bg-surface-sunken hover:text-ink"
                   >
                     Edit

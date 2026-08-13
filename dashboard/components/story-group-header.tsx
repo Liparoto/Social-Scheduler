@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { truncateChars } from "@/lib/truncate";
 
 /**
  * The heading above the slides of one Story.
@@ -66,7 +67,9 @@ export function StoryGroupHeader({
           </span>
           <span className="data text-[11px] text-faint">
             → {channelName}
-            {caption ? ` · ${caption.slice(0, 40)}${caption.length > 40 ? "…" : ""}` : ""}
+            {/* truncateChars, not slice: a caption cut mid-emoji leaves a lone surrogate
+                and the page stops hydrating. See lib/truncate. */}
+            {caption ? ` · ${truncateChars(caption, 40)}` : ""}
           </span>
           {error ? (
             <span className="text-[11px] text-status-failed">{error}</span>
