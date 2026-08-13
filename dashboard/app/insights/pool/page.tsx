@@ -34,7 +34,7 @@ export default function BppPoolPage() {
   return (
     <div>
       <PageHeader
-        title="BPP pool"
+        title="BPP Pool"
         subtitle="The posts you've marked worth running again — in the order they'll be used."
       />
 

@@ -395,7 +395,7 @@ export function PostEditor({
           <BppMark postId={post.id} initial={Boolean(post.is_bpp)} />
           <span className="text-[11px] text-muted">
             {post.is_bpp
-              ? "In your BPP pool — auto-fill will bring it back on the cadence you set."
+              ? "In your BPP Pool — auto-fill will bring it back on the cadence you set."
               : "Mark it if it performed well and is worth running again."}
           </span>
         </div>

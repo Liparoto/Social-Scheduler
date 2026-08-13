@@ -63,7 +63,7 @@ export function BppMark({
       onClick={toggle}
       disabled={busy}
       aria-pressed={marked}
-      title={marked ? "Remove from your BPP pool" : "Add to your BPP pool for reposting"}
+      title={marked ? "Remove from your BPP Pool" : "Add to your BPP Pool for reposting"}
       className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50 ${
         marked
           ? "border-brand bg-brand-weak text-brand-strong"
