@@ -2,6 +2,23 @@
 // string for storage. All scheduled_at values live in UTC; the channel timezone
 // governs how they're entered and displayed.
 
+/**
+ * The single storage spelling for a UTC instant: "YYYY-MM-DDTHH:MM:SS+00:00".
+ *
+ * publications.scheduled_at has TWO writers — this app and the Python worker — and the
+ * worker decides how full a group's queue is by comparing those strings to each other.
+ * JS toISOString() ("....000Z") and Python datetime.isoformat() ("...+00:00") spell the
+ * same instant differently, so a group slot written half by each read as TWO slots and
+ * auto-fill silently stopped topping the queue up. Match Python, so the two agree.
+ *
+ * The worker no longer depends on this (it compares instants now), but one spelling in
+ * the column keeps the data legible and every text comparison honest.
+ */
+export function toUtcIso(d: Date): string {
+  // toISOString() is "YYYY-MM-DDTHH:MM:SS.mmmZ"; take through the seconds, restate the zone.
+  return `${d.toISOString().slice(0, 19)}+00:00`;
+}
+
 export function zonedTimeToUtc(local: string, timeZone: string): string {
   // `local` is a datetime-local value like "2026-08-01T18:00" (no zone).
   // Interpret those wall-clock digits AS-IF UTC, then subtract the target zone's
@@ -13,7 +30,7 @@ export function zonedTimeToUtc(local: string, timeZone: string): string {
   const inZone = new Date(asIfUtc.toLocaleString("en-US", { timeZone }));
   const inUtc = new Date(asIfUtc.toLocaleString("en-US", { timeZone: "UTC" }));
   const offset = inZone.getTime() - inUtc.getTime();
-  return new Date(asIfUtc.getTime() - offset).toISOString();
+  return toUtcIso(new Date(asIfUtc.getTime() - offset));
 }
 
 /**

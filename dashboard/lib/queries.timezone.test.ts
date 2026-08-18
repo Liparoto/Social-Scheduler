@@ -55,7 +55,7 @@ test("a pending send keeps its wall clock and moves its UTC instant", async () =
 
   assert.equal(res.moved, 1);
   // Still 09:00, now in Chicago (CDT, UTC-5) => 14:00Z.
-  assert.equal(schedAt(pub), "2026-08-02T14:00:00.000Z");
+  assert.equal(schedAt(pub), "2026-08-02T14:00:00+00:00");
   assert.equal(q.getChannel(channelId)?.timezone, "America/Chicago");
 });
 
@@ -75,9 +75,9 @@ test("history and in-flight sends are never touched", async () => {
 
   // Moved: everything still waiting to go out, INCLUDING held (a pause, not a cancel).
   assert.equal(res.moved, 3);
-  assert.equal(schedAt(scheduled), "2026-08-02T14:00:00.000Z");
-  assert.equal(schedAt(awaiting), "2026-08-02T14:00:00.000Z");
-  assert.equal(schedAt(held), "2026-08-02T14:00:00.000Z", "held sends are still pending");
+  assert.equal(schedAt(scheduled), "2026-08-02T14:00:00+00:00");
+  assert.equal(schedAt(awaiting), "2026-08-02T14:00:00+00:00");
+  assert.equal(schedAt(held), "2026-08-02T14:00:00+00:00", "held sends are still pending");
 
   // Untouched: history stays honest, and the worker's in-flight row isn't yanked.
   assert.equal(schedAt(posted), at);
@@ -139,7 +139,7 @@ test("only this channel's sends move", async () => {
 
   q.changeChannelTimezone(channelId, "UTC", "America/Chicago", rebaseWallClock);
 
-  assert.equal(schedAt(mine), "2026-08-02T14:00:00.000Z");
+  assert.equal(schedAt(mine), "2026-08-02T14:00:00+00:00");
   assert.equal(schedAt(theirs), at, "a different channel is unaffected");
   assert.equal(q.getChannel(other)?.timezone, "UTC");
 });

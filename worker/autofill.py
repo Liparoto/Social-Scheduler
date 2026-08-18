@@ -43,6 +43,20 @@ from .time_of_day import derive_band
 
 ACTIVE_QUEUE_STATUSES = ("scheduled", "pending_approval", "publishing")
 
+# scheduled_at holds a UTC instant, but not one canonical SPELLING of it: the worker
+# writes datetime.isoformat() ("...+00:00") and the dashboard has written JS
+# toISOString() ("....000Z"). Same moment, different text.
+#
+# That matters because a group writes one row per member at a single instant and counts
+# SLOTS by distinctness. Compared as text, one slot written half by each writer counts as
+# two — the queue reads as fuller than it is, and auto-fill quietly stops topping it up.
+# No error, no failed publication, just nothing scheduled.
+#
+# So: compare INSTANTS, never text. SQLite parses both spellings to the same epoch.
+# (strftime returns NULL on anything it cannot parse, which COUNT ignores and DESC sorts
+# last — an unreadable timestamp can never inflate the count or win "latest".)
+_INSTANT = "strftime('%s', scheduled_at)"
+
 # The media-type capability test, shared by select_candidates (which also applies the
 # rules) and capable_post_ids (which applies capability ONLY). Kept in one place so the
 # two can never drift: if they did, a group would mistake a capability miss for a rule
@@ -86,19 +100,21 @@ def scheduled_ahead_count(conn, channel_id: int, now_iso: str) -> int:
 def latest_future_scheduled(conn, channel_id: int, now_iso: str) -> str | None:
     row = conn.execute(
         f"""
-        SELECT MAX(scheduled_at) FROM publications
+        SELECT scheduled_at FROM publications
         WHERE channel_id = ?
           AND status IN ({",".join("?" * len(ACTIVE_QUEUE_STATUSES))})
           AND scheduled_at > ?
+        ORDER BY {_INSTANT} DESC, scheduled_at DESC
+        LIMIT 1
         """,
         (channel_id, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
-    return row[0]
+    return row[0] if row else None
 
 
 def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> int:
-    """How many future SLOTS a group has queued — distinct scheduled_at values across
-    its members, not a row count.
+    """How many future SLOTS a group has queued — distinct INSTANTS across its members,
+    not a row count and not distinct text (see _INSTANT).
 
     A group writes one row per member at a single timestamp, so counting rows would
     report a two-member group as twice as full as it is and stop refilling at half the
@@ -111,7 +127,7 @@ def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> in
     sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
     row = conn.execute(
         f"""
-        SELECT COUNT(DISTINCT scheduled_at) FROM publications
+        SELECT COUNT(DISTINCT {_INSTANT}) FROM publications
         WHERE channel_id IN ({mq})
           AND status IN ({sq})
           AND scheduled_at > ?
@@ -128,14 +144,16 @@ def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str) -> 
     sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
     row = conn.execute(
         f"""
-        SELECT MAX(scheduled_at) FROM publications
+        SELECT scheduled_at FROM publications
         WHERE channel_id IN ({mq})
           AND status IN ({sq})
           AND scheduled_at > ?
+        ORDER BY {_INSTANT} DESC, scheduled_at DESC
+        LIMIT 1
         """,
         (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
-    return row[0]
+    return row[0] if row else None
 
 
 def select_candidates(conn, channel_id: int, now):
@@ -504,8 +522,9 @@ def _last_bpp_date(conn, member_ids: list[int]):
         return None
     placeholders = ",".join("?" * len(member_ids))
     row = conn.execute(
-        f"SELECT MAX(scheduled_at) AS d FROM publications "
-        f"WHERE channel_id IN ({placeholders}) AND is_recycled = 1",
+        f"SELECT scheduled_at AS d FROM publications "
+        f"WHERE channel_id IN ({placeholders}) AND is_recycled = 1 "
+        f"ORDER BY {_INSTANT} DESC, scheduled_at DESC LIMIT 1",
         member_ids,
     ).fetchone()
     if not row or not row["d"]:

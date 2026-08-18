@@ -39,7 +39,7 @@ test("rebases a 9am send from UTC to Central", () => {
   // Reads as 09:00 UTC; must still read as 09:00 in Chicago (CDT, UTC-5) => 14:00Z.
   assert.equal(
     rebaseWallClock("2026-08-02T09:00:00.000Z", "UTC", "America/Chicago"),
-    "2026-08-02T14:00:00.000Z"
+    "2026-08-02T14:00:00+00:00"
   );
 });
 
@@ -64,13 +64,13 @@ test("the shift is derived per-instant, not fixed per zone pair (DST)", () => {
   // Summer: 09:00 EDT (UTC-4) == 13:00Z  ->  09:00 MST (UTC-7) == 16:00Z (+3h)
   assert.equal(
     rebaseWallClock("2026-07-15T13:00:00.000Z", "America/New_York", "America/Phoenix"),
-    "2026-07-15T16:00:00.000Z"
+    "2026-07-15T16:00:00+00:00"
   );
 
   // Winter: 09:00 EST (UTC-5) == 14:00Z  ->  09:00 MST (UTC-7) == 16:00Z (+2h)
   assert.equal(
     rebaseWallClock("2026-01-15T14:00:00.000Z", "America/New_York", "America/Phoenix"),
-    "2026-01-15T16:00:00.000Z"
+    "2026-01-15T16:00:00+00:00"
   );
 });
 
@@ -81,4 +81,28 @@ test("round-trips against zonedTimeToUtc", () => {
   const rebased = rebaseWallClock(original, "America/New_York", "America/Los_Angeles");
   const { date, time } = splitInTz(original, "America/New_York");
   assert.equal(rebased, zonedTimeToUtc(`${date}T${time}`, "America/Los_Angeles"));
+});
+
+// ---------------------------------------------------------------------------
+// Storage format — must match what the Python worker writes
+// ---------------------------------------------------------------------------
+
+test("zonedTimeToUtc stores the worker's canonical UTC format", () => {
+  // Two writers share publications.scheduled_at: this app and the Python worker
+  // (datetime.isoformat() -> "…+00:00"). JS toISOString() emits "….000Z" — the same
+  // instant in different text. Auto-fill counts a group's SLOTS by comparing that
+  // text, so a mismatch makes one slot look like two and the queue stops refilling.
+  assert.equal(zonedTimeToUtc("2026-08-18T12:30", "America/Los_Angeles"), "2026-08-18T19:30:00+00:00");
+});
+
+test("canonical format survives a rebase", () => {
+  assert.equal(
+    rebaseWallClock("2026-08-02T09:00:00+00:00", "UTC", "America/Chicago"),
+    "2026-08-02T14:00:00+00:00"
+  );
+});
+
+test("canonical format has no fractional seconds", () => {
+  // ".000" is exactly the character run that split the two writers apart.
+  assert.match(zonedTimeToUtc("2026-01-05T00:00", "UTC"), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$/);
 });

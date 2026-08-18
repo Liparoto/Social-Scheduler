@@ -118,6 +118,6 @@ test("changing a group's timezone rebases every member's pending sends", async (
     .prepare("SELECT scheduled_at FROM publications WHERE channel_id IN (?,?) ORDER BY id")
     .all(a, b) as { scheduled_at: string }[];
   // 18:00 Los Angeles on 2026-08-01 == 01:00Z the next day.
-  assert.equal(rows[0].scheduled_at, "2026-08-02T01:00:00.000Z");
+  assert.equal(rows[0].scheduled_at, "2026-08-02T01:00:00+00:00");
   assert.equal(rows[1].scheduled_at, rows[0].scheduled_at, "members stay in lockstep");
 });
