@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  addPostAssets,
+  getAsset,
   getPost,
   getPostAssets,
+  getPostCompatChannels,
+  getPostSlides,
+  postHasLiveSend,
   postHasPublishingPublication,
   reorderPostAssets,
 } from "@/lib/queries";
 import { checkAssetOrder } from "@/lib/asset-order";
+import { checkAddAssets } from "@/lib/post-media-edit";
 
 export const runtime = "nodejs";
 
@@ -87,4 +93,82 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   reorderPostAssets(postId, checked.asset_ids);
   return NextResponse.json({ asset_ids: checked.asset_ids });
+}
+
+/**
+ * Add slides to a post. Body: { asset_ids: [12, 9] } — appended after what it already has.
+ *
+ * The counterpart to PATCH above, and separate from it for the reason PATCH's own comment
+ * gives: a reorder cannot change the slide count, which is what lets it stay this simple.
+ * Adding can, so post_type is re-derived and channel compatibility re-checked here.
+ *
+ * The assets themselves must already exist — uploading is POST /api/assets/upload, which
+ * owns content-hash dedup, image conforming, and video validation/conversion. This route
+ * deliberately knows none of that; it only links ids that are already in the library.
+ */
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const postId = Number(id);
+  if (!Number.isInteger(postId) || !getPost(postId)) {
+    return NextResponse.json({ error: "Post not found." }, { status: 404 });
+  }
+
+  const body = await req.json().catch(() => null);
+  const raw = (body as { asset_ids?: unknown } | null)?.asset_ids;
+  if (!Array.isArray(raw) || !raw.every((v) => Number.isInteger(v))) {
+    return NextResponse.json(
+      { error: "Expected a JSON body with asset_ids as whole numbers.", code: "bad_body" },
+      { status: 400 }
+    );
+  }
+
+  // Resolve every id to a real asset BEFORE any rule runs, so "asset 999 doesn't exist"
+  // is reported as itself rather than as a confusing type or compatibility error.
+  const incoming = [];
+  for (const assetId of raw as number[]) {
+    const asset = getAsset(assetId);
+    if (!asset) {
+      return NextResponse.json(
+        { error: `There's no file with id ${assetId} in the library.`, code: "bad_body" },
+        { status: 400 }
+      );
+    }
+    incoming.push({ asset_id: asset.id, media_kind: asset.media_kind });
+  }
+
+  const checked = checkAddAssets(
+    {
+      slides: getPostSlides(postId),
+      hasLiveSend: postHasLiveSend(postId),
+      channels: getPostCompatChannels(postId),
+    },
+    incoming
+  );
+  if (!checked.ok) {
+    return NextResponse.json(
+      { error: checked.error, code: checked.code },
+      { status: checked.status }
+    );
+  }
+
+  // The same live-send rule again, this time inside the write, where it cannot be raced.
+  const result = addPostAssets(
+    postId,
+    incoming.map((s) => s.asset_id),
+    checked.post_type
+  );
+  if (result === "has_live") {
+    return NextResponse.json(
+      {
+        error: "This post went live while you were editing it, so nothing was changed.",
+        code: "live_send",
+      },
+      { status: 409 }
+    );
+  }
+
+  return NextResponse.json({
+    post_type: checked.post_type,
+    asset_ids: checked.slides.map((s) => s.asset_id),
+  });
 }
