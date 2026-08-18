@@ -670,6 +670,30 @@ export function countOtherPostsUsingAsset(postId: number, assetId: number): numb
   return row.n;
 }
 
+/**
+ * Scheduled or pending-approval sends pinned to THIS slide specifically —
+ * publications.asset_id = assetId, the Story-send marker from migration 0014. What makes
+ * removing a slide from a post unsafe: the worker would otherwise still publish this asset
+ * as a Story for a post it is no longer part of.
+ *
+ * Deliberately narrower than countScheduledSendsForAsset() above, which also matches
+ * asset_id IS NULL (a feed send). That NULL case is excluded here on purpose: a feed send
+ * publishes whatever slides the post holds AT PUBLISH TIME rather than naming this asset,
+ * so removing the slide from the post is exactly what a feed send is supposed to reflect —
+ * blocking on it would refuse an edit that is actually safe. Only a direct asset_id match
+ * means "this send goes out with THIS asset or not at all," which removing the slide would
+ * silently break.
+ */
+export function countQueuedDirectSendsForSlide(postId: number, assetId: number): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM publications
+        WHERE post_id = ? AND asset_id = ? AND status IN ('scheduled', 'pending_approval')`
+    )
+    .get(postId, assetId) as { n: number };
+  return row.n;
+}
+
 /** Append slides to a post. `postType` comes from checkAddAssets — never re-derived here. */
 export function addPostAssets(
   postId: number,
@@ -795,6 +819,14 @@ export function removePostAsset(
     if (err instanceof LiveSendError) return "has_live";
     if (err instanceof StillUsedError) return "still_used";
     if (err instanceof NotFoundError) return "not_found";
+    // dropAsset's own NOT EXISTS only covers post_assets. publications.asset_id (a Story
+    // send pinned to this one slide, migration 0014) and assets.cover_asset_id (migration
+    // 0016) are both ON DELETE RESTRICT/NO ACTION references the DELETE statement itself
+    // can't see, so SQLite raises the FK error instead of the DELETE just no-opping. Same
+    // precedent as deleteAsset() above: a still-referenced asset is "still_used" from the
+    // caller's point of view no matter which foreign key caught it.
+    const code = (err as { code?: string }).code ?? "";
+    if (code.startsWith("SQLITE_CONSTRAINT")) return "still_used";
     throw err;
   }
 }

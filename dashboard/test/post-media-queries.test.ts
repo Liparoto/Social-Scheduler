@@ -140,6 +140,25 @@ test("removePostAsset refuses to delete an asset another post still holds", () =
   );
 });
 
+test("removePostAsset(alsoDeleteAsset: true) reports still_used when a Story send still references the asset row directly, not just when another post does", () => {
+  // publications.asset_id REFERENCES assets(id) ON DELETE RESTRICT (migration 0014): a
+  // scheduled Story send pinned to this exact slide isn't caught by dropAsset's own
+  // NOT EXISTS (post_assets ...) guard, because post_assets has nothing to do with
+  // publications. Without a catch, this used to escape as a raw SQLITE_CONSTRAINT error.
+  const a = mkAsset();
+  const b = mkAsset();
+  const post = mkPost([a, b]);
+  const channel = mkChannel("instagram");
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled', 'story', ?)`
+  ).run(post, channel, b);
+
+  assert.equal(q.removePostAsset(post, b, "single", true), "still_used");
+  assert.ok(slideIds(post).includes(b), "the post link must survive the refusal");
+  assert.ok(q.getAsset(b), "the asset row must survive the refusal");
+});
+
 test("an untargeted draft falls back to Instagram's stricter cap", () => {
   const post = mkPost([mkAsset()]);
   assert.deepEqual(

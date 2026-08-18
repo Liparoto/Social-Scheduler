@@ -77,6 +77,19 @@ test("mode defaults to post when it is missing or nonsense", async () => {
   assert.ok(q.getAsset(b));
 });
 
+test("a typo'd or wrong-case mode falls back to the non-destructive one, never the destructive one", async () => {
+  for (const mode of ["everywher", "Everywhere"]) {
+    const a = mkAsset();
+    const b = mkAsset();
+    const p = mkPost([a, b]);
+    const res = await del(p, b, mode);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).deleted_asset, false, `mode=${mode} must not delete the file`);
+    assert.ok(q.getAsset(b), `mode=${mode} must leave the asset row alone`);
+    assert.ok(fs.existsSync(fileFor(b)), `mode=${mode} must leave the file on disk`);
+  }
+});
+
 test("mode=everywhere removes the row and the file from disk", async () => {
   const a = mkAsset();
   const b = mkAsset();
@@ -145,6 +158,34 @@ test("a live send is a 409 and removes nothing", async () => {
   assert.equal((await res.json()).code, "live_send");
   assert.equal(q.getPostSlides(p).length, 2);
   assert.ok(fs.existsSync(fileFor(b)));
+});
+
+test("a slide with a queued Story send is refused in BOTH modes, and removes nothing", async () => {
+  const a = mkAsset();
+  const b = mkAsset();
+  const p = mkPost([a, b]);
+  const channel = Number(
+    db
+      .prepare(
+        "INSERT INTO channels (platform, account_name, remote_account_id, is_active) VALUES ('instagram', 'story-live', 'y', 1)"
+      )
+      .run().lastInsertRowid
+  );
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled', 'story', ?)`
+  ).run(p, channel, b);
+
+  const post = await del(p, b, "post");
+  assert.equal(post.status, 409);
+  assert.equal((await post.json()).code, "story_queued");
+  assert.ok(q.getPostSlides(p).some((s) => s.asset_id === b), "still on the post — mode=post");
+
+  const everywhere = await del(p, b, "everywhere");
+  assert.equal(everywhere.status, 409);
+  assert.equal((await everywhere.json()).code, "story_queued");
+  assert.ok(q.getAsset(b), "the asset row survives — mode=everywhere");
+  assert.ok(fs.existsSync(fileFor(b)), "the file survives — mode=everywhere");
 });
 
 test("removing the middle slide leaves a gap-free order that can be appended to", async () => {

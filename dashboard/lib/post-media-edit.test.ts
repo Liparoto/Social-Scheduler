@@ -52,7 +52,7 @@ test("a live send blocks adding", () => {
 });
 
 test("a live send blocks removing", () => {
-  const res = checkRemoveAsset(ctx({ hasLiveSend: true }), 1, "post", 0);
+  const res = checkRemoveAsset(ctx({ hasLiveSend: true }), 1, "post", 0, 0);
   assert.equal(res.ok, false);
   if (res.ok) return;
   assert.equal(res.code, "live_send");
@@ -111,7 +111,7 @@ test("an 11th slide is refused with Instagram's real limit named", () => {
 });
 
 test("removing a slide from a carousel of two leaves a single", () => {
-  const res = checkRemoveAsset(ctx(), 2, "post", 0);
+  const res = checkRemoveAsset(ctx(), 2, "post", 0, 0);
   assert.equal(res.ok, true);
   if (!res.ok) return;
   assert.equal(res.post_type, "single");
@@ -119,14 +119,14 @@ test("removing a slide from a carousel of two leaves a single", () => {
 });
 
 test("the last slide cannot be removed", () => {
-  const res = checkRemoveAsset(ctx({ slides: [img(1)] }), 1, "post", 0);
+  const res = checkRemoveAsset(ctx({ slides: [img(1)] }), 1, "post", 0, 0);
   assert.equal(res.ok, false);
   if (res.ok) return;
   assert.equal(res.code, "last_slide");
 });
 
 test("removing a slide the post does not have is a 404", () => {
-  const res = checkRemoveAsset(ctx(), 77, "post", 0);
+  const res = checkRemoveAsset(ctx(), 77, "post", 0, 0);
   assert.equal(res.ok, false);
   if (res.ok) return;
   assert.equal(res.code, "not_on_post");
@@ -134,7 +134,7 @@ test("removing a slide the post does not have is a 404", () => {
 });
 
 test("delete-entirely is refused when the asset is on other posts", () => {
-  const res = checkRemoveAsset(ctx(), 2, "everywhere", 3);
+  const res = checkRemoveAsset(ctx(), 2, "everywhere", 3, 0);
   assert.equal(res.ok, false);
   if (res.ok) return;
   assert.equal(res.code, "shared_asset");
@@ -143,7 +143,7 @@ test("delete-entirely is refused when the asset is on other posts", () => {
 });
 
 test("remove-from-post is allowed even when the asset is shared", () => {
-  const res = checkRemoveAsset(ctx(), 2, "post", 3);
+  const res = checkRemoveAsset(ctx(), 2, "post", 3, 0);
   assert.equal(res.ok, true);
 });
 
@@ -153,9 +153,28 @@ test("removing leaves a lone video as a reel, and re-checks video support", () =
     { slides: [vid(1), img(2)], hasLiveSend: false, channels: [noVideo] },
     2,
     "post",
+    0,
     0
   );
   assert.equal(res.ok, false);
   if (res.ok) return;
   assert.equal(res.code, "incompatible");
+});
+
+test("a slide with a queued Story send is refused, in EITHER mode", () => {
+  const post = checkRemoveAsset(ctx(), 2, "post", 0, 1);
+  assert.equal(post.ok, false);
+  if (post.ok) return;
+  assert.equal(post.code, "story_queued");
+  assert.equal(post.status, 409);
+
+  const everywhere = checkRemoveAsset(ctx(), 2, "everywhere", 0, 1);
+  assert.equal(everywhere.ok, false);
+  if (everywhere.ok) return;
+  assert.equal(everywhere.code, "story_queued");
+});
+
+test("a queued Story send on a DIFFERENT slide does not block this one", () => {
+  const res = checkRemoveAsset(ctx(), 2, "post", 0, 0);
+  assert.equal(res.ok, true);
 });

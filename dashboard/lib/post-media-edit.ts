@@ -38,6 +38,7 @@ export type MediaEditErrorCode =
   | "video_mix"
   | "not_on_post"
   | "last_slide"
+  | "story_queued"
   | "shared_asset"
   | "incompatible";
 
@@ -118,7 +119,15 @@ export function checkRemoveAsset(
   ctx: MediaEditContext,
   assetId: number,
   mode: "post" | "everywhere",
-  otherPostCount: number
+  otherPostCount: number,
+  /**
+   * Scheduled or pending-approval Story sends pinned to THIS slide specifically —
+   * publications.asset_id = assetId (see countQueuedDirectSendsForSlide() in queries.ts).
+   * Unrelated to otherPostCount/mode: unlinking the slide (mode=post) would leave that
+   * send pointing at a slide no longer on this post just as surely as deleting the file
+   * outright would, so this check runs for BOTH modes.
+   */
+  queuedStoryCount: number
 ): MediaEditCheck {
   if (ctx.hasLiveSend) {
     return fail(
@@ -135,6 +144,16 @@ export function checkRemoveAsset(
       "last_slide",
       "A post needs at least one photo. Delete the post itself if you don't want it.",
       400
+    );
+  }
+  // Refuse rather than auto-cancel the send: the queue is the owner's record of what is
+  // about to go out, and silently deleting a row from it is exactly the kind of invisible
+  // action this project avoids. Canceling or holding the send is one click away already.
+  if (queuedStoryCount > 0) {
+    return fail(
+      "story_queued",
+      "This slide has a Story send queued. Cancel or hold that send first, then remove it.",
+      409
     );
   }
   if (mode === "everywhere" && otherPostCount > 0) {

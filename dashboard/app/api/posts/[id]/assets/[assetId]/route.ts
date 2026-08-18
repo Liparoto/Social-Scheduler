@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assetFilePaths, unlinkInsideStore } from "@/lib/asset-files";
 import {
   countOtherPostsUsingAsset,
+  countQueuedDirectSendsForSlide,
   getAsset,
   getPost,
   getPostCompatChannels,
@@ -56,7 +57,12 @@ export async function DELETE(
     },
     assetId,
     mode,
-    countOtherPostsUsingAsset(postId, assetId)
+    countOtherPostsUsingAsset(postId, assetId),
+    // A scheduled Story send pinned to THIS slide (publications.asset_id = assetId) would
+    // otherwise survive unlinking and still try to publish a slide the post no longer has —
+    // in either mode, not only "everywhere". checkRemoveAsset refuses rather than
+    // auto-canceling the send: see its own comment for why.
+    countQueuedDirectSendsForSlide(postId, assetId)
   );
   if (!checked.ok) {
     return NextResponse.json(
