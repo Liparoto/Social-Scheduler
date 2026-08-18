@@ -2163,3 +2163,55 @@ exactly when someone is reviewing content.
 **Not done, deliberately:** `library-view.tsx` stays at ~990 lines. The bar reads a dozen
 pieces of parent state, so extracting it is a far larger change than a collapse toggle should
 drag in.
+
+## Post media editing: add and remove slides on an existing post — 2026-08-18  `[x] done`
+
+Design: `docs/design-post-media-editing.md`. Task briefs/reports:
+`.superpowers/sdd/2026-08-18-post-media-editing/`. A post's media used to be fixed the moment
+it was composed — every edit surface could change the words, tags, status, schedule and slide
+*order*, but never which slides existed. Fixing one wrong photo in a ten-slide carousel meant
+rebuilding the post from scratch, and `DELETE /api/assets/[id]` refused any asset attached to
+a post with an error pointing at a door that did not exist.
+
+What it does:
+
+- **Add** — upload new files or pick existing ones from the library; they append as slides
+  through `POST /api/posts/[id]/assets`.
+- **Remove** — ✕ on a slide opens a two-button confirm: *remove from this post* (file stays in
+  the library) or *delete the file entirely* (gone from disk), one endpoint
+  (`DELETE /api/posts/[id]/assets/[assetId]?mode=post|everywhere`) so nothing is unlinked
+  before a shared-asset refusal can stop it.
+- `post_type` is re-derived on every add/remove (1 image → `single`, 1 video → `reel`, 2+ →
+  `carousel`), reusing `incompatiblePostError()` for channel-fit checks rather than
+  re-deriving the strictest-target rule a second time.
+- Refusals with a reason a person can act on: last slide, video mixed into/out of a carousel
+  (the worker has no publish path for a video inside one), a queued Story send that names the
+  slide being removed or a post with any per-slide Story send queued for an add (the fan-out
+  never resyncs), a shared or otherwise-referenced asset on `mode=everywhere`, a text post (no
+  slides by design), and any live (`posted`/`publishing`) publication.
+- One shared strip, `components/post-media-editor.tsx`, mounted in **every** edit surface: the
+  full editor at `/library/[id]`, the Library grid's quick-edit dialog, and the Overview
+  queue's quick-edit dialog (the latter two share one component).
+- Changes apply **immediately**, not behind Save — `QuickEditModal` is confirm-on-dismiss and
+  compares against what it opened with, so media lives deliberately outside that dirty
+  tracking, the same precedent slide *reorder* already set in the same dialog.
+
+**The quick-edit dialog needed a real fix, not just a mount.** It only ever fetched slides for
+an already-multi-slide carousel (`if (!isCarousel) return`), so a single image, a Reel, or a
+text post showed no media block at all — exactly the posts you most want to add a second photo
+to. The fetch is now unconditional and re-runnable (`reloadSlides`), and `isCarousel` is
+derived from the fetched slides rather than the Library list's stale `post.post_type` /
+`post.asset_count` snapshot, so a post that becomes a carousel mid-edit shows the reorder block
+without needing to be reopened. `PostMediaEditor`'s `onChanged` refetches those slides *and*
+calls `router.refresh()` directly (not the dialog's `onSaved`, which both callers use to force
+the dialog closed — a media edit must not do that) so `useAssetOrder`'s baseline moves with the
+slide list and the Library/Overview row behind the dialog stays in sync without waiting for a
+Cancel or Save.
+
+**Verified:** `npx tsc --noEmit` clean (only the pre-existing `lib/queries.tags.test.ts:54`
+error), `npm run lint` 0 errors (13 pre-existing warnings, unchanged), `npm test` 657 passed,
+0 failed. Browser verification against a scratch DB copy is the owner's to run, not done here.
+
+**Not done, deliberately (per design):** editing media on a post that already went out,
+replacing a slide in place, video slides inside a carousel, and converting a media post to a
+text post by removing its last slide.
