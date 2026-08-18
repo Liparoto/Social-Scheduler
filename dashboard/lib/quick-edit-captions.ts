@@ -133,3 +133,34 @@ export function syncedPostCaption(variants: SavedCaptionVariant[]): string | nul
   if (!generic) return undefined;
   return generic.body;
 }
+
+/**
+ * What an editor should OPEN with for a post — saved variants, or `posts.caption`.
+ *
+ * `caption` and `caption_variants` are independent fields on the create/update API, so a
+ * post can legitimately have a caption and no variant rows at all (anything posted to
+ * `/api/posts/draft` with just a `caption` lands exactly there). Reading only the variants
+ * then showed an EMPTY caption box for a post that visibly has a caption everywhere else —
+ * and because a save replaces variants wholesale, saving from that dialog sent `[]`, which
+ * `syncedPostCaption()` turns into a NULL `posts.caption`. Editing a tag was enough to
+ * destroy the caption of a post nobody meant to touch.
+ *
+ * The worker already resolves the same ambiguity in `_select_caption()` by falling back to
+ * `posts.caption`, so this makes the editor show what would actually publish. Saving then
+ * writes that text into `caption_variants` and the two representations converge instead of
+ * drifting further apart.
+ *
+ * Saved variants always win, INCLUDING platform-specific-only ones: there, `posts.caption`
+ * is still the live fallback for any targeted platform without a variant of its own, and
+ * synthesising a generic row would promote that fallback into a real variant and change
+ * what publishes. See `syncedPostCaption()`, which declines to touch the column for that
+ * same reason.
+ */
+export function editorCaptionVariants(
+  variants: SavedCaptionVariant[],
+  postCaption: string | null
+): SavedCaptionVariant[] {
+  if (variants.length > 0) return variants;
+  if (!postCaption || postCaption.trim() === "") return [];
+  return [{ platform: null, body: postCaption, sort_order: 0 }];
+}

@@ -17,7 +17,7 @@ import {
 import type { ContentKind, ContentStatus, PeriodMode, PostTarget } from "@/lib/types";
 import { parseTagIds } from "@/lib/content-model-validation";
 import { FIRST_COMMENT_MAX_CHARS, captionLimitError } from "@/lib/caption-limits";
-import { syncedPostCaption } from "@/lib/quick-edit-captions";
+import { editorCaptionVariants, syncedPostCaption } from "@/lib/quick-edit-captions";
 import { parseTargets } from "@/lib/story-fanout";
 
 export const runtime = "nodejs";
@@ -43,11 +43,18 @@ export async function GET(
     return NextResponse.json({ error: "Post not found." }, { status: 404 });
   }
   return NextResponse.json({
-    caption_variants: getCaptionVariants(postId).map((v) => ({
-      platform: v.platform,
-      body: v.body,
-      sort_order: v.sort_order,
-    })),
+    // Falls back to posts.caption when this post has no variant rows — the same choice the
+    // worker's _select_caption() makes, so the editor opens showing what would actually
+    // publish. Without it a caption-but-no-variants post opened BLANK and the next save
+    // wrote that blank back over the real caption. See editorCaptionVariants().
+    caption_variants: editorCaptionVariants(
+      getCaptionVariants(postId).map((v) => ({
+        platform: v.platform,
+        body: v.body,
+        sort_order: v.sort_order,
+      })),
+      post.caption
+    ),
     // Same reasoning as the variants: kept out of the Library list query, fetched only
     // when an editor actually opens this post.
     first_comment: post.first_comment ?? "",
