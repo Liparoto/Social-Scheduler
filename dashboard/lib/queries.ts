@@ -645,6 +645,9 @@ export function postHasLiveSend(postId: number): boolean {
  * An untargeted draft falls back to Instagram for the same reason mergeTargetPlatforms
  * does: 10 is the strictest carousel cap here, and a draft that isn't pointed anywhere yet
  * can be pointed anywhere later, so it has to satisfy the tightest limit rather than none.
+ * That fallback row is synthetic — `id: 0` is never a real `channels.id` — and stands in
+ * only long enough for `incompatiblePostError` to read its `platform`; nothing here ever
+ * treats it as a real channel.
  */
 export function getPostCompatChannels(postId: number): ChannelLikeForCompat[] {
   const rows = getDb()
@@ -698,7 +701,13 @@ export function addPostAssets(
   });
 
   try {
-    tx();
+    // .immediate(): this reads MAX(sort_order) and then writes based on what it read, so a
+    // deferred transaction only holds together thanks to WAL snapshot isolation — under a
+    // concurrent writer (the Python worker) the write-lock upgrade can fail with an opaque
+    // SQLITE_BUSY_SNAPSHOT instead of a clean "has_live"/"ok". Same reasoning as
+    // unmergeCarousel and extractSlidesFromCarousel. removePostAsset doesn't need this: its
+    // first statement is the guarded DELETE, so it takes the write lock immediately.
+    tx.immediate();
     return "ok";
   } catch (err) {
     if (err instanceof LiveSendError) return "has_live";
@@ -723,19 +732,30 @@ export function addPostAssets(
  * `sort_order = sort_order - 1` shuffle can collide with a row SQLite hasn't updated yet
  * depending on the order it visits rows in. Clear-and-reinsert never collides because
  * nothing is ever written to a sort_order another surviving row still occupies.
+ *
+ * A DELETE that matches 0 rows is ambiguous by itself — wrong assetId, wrong postId, or a
+ * slide already removed, versus a slide that IS on the post but the live-send guard just
+ * blocked. Those need different results (checkRemoveAsset already has a `not_on_post` code
+ * for the first one), so a 0-row delete is followed by a plain existence check — safe to do
+ * AFTER the DELETE attempt because that statement already took the write lock; it is not a
+ * read-before-write that could race the worker the way addPostAssets's MAX(sort_order)
+ * read does.
  */
 export function removePostAsset(
   postId: number,
   assetId: number,
   postType: PostType,
   alsoDeleteAsset: boolean
-): "ok" | "has_live" | "still_used" {
+): "ok" | "has_live" | "still_used" | "not_found" {
   const db = getDb();
   const unlink = db.prepare(
     `DELETE FROM post_assets
       WHERE post_id = @post AND asset_id = @asset
         AND NOT EXISTS (SELECT 1 FROM publications
                          WHERE post_id = @post AND status IN ('posted','publishing'))`
+  );
+  const stillLinked = db.prepare(
+    "SELECT 1 FROM post_assets WHERE post_id = ? AND asset_id = ?"
   );
   const remaining = db.prepare(
     "SELECT asset_id AS asset_id FROM post_assets WHERE post_id = ? ORDER BY sort_order ASC"
@@ -752,7 +772,11 @@ export function removePostAsset(
   const retype = db.prepare("UPDATE posts SET post_type = ?, updated_at = ? WHERE id = ?");
 
   const tx = db.transaction(() => {
-    if (unlink.run({ post: postId, asset: assetId }).changes === 0) throw new LiveSendError();
+    if (unlink.run({ post: postId, asset: assetId }).changes === 0) {
+      // The row is still there (guard rejected the delete) vs. it was never there.
+      if (stillLinked.get(postId, assetId)) throw new LiveSendError();
+      throw new NotFoundError();
+    }
     // UNIQUE(post_id, sort_order) means the hole left behind must be closed, or the next
     // append lands on a number that is already taken.
     const survivors = remaining.all(postId) as { asset_id: number }[];
@@ -770,6 +794,7 @@ export function removePostAsset(
   } catch (err) {
     if (err instanceof LiveSendError) return "has_live";
     if (err instanceof StillUsedError) return "still_used";
+    if (err instanceof NotFoundError) return "not_found";
     throw err;
   }
 }
@@ -777,6 +802,7 @@ export function removePostAsset(
 /** Rollback signals. Thrown only inside the transactions above, never escaping this file. */
 class LiveSendError extends Error {}
 class StillUsedError extends Error {}
+class NotFoundError extends Error {}
 
 // ---- Posts + publications (the scheduling write) --------------------------------
 

@@ -43,6 +43,15 @@ function slideIds(postId: number): number[] {
   return q.getPostSlides(postId).map((s) => s.asset_id);
 }
 
+/** Raw stored sort_order values, in the order SQLite hands them back — not derived from getPostSlides. */
+function storedSortOrders(postId: number): number[] {
+  return (
+    db
+      .prepare("SELECT sort_order FROM post_assets WHERE post_id = ? ORDER BY sort_order")
+      .all(postId) as { sort_order: number }[]
+  ).map((r) => r.sort_order);
+}
+
 test("getPostSlides returns slides in order with their media kind", () => {
   const a = mkAsset();
   const b = mkAsset("video");
@@ -68,6 +77,15 @@ test("removePostAsset unlinks the slide and leaves the asset alone", () => {
   assert.equal(q.removePostAsset(post, b, "single", false), "ok");
   assert.deepEqual(slideIds(post), [a]);
   assert.ok(q.getAsset(b), "the asset row must survive a remove-from-post");
+  assert.equal(q.getPost(post)!.post_type, "single", "a successful remove writes the post_type passed in");
+});
+
+test("removePostAsset on an asset that isn't on the post reports not_found, not has_live", () => {
+  const a = mkAsset();
+  const post = mkPost([a]);
+  const notOnPost = mkAsset();
+  assert.equal(q.removePostAsset(post, notOnPost, "single", false), "not_found");
+  assert.deepEqual(slideIds(post), [a]);
 });
 
 test("removePostAsset with alsoDeleteAsset removes the row too", () => {
@@ -88,9 +106,15 @@ test("a live send blocks both writes, and nothing changes", () => {
     "INSERT INTO publications (post_id, channel_id, scheduled_at, status) VALUES (?, ?, '2026-01-01T00:00:00Z', 'posted')"
   ).run(post, channel);
 
+  const postTypeBefore = q.getPost(post)!.post_type;
   assert.equal(q.addPostAssets(post, [mkAsset()], "carousel"), "has_live");
   assert.equal(q.removePostAsset(post, b, "single", false), "has_live");
   assert.deepEqual(slideIds(post), [a, b]);
+  assert.equal(
+    q.getPost(post)!.post_type,
+    postTypeBefore,
+    "a refused write must not retype the post either"
+  );
 });
 
 test("countOtherPostsUsingAsset excludes the post being edited", () => {
@@ -105,9 +129,15 @@ test("removePostAsset refuses to delete an asset another post still holds", () =
   const shared = mkAsset();
   const post = mkPost([shared, mkAsset()]);
   mkPost([shared, mkAsset()]);
+  const postTypeBefore = q.getPost(post)!.post_type;
   assert.equal(q.removePostAsset(post, shared, "single", true), "still_used");
-  assert.deepEqual(slideIds(post).includes(shared), true, "the link must survive a refusal");
+  assert.ok(slideIds(post).includes(shared), "the link must survive a refusal");
   assert.ok(q.getAsset(shared));
+  assert.equal(
+    q.getPost(post)!.post_type,
+    postTypeBefore,
+    "a refused write must not retype the post either"
+  );
 });
 
 test("an untargeted draft falls back to Instagram's stricter cap", () => {
@@ -139,6 +169,10 @@ test("removing a middle slide then appending closes the gap without a UNIQUE col
   const post = mkPost([a, b, c]);
   assert.equal(q.removePostAsset(post, b, "carousel", false), "ok");
   assert.deepEqual(slideIds(post), [a, c]);
+  // The assertion that actually proves the gap was closed: without it, [a, c] would sit at
+  // stored sort_order [0, 2] (the hole left by b), the two getPostSlides checks above would
+  // still pass, and the append below would land at MAX+1 = 3 without ever colliding.
+  assert.deepEqual(storedSortOrders(post), [0, 1]);
   const d = mkAsset();
   assert.equal(q.addPostAssets(post, [d], "carousel"), "ok");
   assert.deepEqual(slideIds(post), [a, c, d]);
