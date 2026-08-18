@@ -160,8 +160,11 @@ introducing a new one.
 
 ## Error handling
 
-Every refusal is a 409 with a sentence a person can act on, in the style the existing
-routes already use. The UI shows it inline next to the strip and leaves the post
+Every refusal carries a sentence a person can act on, in the style the existing routes
+already use. Status codes follow what those routes already do: an invalid **request** is
+`400` (a video that can't be mixed, a carousel past the channel's limit, the last slide),
+a conflict with **other state** is `409` (a live send, a shared asset), and a missing post
+or slide is `404`. The UI shows it inline next to the strip and leaves the post
 untouched. A failed file unlink after a successful row delete is logged and reported as
 `leftover`, exactly as `DELETE /api/assets/[id]` does today: a failed row delete must
 never leave files deleted, but a failed file delete only leaves harmless bytes behind.
@@ -181,11 +184,13 @@ never leave files deleted, but a failed file delete only leaves harmless bytes b
 ## Files
 
 **New**
-- `dashboard/lib/post-media-edit.ts` + `.test.ts`
-- `dashboard/app/api/posts/[id]/assets/[assetId]/route.ts`
-- `dashboard/components/post-media-editor.tsx`
-- `dashboard/components/asset-picker-modal.tsx`
-- `dashboard/test/post-assets-mutate-route.test.ts`
+- `dashboard/lib/post-media-edit.ts` + `.test.ts` — the rules
+- `dashboard/app/api/posts/[id]/assets/[assetId]/route.ts` — the remove endpoint
+- `dashboard/app/api/assets/[id]/usage/route.ts` — how many other posts hold this asset, so the confirm dialog knows whether to offer "delete entirely"
+- `dashboard/app/api/assets/route.ts` — the library list the picker reads (only if no list route already exists)
+- `dashboard/components/post-media-editor.tsx` — the shared strip
+- `dashboard/components/asset-picker-modal.tsx` — pick from the library
+- `dashboard/test/post-media-queries.test.ts`, `post-assets-add-route.test.ts`, `post-assets-remove-route.test.ts`
 
 **Modified**
 - `dashboard/app/api/posts/[id]/assets/route.ts` — add `POST`
