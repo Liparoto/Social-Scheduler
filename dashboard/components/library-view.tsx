@@ -612,6 +612,12 @@ export function LibraryView({
                       <img
                         src={`/api/media/${p.first_asset_id}?variant=thumb`}
                         alt=""
+                        // The library is no longer capped at 200 cards, so this grid can be
+                        // a few hundred rows long. Without this every card off-screen still
+                        // hits /api/media on load, which is hundreds of requests the user
+                        // will never scroll to.
+                        loading="lazy"
+                        decoding="async"
                         className="h-full w-full object-cover"
                       />
                     )

@@ -1461,7 +1461,20 @@ export interface PostLibraryPeriod extends PeriodWindow {
   mode: PeriodMode;
 }
 
-export function listPosts(limit = 200): PostLibraryRow[] {
+/**
+ * Every post in the library, newest first.
+ *
+ * `limit` is OPTIONAL and unset means unlimited. It used to default to 200, which the
+ * Library and Compose both silently inherited: an install with 419 posts showed 200 and
+ * said nothing, and because the order is `created_at DESC` the 219 it dropped were the
+ * OLDEST — on a multi-account install that quietly swallowed a second account's entire
+ * back catalogue. The filters and the search on top of this are client-side, so a post
+ * that never arrives reads as a post that does not exist.
+ *
+ * A few thousand rows is nothing for better-sqlite3, and the card grid lazy-loads its
+ * thumbnails, so the honest default is "all of them".
+ */
+export function listPosts(limit?: number): PostLibraryRow[] {
   const db = getDb();
   const posts = db
     .prepare(
@@ -1503,7 +1516,9 @@ export function listPosts(limit = 200): PostLibraryRow[] {
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`
     )
-    .all(limit) as Omit<PostLibraryRow, "periods">[];
+    // SQLite reads a negative LIMIT as "no upper bound", which keeps this one prepared
+    // statement serving both the capped and the uncapped call.
+    .all(limit ?? -1) as Omit<PostLibraryRow, "periods">[];
 
   if (posts.length === 0) return [];
 
