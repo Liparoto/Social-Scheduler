@@ -429,10 +429,14 @@ export function Composer({
               >
                 {uploading ? "Uploading…" : "Add media"}
               </button>
+              {/* The accept list names extensions ALONGSIDE the MIME types on purpose: a
+                  file picker matches MIME entries against the type the OS reports, and a
+                  Windows machine with nothing registered for .webp reports none — greying
+                  out files this app accepts perfectly well. See lib/upload-mime.ts. */}
               <input
                 ref={fileInput}
                 type="file"
-                accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime"
+                accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,.jpg,.jpeg,.png,.webp,.mp4,.mov"
                 multiple
                 hidden
                 onChange={(e) => onFiles(e.target.files)}

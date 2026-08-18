@@ -138,7 +138,7 @@ export function CoverFramePicker({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
         hidden
         onChange={(e) => {
           const file = e.target.files?.[0];

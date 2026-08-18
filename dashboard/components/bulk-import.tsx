@@ -145,7 +145,7 @@ export function BulkImport({
           <input
             type="file"
             multiple
-            accept="image/*"
+            accept="image/*,.jpg,.jpeg,.png,.webp"
             className="hidden"
             onChange={(e) => onFiles(e.target.files)}
           />

@@ -11,15 +11,11 @@ import { readVideoMeta, VideoParseError } from "@/lib/video-meta";
 import { validateReel, classifyReelErrors, REEL_MIME_TYPES } from "@/lib/video-spec";
 import { findConverter, convertVideo, ConvertError } from "@/lib/video-convert";
 import { converterAdvice } from "@/lib/converter-advice";
+import { IMAGE_EXT_BY_MIME, resolveUploadMime } from "@/lib/upload-mime";
 
 export const runtime = "nodejs";
 
 const THUMB_MAX = 480;
-const IMAGE_EXT_BY_MIME: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
 
 export async function POST(req: NextRequest) {
   const form = await req.formData();
@@ -27,10 +23,16 @@ export async function POST(req: NextRequest) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "No file provided." }, { status: 400 });
   }
-  const mime = file.type;
-  const imageExt = IMAGE_EXT_BY_MIME[mime];
-  const videoExt = REEL_MIME_TYPES[mime];
-  if (!imageExt && !videoExt) {
+  // Read the bytes BEFORE deciding what this file is. `file.type` is supplied by the
+  // browser from the OS, not read from the file — on Windows it comes from the registry,
+  // and a machine with nothing registered for .webp sends "" for every one of them. Taking
+  // it as final rejected genuine WebP files with 415. resolveUploadMime() keeps a declared
+  // type we accept and otherwise falls back to the file's own magic bytes.
+  const buf = Buffer.from(await file.arrayBuffer());
+  const mime = resolveUploadMime(file.type, buf);
+  const imageExt = mime ? IMAGE_EXT_BY_MIME[mime] : undefined;
+  const videoExt = mime ? REEL_MIME_TYPES[mime] : undefined;
+  if (!mime || (!imageExt && !videoExt)) {
     return NextResponse.json(
       { error: "Only JPEG, PNG or WebP images, and MP4 or MOV video, are supported." },
       { status: 415 }
@@ -39,7 +41,6 @@ export async function POST(req: NextRequest) {
   const ext = imageExt ?? videoExt;
   const isVideo = Boolean(videoExt);
 
-  const buf = Buffer.from(await file.arrayBuffer());
   // Dedup by CONTENT HASH (not filename) — check before writing anything to disk.
   const hash = crypto.createHash("sha256").update(buf).digest("hex");
   const existing = getAssetByHash(hash);
