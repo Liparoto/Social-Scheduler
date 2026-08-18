@@ -4,52 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { videoPreviewSrc } from "@/lib/format";
 import { AssetPickerModal } from "@/components/asset-picker-modal";
+import { deleteBlockState, type UsageCounts } from "@/lib/media-delete-confirm";
 import { useModalFocusTrap } from "./use-modal-focus-trap";
 
 export interface EditorSlide {
   id: number;
   media_kind: string;
   cover_frame_ms: number | null;
-}
-
-/** What GET /api/assets/[id]/usage?post_id=… reports — see that route for what each counts. */
-interface UsageCounts {
-  otherPosts: number;
-  sends: number;
-  covers: number;
-}
-
-/**
- * Why "Delete the file entirely" can't be offered, as clauses that all read as the subject
- * of "Can't delete the file entirely — …" — the confirm dialog joins whichever of these
- * apply into one sentence. Pulled out so it can be tested without a DOM, same reason
- * unmerge-modal.tsx's splitSummary() is separate from its component.
- *
- * Three independent reasons because they ARE independent: an asset can be on another post,
- * named by a queued or failed Story send, AND set as a Reel's cover, all at once, and the
- * dialog should say so rather than picking just one.
- */
-export function deleteBlockReasons(u: UsageCounts): string[] {
-  const reasons: string[] = [];
-  if (u.otherPosts > 0) {
-    reasons.push(
-      u.otherPosts === 1 ? "another post uses it" : `${u.otherPosts} other posts use it`
-    );
-  }
-  if (u.sends > 0) {
-    reasons.push("a scheduled or failed send still references it");
-  }
-  if (u.covers > 0) {
-    reasons.push("it's a Reel's cover image");
-  }
-  return reasons;
-}
-
-function joinList(items: string[]): string {
-  if (items.length === 0) return "";
-  if (items.length === 1) return items[0];
-  if (items.length === 2) return `${items[0]}, and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
 /**
@@ -127,15 +88,7 @@ function DeleteConfirmDialog({
     }
   }
 
-  const reasons = usage ? deleteBlockReasons(usage) : [];
-  // Disabled while loading (usage === null), on a failed lookup, and whenever any reason
-  // applies — an unknown answer is treated the same as "blocked", never as "clear".
-  const blocked = usageError || usage === null || reasons.length > 0;
-  const blockedMessage = usageError
-    ? "Couldn't check where else this file is used, so deleting it outright isn't offered here."
-    : reasons.length > 0
-      ? `Can't delete the file entirely — ${joinList(reasons)}.`
-      : null;
+  const { blocked, message: blockedMessage } = deleteBlockState(usage, usageError);
 
   return createPortal(
     <div
