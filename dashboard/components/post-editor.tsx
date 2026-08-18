@@ -21,6 +21,7 @@ import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
+import { PostMediaEditor } from "@/components/post-media-editor";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
 import { captionLength } from "@/lib/caption-length";
@@ -267,6 +268,15 @@ export function PostEditor({
       {/* Read-only context strip */}
       <section className={card}>
         <div className="flex items-start gap-4">
+          <PostMediaEditor
+            postId={post.id}
+            slides={assets.map((a) => ({
+              id: a.id,
+              media_kind: a.media_kind,
+              cover_frame_ms: a.cover_frame_ms,
+            }))}
+            onChanged={() => router.refresh()}
+          />
           {isCarousel ? (
             <div className="space-y-2">
               <CarouselReorder
