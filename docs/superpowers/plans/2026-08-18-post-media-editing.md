@@ -374,7 +374,7 @@ export function checkRemoveAsset(
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd dashboard && node --conditions=react-server --import ./test/hook.mjs --test lib/post-media-edit.test.ts`
-Expected: PASS — 18 tests
+Expected: PASS — 17 tests
 
 - [ ] **Step 5: Make queries.ts delegate, so the two derivations can't drift**
 
