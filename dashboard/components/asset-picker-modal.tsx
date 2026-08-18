@@ -42,16 +42,24 @@ export function AssetPickerModal({
 
   useModalFocusTrap({ panelRef, onClose });
 
+  // Depend on the joined string, not `excludeIds` itself. Task 6's call site builds this
+  // prop inline (`excludeIds={slides.map((s) => s.id)}`), which is a new array by identity
+  // on every render of the host — including re-renders that don't touch the id set (a
+  // `busy`/`error` flip elsewhere in the parent, say). Object.is on the array would refire
+  // this effect, and thus issue a duplicate GET, on every one of those. The joined string
+  // only changes when the actual excluded ids change.
+  const excludeKey = excludeIds.join(",");
+
   useEffect(() => {
     let live = true;
-    fetch(`/api/assets?exclude=${excludeIds.join(",")}`)
+    fetch(`/api/assets?exclude=${excludeKey}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
       .then((body: { assets: PickableAsset[] }) => live && setAssets(body.assets))
       .catch(() => live && setError("Couldn't load the library."));
     return () => {
       live = false;
     };
-  }, [excludeIds]);
+  }, [excludeKey]);
 
   function toggle(id: number) {
     setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));

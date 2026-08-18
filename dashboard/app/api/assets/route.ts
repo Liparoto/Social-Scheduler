@@ -11,11 +11,15 @@ export const runtime = "nodejs";
  * would come straight back as "already_on_post".
  */
 export async function GET(req: NextRequest) {
+  // A stray double comma ("1,,3") splits to an empty string, and Number("") is 0 — which
+  // passes Number.isInteger — so filtering on isInteger alone would silently exclude asset
+  // id 0. Require a positive integer instead; ids start at 1, so this also naturally
+  // rejects the empty-string case.
   const exclude = new Set(
     (req.nextUrl.searchParams.get("exclude") ?? "")
       .split(",")
       .map(Number)
-      .filter(Number.isInteger)
+      .filter((n) => Number.isInteger(n) && n > 0)
   );
   const assets = listAssetsWithUsage()
     .filter((a) => !exclude.has(a.id))
