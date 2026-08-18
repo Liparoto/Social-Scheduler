@@ -4,6 +4,7 @@ import {
   getChannel,
   getPeriod,
   getPost,
+  getPostQuickEdit,
   getPostTargets,
   listTags,
   setCaptionVariants,
@@ -23,14 +24,20 @@ import { parseTargets } from "@/lib/story-fanout";
 export const runtime = "nodejs";
 
 /**
- * Read a post's caption variants.
+ * Read everything an editor needs to OPEN one post: its caption variants, its first
+ * comment, and its content model.
  *
- * Exists for the Library's quick-edit dialog, which opens one post at a time. The
- * alternative was carrying every post's variants in the Library list query, but captions
- * are the bulk of a post's text and per-platform variants multiply it — a few hundred KB
- * shipped on every Library load to serve a dialog that needs one post. A read on the
- * resource that already owns the write is the cheaper shape, and it adds no second write
- * path, which is the thing that actually had to stay singular.
+ * Exists for the quick-edit dialog, which opens one post at a time. The alternative was
+ * carrying every post's variants in the Library list query, but captions are the bulk of
+ * a post's text and per-platform variants multiply it — a few hundred KB shipped on every
+ * Library load to serve a dialog that needs one post. A read on the resource that already
+ * owns the write is the cheaper shape, and it adds no second write path, which is the
+ * thing that actually had to stay singular.
+ *
+ * `quick_edit` is here for callers that have a post id and nothing else — the Overview
+ * queue, whose rows are SENDS and carry no content model. The Library still seeds its
+ * dialog from the list row it already has and simply ignores this field; it is additive,
+ * so nothing that read this route before needs to change.
  */
 export async function GET(
   _req: NextRequest,
@@ -58,6 +65,9 @@ export async function GET(
     // Same reasoning as the variants: kept out of the Library list query, fetched only
     // when an editor actually opens this post.
     first_comment: post.first_comment ?? "",
+    // Non-null whenever the post exists — getPost above already established that, and
+    // both read the same row.
+    quick_edit: getPostQuickEdit(postId),
   });
 }
 

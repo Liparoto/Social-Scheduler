@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, startTransition, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { PublicationRow } from "@/lib/queries";
-import type { PublicationStatus, Platform } from "@/lib/types";
+import type { Period, PublicationStatus, Platform, Tag } from "@/lib/types";
 import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
@@ -12,8 +13,28 @@ import { groupQueueRows, cancelableIds } from "@/lib/queue-groups";
 import { splitQueueSections } from "@/lib/queue-sections";
 import { StoryGroupHeader } from "@/components/story-group-header";
 import { MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
+import { QueueQuickEdit } from "@/components/queue-quick-edit";
 
 type StatusFilter = "all" | PublicationStatus;
+
+/**
+ * Can editing this row's post still change what it publishes?
+ *
+ * Only where the answer is yes does an Edit button appear. The three excluded statuses
+ * are excluded for different reasons, and all three matter:
+ *
+ * - 'publishing' — the worker has already read the caption and is mid-flight to Meta.
+ *   A save here writes to the DB and changes nothing about the post going out right now.
+ * - 'posted'     — it's live, and Instagram's API cannot edit a published caption. The
+ *   button would look like it fixes the live post. It would not.
+ * - 'canceled'   — this send isn't going anywhere, so there is no "before it goes out".
+ *
+ * 'failed' IS editable: a failed send can be retried, and fixing whatever was wrong
+ * before retrying is the entire point.
+ */
+function isEditable(status: PublicationStatus): boolean {
+  return status === "scheduled" || status === "pending_approval" || status === "failed";
+}
 
 /**
  * Is THIS send's thumbnail a video?
@@ -75,11 +96,19 @@ const selectCls =
 export function PublicationQueue({
   pubs,
   channels,
+  periods,
+  timeOfDayTags,
+  topicTags,
   workerOnline = true,
   blockedIds = [],
 }: {
   pubs: PublicationRow[];
   channels: { id: number; account_name: string; platform: string }[];
+  /** Read server-side by the page, exactly as /library does — small, stable lists that
+   *  the quick-edit dialog needs to render its period and tag pickers. */
+  periods: Period[];
+  timeOfDayTags: Tag[];
+  topicTags: Tag[];
   workerOnline?: boolean;
   /**
    * Ids the SERVER judged blocked (see isBlocked in lib/format). Passed in rather than
@@ -89,7 +118,15 @@ export function PublicationQueue({
    */
   blockedIds?: number[];
 }) {
+  const router = useRouter();
   const blocked = new Set(blockedIds);
+  // The POST being edited, not the send. Several rows can share one post (every slide of
+  // a story, every channel of a fan-out) and they all open the same dialog. The status
+  // rides along only so the dialog can be honest about what the edit reaches — a failed
+  // send isn't counted as "queued" but a Retry will still publish the edited caption.
+  const [editing, setEditing] = useState<{ postId: number; status: PublicationStatus } | null>(
+    null
+  );
   // Which send's media is open, if any. Seeded with the one asset the row already has so
   // the viewer opens instantly; the rest of a carousel arrives from the fetch below.
   const [openMedia, setOpenMedia] = useState<{
@@ -515,6 +552,18 @@ export function PublicationQueue({
                     ) : null}
                   </td>
                   <td className="px-4 py-3 text-right">
+                    {/* Edits the POST, which is why it sits apart from the controls below
+                        — those all act on this one send. */}
+                    {isEditable(p.status) ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditing({ postId: p.post_id, status: p.status })}
+                        className="mb-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink-soft hover:border-brand hover:text-brand"
+                        title="Edit this post's caption, tags and status before it goes out"
+                      >
+                        Edit
+                      </button>
+                    ) : null}
                     <PublicationActions
                       id={p.id}
                       status={p.status}
@@ -553,6 +602,25 @@ export function PublicationQueue({
           )}
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
+        />
+      ) : null}
+
+      {editing !== null ? (
+        <QueueQuickEdit
+          // Remount on a different post so no edit state can carry across.
+          key={editing.postId}
+          postId={editing.postId}
+          isFailedSend={editing.status === "failed"}
+          periods={periods}
+          timeOfDayTags={timeOfDayTags}
+          topicTags={topicTags}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            // The queue rows carry the caption they were rendered with, so without this
+            // a successful save leaves the old text sitting on screen underneath it.
+            startTransition(() => router.refresh());
+          }}
         />
       ) : null}
     </div>

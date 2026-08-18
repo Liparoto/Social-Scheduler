@@ -1549,6 +1549,110 @@ export function listPosts(limit?: number): PostLibraryRow[] {
   }));
 }
 
+/**
+ * Everything the quick-edit dialog needs about ONE post, for a caller that has only a
+ * post id.
+ *
+ * The Library gets these fields free — `listPosts` already computes them for every card,
+ * and its dialog is handed the row it was opened from. The Overview queue can't do that:
+ * a queue row is a SEND, so it carries `post_id` and send-shaped data and none of the
+ * post's content model. Widening PUBLICATION_ROW_SELECT to cover it would ship a post's
+ * tags and period links once per send — four times over for a four-slide story — on a
+ * page that already renders the whole queue, all to serve a dialog that opens one post
+ * at a time.
+ *
+ * So: the same subqueries as `listPosts`, for a single post, read when a dialog actually
+ * opens. Deliberately mirrors the shape `listPosts` produces (CSV columns and all) so the
+ * two callers hand the dialog the same thing and can't drift into disagreeing about what
+ * a post's tags are.
+ */
+export interface PostQuickEditRow {
+  id: number;
+  caption: string | null;
+  post_type: PostType;
+  content_status: ContentStatus;
+  content_kind: ContentKind;
+  cooldown_days: number | null;
+  tag_ids: number[];
+  /** Every link as stored — a period appears twice when it has both modes. */
+  periods: { id: number; mode: PeriodMode }[];
+  /** Distinct platforms this post targets, i.e. what a generic caption is held to. */
+  target_platforms: string[];
+  asset_count: number;
+  /**
+   * Sends still genuinely queued. Excludes 'publishing' for the same reason the Library's
+   * copy does: a send already mid-publish can't be reordered or re-read, so counting it
+   * would overstate what an edit can still reach.
+   */
+  queued_publication_count: number;
+}
+
+export function getPostQuickEdit(postId: number): PostQuickEditRow | undefined {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT p.id, p.caption, p.post_type, p.content_status, p.content_kind,
+              p.cooldown_days,
+         (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
+         (SELECT GROUP_CONCAT(pt.tag_id) FROM post_tags pt
+            WHERE pt.post_id = p.id) AS tag_ids_csv,
+         (SELECT GROUP_CONCAT(DISTINCT c.platform) FROM post_targets pt2
+            JOIN channels c ON c.id = pt2.channel_id WHERE pt2.post_id = p.id)
+              AS target_platforms,
+         (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status IN ('scheduled','pending_approval'))
+              AS queued_publication_count
+       FROM posts p
+      WHERE p.id = ?`
+    )
+    .get(postId) as
+    | {
+        id: number;
+        caption: string | null;
+        post_type: PostType;
+        content_status: ContentStatus;
+        content_kind: ContentKind;
+        cooldown_days: number | null;
+        asset_count: number;
+        tag_ids_csv: string | null;
+        target_platforms: string | null;
+        queued_publication_count: number;
+      }
+    | undefined;
+  if (!row) return undefined;
+
+  // ORDER BY mode matters, and only looks cosmetic. A post can hold BOTH a green and a
+  // blackout link on the same period (post_periods' PK is (post_id, period_id, mode), and
+  // bulk edit and carousel merges both produce it), and the dialog's one-mode-per-period
+  // control collapses that with LATER ROWS WINNING. Unordered, the winner is whatever the
+  // query planner happened to emit, so the Overview could show Blackout for a period the
+  // Library shows as Green. `pp.mode ASC` is the order listPosts already uses — matching
+  // it is what keeps the two dialogs saying the same thing about the same post.
+  const periods = db
+    .prepare(
+      "SELECT period_id, mode FROM post_periods WHERE post_id = ? ORDER BY period_id ASC, mode ASC"
+    )
+    .all(postId) as { period_id: number; mode: PeriodMode }[];
+
+  // GROUP_CONCAT gives NULL for no rows and never an empty string, so the guard is enough
+  // — ''.split(',') would otherwise yield [''] and, for the tags, [NaN].
+  const csv = (value: string | null) => (value ? value.split(",") : []);
+
+  return {
+    id: row.id,
+    caption: row.caption,
+    post_type: row.post_type,
+    content_status: row.content_status,
+    content_kind: row.content_kind,
+    cooldown_days: row.cooldown_days,
+    asset_count: row.asset_count,
+    tag_ids: csv(row.tag_ids_csv).map(Number),
+    target_platforms: csv(row.target_platforms),
+    queued_publication_count: row.queued_publication_count,
+    periods: periods.map((p) => ({ id: p.period_id, mode: p.mode })),
+  };
+}
+
 export interface BulkEntry {
   post_id: number;
   channel_id: number;

@@ -84,6 +84,8 @@ export function QuickEditModal({
   periods,
   timeOfDayTags,
   topicTags,
+  initialCaptions,
+  note,
   onClose,
   onSaved,
 }: {
@@ -91,6 +93,22 @@ export function QuickEditModal({
   periods: Period[];
   timeOfDayTags: Tag[];
   topicTags: Tag[];
+  /**
+   * Captions the caller already has, which skips the fetch below.
+   *
+   * For a caller that reached this dialog through GET /api/posts/[id]/content — the
+   * Overview queue, which needs that route anyway to learn the post's content model —
+   * the response already carried the variants. Refetching the identical URL a moment
+   * later would be the same round trip twice.
+   *
+   * ⚠️ Pass this ONLY when the captions genuinely arrived. Passing [] for "not loaded
+   * yet" would read as "this post has no captions" and the first save would write that
+   * emptiness over the real ones — the exact wipe the null-until-loaded state exists to
+   * prevent. Leave it undefined and let the dialog fetch.
+   */
+  initialCaptions?: CaptionVariantDraft[];
+  /** One line of context under the title, for callers that opened this from elsewhere. */
+  note?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -110,13 +128,18 @@ export function QuickEditModal({
   const [error, setError] = useState<string | null>(null);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // openedCaptions stays null until the fetch lands. While it is null the dialog has no
-  // idea what this post's captions are, so it must not send any — see the header.
-  const [openedCaptions, setOpenedCaptions] = useState<CaptionVariantDraft[] | null>(null);
-  const [captions, setCaptions] = useState<CaptionVariantDraft[]>([]);
+  // idea what this post's captions are, so it must not send any — see the header. A
+  // caller that already fetched them hands them over and this starts out non-null.
+  const [openedCaptions, setOpenedCaptions] = useState<CaptionVariantDraft[] | null>(
+    initialCaptions ?? null
+  );
+  const [captions, setCaptions] = useState<CaptionVariantDraft[]>(initialCaptions ?? []);
   const [captionError, setCaptionError] = useState<string | null>(null);
   const [captionAttempt, setCaptionAttempt] = useState(0);
 
+  const hasInitialCaptions = initialCaptions !== undefined;
   useEffect(() => {
+    if (hasInitialCaptions) return;
     const controller = new AbortController();
     async function loadCaptions() {
       try {
@@ -140,7 +163,7 @@ export function QuickEditModal({
     }
     loadCaptions();
     return () => controller.abort();
-  }, [post.id, captionAttempt]);
+  }, [post.id, captionAttempt, hasInitialCaptions]);
 
   const isCarousel = post.post_type === "carousel" && post.asset_count > 1;
   // null until the fetch lands. While it is null there is nothing to reorder and nothing
@@ -311,6 +334,12 @@ export function QuickEditModal({
             ✕
           </button>
         </div>
+
+        {/* Says what this edit reaches, for a caller where that isn't obvious. On the
+            Overview the row you clicked is ONE send, but a caption belongs to the post —
+            so the edit lands on every channel that post is queued to, not just the row
+            under the cursor. */}
+        {note ? <p className="mt-1 text-xs text-muted">{note}</p> : null}
 
         {isCarousel && orderAssets ? (
           <div className="space-y-2">

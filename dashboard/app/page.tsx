@@ -4,6 +4,8 @@ import {
   getActiveChannels,
   getPublicationsOverview,
   getWorkerStatus,
+  listPeriods,
+  listTags,
 } from "@/lib/queries";
 import { PageHeader, ChannelChip, EmptyState } from "@/components/ui";
 import { RefreshAllMetrics } from "@/components/refresh-all-metrics";
@@ -128,6 +130,12 @@ export default function OverviewPage() {
             <PublicationQueue
               pubs={pubs}
               channels={channels}
+              // For the quick-edit dialog a queue row can open. Read here rather than
+              // fetched by the dialog because they are small, shared by every post, and
+              // already on the server — the same call /library makes.
+              periods={listPeriods()}
+              timeOfDayTags={listTags("time_of_day")}
+              topicTags={listTags("topic")}
               workerOnline={worker.online}
               blockedIds={blockedIds}
             />
