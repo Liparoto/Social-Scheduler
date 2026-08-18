@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { videoPreviewSrc } from "@/lib/format";
 import { stepIndex } from "@/lib/lightbox-nav";
+import { DownloadMediaButton } from "./download-media-button";
 import { useModalFocusTrap } from "./use-modal-focus-trap";
 
 /** The minimum an asset needs to be shown full-size — see media-lightbox-design.md. */
@@ -161,6 +162,10 @@ export function LightboxPanel({
       >
         <CloseGlyph />
       </button>
+
+      {/* Downloads the CURRENT slide, so on a carousel you get the one you are looking at
+          rather than always the first. */}
+      <DownloadMediaButton assetId={asset.id} label={label} variant="lightbox" />
 
       {many ? (
         <>

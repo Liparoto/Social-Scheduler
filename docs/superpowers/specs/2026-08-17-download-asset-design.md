@@ -92,10 +92,19 @@ A plain anchor. No fetch, no blob, no clipboard API:
 <a href={`/api/media/${assetId}?download=1`} download>
 ```
 
-One shared component in `components/download-media-button.tsx`, with a `variant` prop for
-the two placements:
-- `"lightbox"` — a labelled button beside the existing Close control
-- `"overlay"` — a small icon that fades in on thumbnail hover, styled to match `MediaBadge`
+One shared component in `components/download-media-button.tsx`, with a `variant` prop.
+Three variants rather than two, because measuring the real grids in the browser showed the
+two thumbnail surfaces are nothing like the same size:
+
+- `"lightbox"` — icon button in the full-size viewer, top-left. Close owns the top-right and
+  the carousel chevrons own the vertical midpoints; that corner is the only free one.
+- `"overlay"` — always visible, 24px, beside `MediaBadge`. For Media Manager, whose tiles
+  measure **230×230**.
+- `"overlay-compact"` — 20px, opposite corner from `MediaBadge`, hidden until the card is
+  hovered or the link is focused. For Library card chips, which measure **64×64** — a
+  second always-visible 24px control there covers most of the picture the chip exists to
+  show. Keyboard access is preserved via `focus-visible`, and touch users reach the
+  always-visible lightbox button, which is where tapping the chip leads anyway.
 
 The component stops click propagation. Both thumbnail grids sit inside click-to-open cards,
 so without it a download click would also pop the lightbox open behind the save.
@@ -105,8 +114,8 @@ so without it a download click would also pop the lightbox open behind the save.
 | File | Placement |
 |---|---|
 | `components/media-lightbox.tsx` | `lightbox` variant, in the control cluster |
-| `components/media-manager.tsx` | `overlay` on each thumbnail |
-| `components/library-view.tsx` | `overlay` on each card thumbnail |
+| `components/media-manager.tsx` | `overlay` on each 230px tile |
+| `components/library-view.tsx` | `overlay-compact` on each 64px card chip |
 
 The lightbox is reached from Library, Post editor, Queue and Media Manager, so one button
 there covers four surfaces. Small chips (calendar, slide reorder, bulk import) are
@@ -129,5 +138,26 @@ Instagram renders served by a different route, not local assets).
 - `test/media-download-route.test.ts` — header present and correct on `?download=1`, absent
   without it, original served rather than thumb/derivative
 - `npm run lint` stays at 0 errors
-- A real browser pass confirming a file actually lands on disk. A rendered-markup test
-  cannot prove a download happened, and the hover overlay needs a real pointer.
+- A real browser pass, since a rendered-markup test cannot prove a download happened and
+  the compact overlay needs a real pointer.
+
+### What the browser pass actually showed (2026-08-17)
+
+- 111 download links render across the Library grid; the compact ones correctly stay
+  `opacity-0` until hover, and appear on hover.
+- Live headers against real assets:
+  `attachment; filename="YELLOWSTONE 2.jpg"; filename*=UTF-8''YELLOWSTONE%202.jpg` — the
+  space is literal inside the quoted form and percent-encoded in the RFC 5987 form, as it
+  should be.
+- `?download=1` returned 9,905,067 bytes where `?variant=thumb` returned 39,643 — proof the
+  original is served rather than the thumbnail.
+- The in-app browser sandbox blocks downloads, so the save itself was proven with
+  `curl -OJ` (which obeys Content-Disposition): files landed as `IMG_4007-2.jpg` and
+  `YELLOWSTONE 2.jpg`, full resolution, EXIF intact.
+
+### One harness fix this required
+
+`test/ui-hook.mjs` resolved extensionless relative imports as `.ts` only, so any component
+importing a sibling **`.tsx`** failed to load and took its parent's UI test down with an
+error naming the import rather than the cause. The `@/` branch beside it had always handled
+both; the relative branch now does too.

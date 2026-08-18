@@ -19,6 +19,7 @@ import {
   type LibrarySeasonStatus,
 } from "@/lib/library-season-status";
 import { PLATFORMS, incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
+import { DownloadMediaButton } from "@/components/download-media-button";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import { CarouselStack } from "@/components/carousel-stack";
 import { MergeModal, type MergeCandidatePost } from "@/components/merge-modal";
@@ -585,7 +586,9 @@ export function LibraryView({
               }`}
             >
               <CarouselStack count={p.asset_count}>
-              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
+              {/* `group` drives the download control's hover reveal — see
+                  download-media-button.tsx, "overlay-compact". */}
+              <div className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-surface-sunken">
                 <Link
                   href={`/library/${p.id}`}
                   onClick={(e) => e.stopPropagation()}
@@ -631,6 +634,13 @@ export function LibraryView({
                   <span className="data absolute inset-0 flex items-center justify-center bg-brand/70 text-sm font-semibold text-white">
                     {order}
                   </span>
+                ) : null}
+                {p.first_asset_id ? (
+                  <DownloadMediaButton
+                    assetId={p.first_asset_id}
+                    label={p.caption ?? `Post ${p.id}`}
+                    variant="overlay-compact"
+                  />
                 ) : null}
                 {p.first_asset_id && p.first_asset_media_kind ? (
                   <MediaBadge

@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { humanBytes, videoPreviewSrc } from "@/lib/format";
+import { DownloadMediaButton } from "@/components/download-media-button";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "@/components/media-lightbox";
 import type { AssetWithUsage } from "@/lib/queries";
 
@@ -107,6 +108,7 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
                     className="h-full w-full object-cover"
                   />
                 )}
+                <DownloadMediaButton assetId={a.id} label={name} variant="overlay" />
                 <MediaBadge
                   mediaKind={a.media_kind}
                   label={name}

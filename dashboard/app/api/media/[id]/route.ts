@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "@/lib/config";
+import { contentDisposition, downloadFilename } from "@/lib/download-filename";
 import { getAsset } from "@/lib/queries";
 import { needsStoryCanvas, renderStoryCanvas, type StoryMode } from "@/lib/story-canvas";
 
@@ -22,8 +23,17 @@ const MIME_BY_EXT: Record<string, string> = {
  * EVERY variant goes through here rather than each branch doing its own read: Range
  * handling (206) is what makes a <video> seekable at all, and duplicating it per variant is
  * how one branch quietly loses it. See the Range comment below for what breaks without it.
+ *
+ * `disposition`, when given, is the full Content-Disposition value and turns the response
+ * from something the browser renders into something it saves. It is applied to the 206 as
+ * well as the 200 so a resumed or ranged download keeps its filename rather than reverting
+ * to the URL's last path segment (which here is a bare numeric id).
  */
-async function serveFile(rel: string, req: NextRequest): Promise<NextResponse> {
+async function serveFile(
+  rel: string,
+  req: NextRequest,
+  disposition?: string
+): Promise<NextResponse> {
   const base = path.resolve(config.assetStorageDir);
   const abs = path.resolve(base, rel);
   if (!abs.startsWith(base + path.sep)) {
@@ -74,6 +84,7 @@ async function serveFile(rel: string, req: NextRequest): Promise<NextResponse> {
           "Accept-Ranges": "bytes",
           "Content-Range": `bytes ${start}-${end}/${total}`,
           "Content-Length": String(end - start + 1),
+          ...(disposition ? { "Content-Disposition": disposition } : {}),
         },
       });
     }
@@ -84,6 +95,7 @@ async function serveFile(rel: string, req: NextRequest): Promise<NextResponse> {
         "Cache-Control": "private, max-age=3600",
         "Accept-Ranges": "bytes",
         "Content-Length": String(buf.length),
+        ...(disposition ? { "Content-Disposition": disposition } : {}),
       },
     });
   } catch {
@@ -102,6 +114,22 @@ export async function GET(
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
   const variant = req.nextUrl.searchParams.get("variant");
+
+  // Saving a copy to the viewer's computer. Deliberately placed ABOVE every variant branch
+  // below, because a download means the ORIGINAL as uploaded — never the thumbnail, the
+  // story canvas, or (for video) the H.264 derivative the preview substitutes so Chrome can
+  // decode it. Those exist to make the browser show something; none of them is the file the
+  // owner actually uploaded and is now asking for a copy of.
+  //
+  // Where the file lands is the browser's business, not ours. Content-Disposition is the
+  // portable instruction: with "ask where to save each file" ticked it opens a save dialog,
+  // and without it the file goes straight to Downloads. showSaveFilePicker() would have
+  // given a dialog directly but is Chromium-only — it does not exist in Safari, so it would
+  // silently do nothing for this install's owner.
+  if (req.nextUrl.searchParams.get("download")) {
+    const name = downloadFilename(asset.original_filename, asset.id, asset.storage_path);
+    return serveFile(asset.storage_path, req, contentDisposition(name));
+  }
 
   // A story canvas may not exist on disk yet. The framing dialog has to show BOTH options
   // before either is chosen, and generating a canvas for every upload would burn CPU and

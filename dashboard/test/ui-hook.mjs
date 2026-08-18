@@ -31,10 +31,18 @@ registerHooks({
       if (!existsSync(bare) && existsSync(tsx)) return next(tsx.href, ctx);
       return next(bare.href, ctx);
     }
+    // Extensionless relative import. Tries .tsx as well as .ts — a component importing a
+    // sibling COMPONENT (./download-media-button) is at least as common as importing a
+    // sibling hook (./use-modal-focus-trap), and while .ts-only resolution worked it made
+    // the parent untestable with an error that names the import rather than the cause.
+    // Mirrors the "@/" branch above, which has always handled both.
     if (spec.startsWith(".") && !/\.[a-z]+$/i.test(spec)) {
       const bare = new URL(spec, ctx.parentURL);
-      const ts = new URL(spec + ".ts", ctx.parentURL);
-      if (!existsSync(bare) && existsSync(ts)) return next(spec + ".ts", ctx);
+      if (!existsSync(bare)) {
+        for (const ext of [".ts", ".tsx"]) {
+          if (existsSync(new URL(spec + ext, ctx.parentURL))) return next(spec + ext, ctx);
+        }
+      }
     }
     return next(spec, ctx);
   },
