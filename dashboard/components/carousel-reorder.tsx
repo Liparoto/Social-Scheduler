@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import { SlideReorder, type Slide } from "@/components/slide-reorder";
+import { useState } from "react";
 
 /** The least a slide needs to be reordered and drawn. Matches what GET /assets returns. */
 export interface OrderableAsset {
@@ -12,11 +11,17 @@ export interface OrderableAsset {
 /**
  * Slide-order state and the one PATCH that saves it.
  *
- * Lives in a hook rather than inside <CarouselReorder> because the two screens that can
- * reorder disagree about when saving happens: the post detail page has its own Save
- * button, while the quick-edit dialog saves everything through a single Save and would
- * quietly lose work if a control inside it saved on its own schedule. The hook is what
- * keeps the write itself singular; the button belongs to whoever is hosting it.
+ * Lives in a hook rather than inside the strip that draws the slides (<PostMediaEditor>)
+ * because the two screens that can reorder disagree about when saving happens: the post
+ * detail page has its own Save button, while the quick-edit dialog saves everything through
+ * a single Save and would quietly lose work if a control inside it saved on its own
+ * schedule. The hook is what keeps the write itself singular; the button belongs to whoever
+ * is hosting it.
+ *
+ * The grid that used to live alongside this hook is gone (2026-08-18) — it drew a second
+ * copy of every slide next to <PostMediaEditor>'s, so the reorder affordances moved into
+ * that one strip instead. `isDirty` is now also what warns before an add or a remove
+ * discards an order in progress.
  */
 export function useAssetOrder(postId: number, assets: OrderableAsset[]) {
   const savedOrder = assets.map((a) => a.id);
@@ -73,51 +78,4 @@ export function useAssetOrder(postId: number, assets: OrderableAsset[]) {
     save,
     error,
   };
-}
-
-/**
- * The reorder grid for a carousel that already exists, plus the one thing the user needs
- * told before they save it. Controlled — it holds no state of its own, so the host can
- * decide when the order is written (see useAssetOrder above).
- */
-export function CarouselReorder({
-  assets,
-  order,
-  onOrderChange,
-  queuedSendCount,
-  renderExtra,
-}: {
-  assets: OrderableAsset[];
-  order: number[];
-  onOrderChange: (next: number[]) => void;
-  queuedSendCount: number;
-  // Mirrors SlideReorder's own renderExtra, keyed by asset id rather than by Slide so
-  // callers don't need to know this component's internal Slide shape. OrderableAsset
-  // deliberately doesn't carry conform fields (see above) — a caller with the full
-  // Asset[] server-side (the post detail page, for FramingButton) supplies this;
-  // quick edit, whose assets come from GET /api/posts/[id]/assets, simply doesn't.
-  renderExtra?: (assetId: number, index: number) => ReactNode;
-}) {
-  const byId = new Map(assets.map((a) => [a.id, a]));
-  // An id in `order` that no longer exists on the post is dropped rather than rendered as
-  // a broken thumbnail. It shouldn't happen — the PATCH refuses non-permutations — but a
-  // stale prop mid-refresh must not take the page down.
-  const slides: Slide[] = order
-    .filter((id) => byId.has(id))
-    .map((id, index) => ({ assetId: id, label: `Slide ${index + 1}` }));
-
-  return (
-    <div className="space-y-2">
-      <SlideReorder
-        slides={slides}
-        onReorder={(next) => onOrderChange(next.map((s) => s.assetId))}
-        renderExtra={renderExtra ? (slide, index) => renderExtra(slide.assetId, index) : undefined}
-      />
-      {queuedSendCount > 0 ? (
-        <p className="data text-[11px] text-muted">
-          {queuedSendCount} queued send{queuedSendCount === 1 ? "" : "s"} will go out in this order.
-        </p>
-      ) : null}
-    </div>
-  );
 }
