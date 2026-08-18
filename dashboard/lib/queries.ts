@@ -20,9 +20,9 @@ import type {
   Surface,
   Tag,
 } from "./types";
-import type { Platform } from "./platforms";
+import type { ChannelLikeForCompat, Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
-import { derivePostTypeFromKinds } from "./post-media-edit";
+import { derivePostTypeFromKinds, type Slide } from "./post-media-edit";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
 import {
   planUnmerge,
@@ -603,6 +603,180 @@ export function reorderPostAssets(postId: number, assetIds: number[]): void {
   });
   tx();
 }
+
+// ---- Adding and removing a post's slides ------------------------------------------
+// The write half of lib/post-media-edit.ts. Every guard here is ON the write statement
+// rather than in front of it, for the same reason deletePost()'s is: the worker may take
+// this post live between the check and the write, and a slide list rewritten underneath a
+// container being built is the one way this can publish something genuinely wrong.
+
+/** A post's slides with the one extra field the media rules need: media_kind. */
+export function getPostSlides(postId: number): Slide[] {
+  return getDb()
+    .prepare(
+      `SELECT pa.asset_id AS asset_id, a.media_kind AS media_kind
+         FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+        WHERE pa.post_id = ? ORDER BY pa.sort_order ASC`
+    )
+    .all(postId) as Slide[];
+}
+
+/**
+ * Has this post actually gone out, or is it going out right now?
+ *
+ * The same live-send definition deletePost() uses. Deliberately NOT posts.status, which
+ * migrations/0001_init.sql documents as the coarse overview lifecycle hint: a post can sit
+ * at status='scheduled' while one of its two sends is already on Instagram.
+ */
+export function postHasLiveSend(postId: number): boolean {
+  const row = getDb()
+    .prepare(
+      "SELECT 1 FROM publications WHERE post_id = ? AND status IN ('posted','publishing') LIMIT 1"
+    )
+    .get(postId);
+  return row !== undefined;
+}
+
+/**
+ * The channels a media change on this post still has to satisfy: what it is targeted at,
+ * plus what it already has queued. A send can exist without a target row and vice versa,
+ * and either would fail at publish if the slide count outgrew it.
+ *
+ * An untargeted draft falls back to Instagram for the same reason mergeTargetPlatforms
+ * does: 10 is the strictest carousel cap here, and a draft that isn't pointed anywhere yet
+ * can be pointed anywhere later, so it has to satisfy the tightest limit rather than none.
+ */
+export function getPostCompatChannels(postId: number): ChannelLikeForCompat[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT c.id AS id, c.platform AS platform, c.account_name AS account_name
+         FROM channels c
+        WHERE c.id IN (SELECT channel_id FROM post_targets WHERE post_id = @id)
+           OR c.id IN (SELECT channel_id FROM publications
+                        WHERE post_id = @id AND status <> 'canceled')`
+    )
+    .all({ id: postId }) as ChannelLikeForCompat[];
+  return rows.length > 0 ? rows : [{ id: 0, platform: "instagram", account_name: "Instagram" }];
+}
+
+/** How many OTHER posts hold this asset — what makes "delete entirely" safe or not. */
+export function countOtherPostsUsingAsset(postId: number, assetId: number): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM post_assets WHERE asset_id = ? AND post_id <> ?")
+    .get(assetId, postId) as { n: number };
+  return row.n;
+}
+
+/** Append slides to a post. `postType` comes from checkAddAssets — never re-derived here. */
+export function addPostAssets(
+  postId: number,
+  assetIds: number[],
+  postType: PostType
+): "ok" | "has_live" {
+  const db = getDb();
+  const nextOrder = db.prepare(
+    "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM post_assets WHERE post_id = ?"
+  );
+  // The NOT EXISTS is the guard: if a send went live since checkAddAssets ran, this
+  // inserts 0 rows and the whole transaction rolls back.
+  const link = db.prepare(
+    `INSERT INTO post_assets (post_id, asset_id, sort_order)
+     SELECT @post, @asset, @order
+      WHERE NOT EXISTS (SELECT 1 FROM publications
+                         WHERE post_id = @post AND status IN ('posted','publishing'))`
+  );
+  const retype = db.prepare("UPDATE posts SET post_type = ?, updated_at = ? WHERE id = ?");
+
+  const tx = db.transaction(() => {
+    let order = (nextOrder.get(postId) as { n: number }).n;
+    for (const assetId of assetIds) {
+      const info = link.run({ post: postId, asset: assetId, order });
+      if (info.changes === 0) throw new LiveSendError();
+      order += 1;
+    }
+    retype.run(postType, nowIso(), postId);
+  });
+
+  try {
+    tx();
+    return "ok";
+  } catch (err) {
+    if (err instanceof LiveSendError) return "has_live";
+    throw err;
+  }
+}
+
+/**
+ * Remove one slide, optionally deleting the asset outright.
+ *
+ * Order inside the transaction matters: post_assets.asset_id is REFERENCES assets(id) ON
+ * DELETE RESTRICT, so the link has to go first. And the asset DELETE carries its own
+ * NOT EXISTS so a second post that picked this asset up mid-request cannot lose its file.
+ *
+ * Deleting the FILES is the caller's job, deliberately: it happens after this returns "ok",
+ * so a failed row delete can never leave files deleted. Same order DELETE /api/assets/[id]
+ * already uses.
+ *
+ * The hole a removal leaves in sort_order is closed by clearing and reinserting every
+ * surviving row for the post — the same approach reorderPostAssets uses, and for the same
+ * reason: UNIQUE (post_id, sort_order) is checked per-row and immediately, so an in-place
+ * `sort_order = sort_order - 1` shuffle can collide with a row SQLite hasn't updated yet
+ * depending on the order it visits rows in. Clear-and-reinsert never collides because
+ * nothing is ever written to a sort_order another surviving row still occupies.
+ */
+export function removePostAsset(
+  postId: number,
+  assetId: number,
+  postType: PostType,
+  alsoDeleteAsset: boolean
+): "ok" | "has_live" | "still_used" {
+  const db = getDb();
+  const unlink = db.prepare(
+    `DELETE FROM post_assets
+      WHERE post_id = @post AND asset_id = @asset
+        AND NOT EXISTS (SELECT 1 FROM publications
+                         WHERE post_id = @post AND status IN ('posted','publishing'))`
+  );
+  const remaining = db.prepare(
+    "SELECT asset_id AS asset_id FROM post_assets WHERE post_id = ? ORDER BY sort_order ASC"
+  );
+  const clear = db.prepare("DELETE FROM post_assets WHERE post_id = ?");
+  const relink = db.prepare(
+    "INSERT INTO post_assets (post_id, asset_id, sort_order) VALUES (?, ?, ?)"
+  );
+  const dropAsset = db.prepare(
+    `DELETE FROM assets
+      WHERE id = @asset
+        AND NOT EXISTS (SELECT 1 FROM post_assets WHERE asset_id = @asset)`
+  );
+  const retype = db.prepare("UPDATE posts SET post_type = ?, updated_at = ? WHERE id = ?");
+
+  const tx = db.transaction(() => {
+    if (unlink.run({ post: postId, asset: assetId }).changes === 0) throw new LiveSendError();
+    // UNIQUE(post_id, sort_order) means the hole left behind must be closed, or the next
+    // append lands on a number that is already taken.
+    const survivors = remaining.all(postId) as { asset_id: number }[];
+    clear.run(postId);
+    survivors.forEach((row, index) => relink.run(postId, row.asset_id, index));
+    if (alsoDeleteAsset && dropAsset.run({ asset: assetId }).changes === 0) {
+      throw new StillUsedError();
+    }
+    retype.run(postType, nowIso(), postId);
+  });
+
+  try {
+    tx();
+    return "ok";
+  } catch (err) {
+    if (err instanceof LiveSendError) return "has_live";
+    if (err instanceof StillUsedError) return "still_used";
+    throw err;
+  }
+}
+
+/** Rollback signals. Thrown only inside the transactions above, never escaping this file. */
+class LiveSendError extends Error {}
+class StillUsedError extends Error {}
 
 // ---- Posts + publications (the scheduling write) --------------------------------
 
