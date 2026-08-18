@@ -22,6 +22,7 @@ import type {
 } from "./types";
 import type { Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
+import { derivePostTypeFromKinds } from "./post-media-edit";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
 import {
   planUnmerge,
@@ -758,17 +759,15 @@ export interface CreateDraftInput extends ContentModelInput {
  * caller does not have to know.
  */
 function derivePostType(db: DatabaseType.Database, assetIds: number[]): PostType {
-  // No assets: left as "single" deliberately rather than guessed at "text". A text post
-  // always states its type (see /api/posts/draft), so anything reaching here with no
-  // assets is an incomplete draft, and changing its type is a separate decision from
-  // fixing the video case.
-  if (assetIds.length === 0) return "single";
-  if (assetIds.length > 1) return "carousel";
-
+  // The rule itself lives in lib/post-media-edit.ts so the add/remove endpoints and this
+  // creation path can never disagree about what a post's type is. This function is only
+  // the database half: fetch the kinds, then ask.
+  if (assetIds.length === 0) return derivePostTypeFromKinds([]);
+  if (assetIds.length > 1) return derivePostTypeFromKinds(["image", "image"]);
   const row = db
     .prepare("SELECT media_kind FROM assets WHERE id = ?")
     .get(assetIds[0]) as { media_kind: string } | undefined;
-  return row?.media_kind === "video" ? "reel" : "single";
+  return derivePostTypeFromKinds([row?.media_kind ?? "image"]);
 }
 
 export function createDraftPost(input: CreateDraftInput): number {
