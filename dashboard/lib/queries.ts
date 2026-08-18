@@ -763,6 +763,11 @@ function derivePostType(db: DatabaseType.Database, assetIds: number[]): PostType
   // creation path can never disagree about what a post's type is. This function is only
   // the database half: fetch the kinds, then ask.
   if (assetIds.length === 0) return derivePostTypeFromKinds([]);
+  // "image", "image" here are placeholders standing in only for the COUNT (2), not real
+  // kinds — derivePostTypeFromKinds only checks kinds.length > 1 in this branch and never
+  // inspects the values themselves, so a fake pair is harmless today. But if that function
+  // ever needs to look at the actual kinds (e.g. to reject a carousel containing a video),
+  // this call site must start fetching the real per-asset kinds instead of faking them.
   if (assetIds.length > 1) return derivePostTypeFromKinds(["image", "image"]);
   const row = db
     .prepare("SELECT media_kind FROM assets WHERE id = ?")

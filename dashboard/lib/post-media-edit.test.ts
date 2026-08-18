@@ -86,6 +86,14 @@ test("two videos at once are refused", () => {
   assert.equal(res.code, "video_mix");
 });
 
+test("the same asset listed twice in one request is refused", () => {
+  const res = checkAddAssets(ctx({ slides: [img(1)] }), [img(9), img(9)]);
+  assert.equal(res.ok, false);
+  if (res.ok) return;
+  assert.equal(res.code, "bad_body");
+  assert.equal(res.status, 400);
+});
+
 test("a lone video on an empty post becomes a reel", () => {
   const res = checkAddAssets(ctx({ slides: [] }), [vid(9)]);
   assert.equal(res.ok, true);
