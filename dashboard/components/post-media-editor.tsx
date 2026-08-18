@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { videoPreviewSrc } from "@/lib/format";
 import { AssetPickerModal } from "@/components/asset-picker-modal";
 import { deleteBlockState, type UsageCounts } from "@/lib/media-delete-confirm";
+import { LIVE_SEND_MESSAGE } from "@/lib/post-media-edit";
 import { useModalFocusTrap } from "./use-modal-focus-trap";
 
 export interface EditorSlide {
@@ -175,6 +176,7 @@ export function PostMediaEditor({
   postId,
   slides,
   onChanged,
+  hasLiveSend = false,
   reorder,
   renderTile,
   renderExtra,
@@ -183,6 +185,21 @@ export function PostMediaEditor({
   /** Every slide on the post. Drawn in `reorder.order` when reordering is on. */
   slides: EditorSlide[];
   onChanged: () => void;
+  /**
+   * Has any publication of this post reached the platform — 'posted' or 'publishing'?
+   *
+   * When true, EVERY media control is disabled and the strip says why. The server already
+   * refuses these edits with `live_send`, so nothing was ever destroyed — but the delete
+   * confirm's own usage lookup happily reported "nothing else references this file" for a
+   * published FEED carousel (a feed publication has `asset_id IS NULL`, so it isn't one of
+   * the references it counts), which meant a red "Delete the file entirely" button was
+   * being OFFERED on a post that is already on Instagram. Never offer an action that
+   * cannot succeed, least of all the irreversible one.
+   *
+   * Defaults to false so a host that genuinely cannot have a live send (a fresh compose)
+   * needs no ceremony; every host that edits an EXISTING post passes it.
+   */
+  hasLiveSend?: boolean;
   /**
    * Omit when there is nothing to reorder (a single image, a Reel), or when the host
    * doesn't offer reordering. Numbering and the ← → arrows appear only when this is
@@ -268,10 +285,41 @@ export function PostMediaEditor({
     }
   }
 
+  /**
+   * Ask whether this post can take a new slide at all, BEFORE uploading anything.
+   *
+   * /api/assets/upload writes the original, a conformed derivative and a thumbnail into
+   * /data and only then returns an id — so without this, every attempt on a post that is
+   * live, Story-queued or text-only left another orphaned copy in the library before
+   * attach() got to report the refusal. Returns the server's own sentence to show, or null
+   * when adding is allowed.
+   *
+   * Fail-OPEN on a network error, deliberately: this is an optimisation, not the guard.
+   * POST /api/posts/[id]/assets re-checks every one of these rules and is the thing that
+   * actually refuses. Blocking the upload because a pre-flight couldn't be reached would
+   * turn a tidiness measure into a way to lose a working feature.
+   */
+  async function preflightAdd(): Promise<string | null> {
+    try {
+      const res = await fetch(`/api/posts/${postId}/assets/can-add`);
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok) return body.error ?? "Couldn't add anything to this post.";
+      return body.ok === false ? (body.error ?? "Couldn't add anything to this post.") : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function onFiles(files: File[]) {
     if (files.length === 0) return;
     setError(null);
     setBusy(true);
+    const blocked = await preflightAdd();
+    if (blocked !== null) {
+      setError(blocked);
+      setBusy(false);
+      return;
+    }
     const uploaded: number[] = [];
     try {
       for (const file of files) {
@@ -349,12 +397,14 @@ export function PostMediaEditor({
               ) : null}
               <button
                 type="button"
-                disabled={busy || ordered.length === 1}
+                disabled={busy || hasLiveSend || ordered.length === 1}
                 onClick={() => guarded(() => setConfirming(s))}
                 title={
-                  ordered.length === 1
-                    ? "A post needs at least one photo"
-                    : "Remove this from the post"
+                  hasLiveSend
+                    ? LIVE_SEND_MESSAGE
+                    : ordered.length === 1
+                      ? "A post needs at least one photo"
+                      : "Remove this from the post"
                 }
                 aria-label={`Remove slide ${s.id}`}
                 className="absolute right-1 top-1 z-10 rounded-full bg-black/60 px-1.5 text-xs text-white disabled:opacity-40"
@@ -388,8 +438,20 @@ export function PostMediaEditor({
           </li>
         ))}
 
-        <li className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border text-xs text-faint">
-          <label className="cursor-pointer text-ink-soft hover:underline">
+        {/* Kept on screen when the post is live, disabled and titled, rather than removed:
+            an absent control reads as "adding isn't a thing here", which isn't the reason.
+            Same call the sole slide's ✕ makes. */}
+        <li
+          className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border text-xs text-faint"
+          title={hasLiveSend ? LIVE_SEND_MESSAGE : undefined}
+        >
+          <label
+            className={
+              hasLiveSend
+                ? "text-faint"
+                : "cursor-pointer text-ink-soft hover:underline"
+            }
+          >
             {busy ? "Working…" : "Upload"}
             {/* Accept both the MIME types and the extensions: a Windows machine with
                 nothing registered for .webp sends an empty type. See lib/upload-mime.ts. */}
@@ -398,7 +460,7 @@ export function PostMediaEditor({
               multiple
               accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,.jpg,.jpeg,.png,.webp,.mp4,.mov"
               className="hidden"
-              disabled={busy}
+              disabled={busy || hasLiveSend}
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);
                 e.target.value = "";
@@ -408,14 +470,18 @@ export function PostMediaEditor({
           </label>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || hasLiveSend}
             onClick={() => guarded(() => setPicking(true))}
-            className="text-ink-soft hover:underline"
+            className="text-ink-soft hover:underline disabled:text-faint disabled:no-underline"
           >
             Library
           </button>
         </li>
       </ul>
+
+      {/* Said out loud, not just as a title attribute: a disabled control with no visible
+          reason is the thing this whole gate exists to avoid. */}
+      {hasLiveSend ? <p className="mt-2 text-xs text-muted">{LIVE_SEND_MESSAGE}</p> : null}
 
       {error ? <p className="mt-2 text-sm text-status-failed">{error}</p> : null}
 

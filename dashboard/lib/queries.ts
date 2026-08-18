@@ -1746,6 +1746,11 @@ export interface PostLibraryRow extends Post {
   // non-surviving post. 'posted'/'publishing' posts are already refused by the merge API,
   // so those don't belong in this warning — see the merge modal's queued-send notice.
   queued_publication_count: number;
+  // Sends that reached the platform: 'posted' or 'publishing' — postHasLiveSend()'s rule,
+  // batched into the list query so quick edit can gate its media controls without a
+  // per-row fetch. Deliberately NOT posted_count, which misses a send mid-flight, and NOT
+  // posts.status, which migrations/0001_init.sql documents as a coarse overview hint.
+  live_send_count: number;
 }
 
 export interface PostLibraryPeriod extends PeriodWindow {
@@ -1804,7 +1809,9 @@ export function listPosts(limit?: number): PostLibraryRow[] {
          (SELECT GROUP_CONCAT(DISTINCT c.platform) FROM post_targets pt2
             JOIN channels c ON c.id = pt2.channel_id WHERE pt2.post_id = p.id) AS target_platforms,
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
-            AND pub.status IN ('scheduled','pending_approval')) AS queued_publication_count
+            AND pub.status IN ('scheduled','pending_approval')) AS queued_publication_count,
+         (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status IN ('posted','publishing')) AS live_send_count
        FROM posts p
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`
@@ -1878,6 +1885,12 @@ export interface PostQuickEditRow {
    * would overstate what an edit can still reach.
    */
   queued_publication_count: number;
+  /**
+   * Has any send actually reached the platform — 'posted' or 'publishing'? The same
+   * live-send rule postHasLiveSend() enforces server-side, carried to the quick-edit
+   * dialog so its media strip can disable controls the server would only refuse.
+   */
+  has_live_send: boolean;
 }
 
 export function getPostQuickEdit(postId: number): PostQuickEditRow | undefined {
@@ -1894,7 +1907,9 @@ export function getPostQuickEdit(postId: number): PostQuickEditRow | undefined {
               AS target_platforms,
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status IN ('scheduled','pending_approval'))
-              AS queued_publication_count
+              AS queued_publication_count,
+         (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
+            AND pub.status IN ('posted','publishing')) AS live_send_count
        FROM posts p
       WHERE p.id = ?`
     )
@@ -1910,6 +1925,7 @@ export function getPostQuickEdit(postId: number): PostQuickEditRow | undefined {
         tag_ids_csv: string | null;
         target_platforms: string | null;
         queued_publication_count: number;
+        live_send_count: number;
       }
     | undefined;
   if (!row) return undefined;
@@ -1942,6 +1958,7 @@ export function getPostQuickEdit(postId: number): PostQuickEditRow | undefined {
     tag_ids: csv(row.tag_ids_csv).map(Number),
     target_platforms: csv(row.target_platforms),
     queued_publication_count: row.queued_publication_count,
+    has_live_send: row.live_send_count > 0,
     periods: periods.map((p) => ({ id: p.period_id, mode: p.mode })),
   };
 }

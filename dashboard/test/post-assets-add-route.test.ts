@@ -174,3 +174,101 @@ test("a text-only post cannot be turned into a media post", async () => {
   assert.equal(q.getPostSlides(p).length, 0);
   assert.equal(q.getPost(p)!.post_type, "text", "the post type must not be rewritten");
 });
+
+// ---- GET /api/posts/[id]/assets/can-add: the pre-flight -------------------------------
+// Why it exists: uploading a file writes the original, a conformed derivative and a
+// thumbnail into /data BEFORE POST .../assets is ever called. Without a question that can
+// be asked first, every refused attempt on a live/Story-queued/text post left another
+// orphaned copy in the library.
+
+const canAddRoute = await import("../app/api/posts/[id]/assets/can-add/route.ts");
+
+async function canAdd(postId: number | string) {
+  return canAddRoute.GET(
+    new NextRequest(`http://localhost:3939/api/posts/${postId}/assets/can-add`),
+    { params: Promise.resolve({ id: String(postId) }) }
+  );
+}
+
+test("can-add says yes for an ordinary post", async () => {
+  const res = await canAdd(mkPost([mkAsset()]));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+});
+
+test("can-add reports a live send as a 200 'no', with the same sentence POST would give", async () => {
+  const a = mkAsset();
+  const p = mkPost([a]);
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'posted')`
+  ).run(p, mkChannel("live-canadd"));
+
+  const res = await canAdd(p);
+  // A 200: the question was answered successfully — the answer is just "no".
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.code, "live_send");
+
+  const posted = await post(p, { asset_ids: [mkAsset()] });
+  assert.equal(posted.status, 409);
+  assert.equal(body.error, (await posted.json()).error, "the two layers word it differently");
+});
+
+test("can-add reports a queued Story send, matching POST", async () => {
+  const a = mkAsset();
+  const b = mkAsset();
+  const p = mkPost([a, b]);
+  const channel = mkChannel("story-canadd");
+  for (const slide of [a, b]) {
+    db.prepare(
+      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+       VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled', 'story', ?)`
+    ).run(p, channel, slide);
+  }
+
+  const body = await (await canAdd(p)).json();
+  assert.equal(body.ok, false);
+  assert.equal(body.code, "story_queued");
+  assert.equal(body.error, (await (await post(p, { asset_ids: [mkAsset()] })).json()).error);
+});
+
+test("can-add reports a text post, matching POST", async () => {
+  const p = q.createDraftPost({
+    caption: "just words",
+    first_comment: "",
+    asset_ids: [],
+    post_type: "text",
+  });
+  const body = await (await canAdd(p)).json();
+  assert.equal(body.ok, false);
+  assert.equal(body.code, "text_post");
+  assert.equal(body.error, (await (await post(p, { asset_ids: [mkAsset()] })).json()).error);
+});
+
+// A queued FEED send publishes whatever slides exist at publish time, so it must not stop
+// an upload before it starts — the pre-flight has to agree with POST here too.
+test("can-add lets a queued feed send through", async () => {
+  const p = mkPost([mkAsset()]);
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled')`
+  ).run(p, mkChannel("feed-canadd"));
+  assert.deepEqual(await (await canAdd(p)).json(), { ok: true });
+});
+
+test("can-add on an unknown post is a 404", async () => {
+  const res = await canAdd(999999);
+  assert.equal(res.status, 404);
+});
+
+// The pre-flight must not answer a question it cannot see the asset for: a post already
+// holding a video only refuses once you know what is being added.
+test("can-add says yes for a Reel — video mixing is still POST's call", async () => {
+  const p = mkPost([mkAsset("video")]);
+  assert.deepEqual(await (await canAdd(p)).json(), { ok: true });
+  const res = await post(p, { asset_ids: [mkAsset()] });
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).code, "video_mix");
+});

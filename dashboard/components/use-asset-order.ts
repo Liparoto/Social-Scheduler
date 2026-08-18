@@ -21,7 +21,8 @@ export interface OrderableAsset {
  * The grid that used to live alongside this hook is gone (2026-08-18) — it drew a second
  * copy of every slide next to <PostMediaEditor>'s, so the reorder affordances moved into
  * that one strip instead. `isDirty` is now also what warns before an add or a remove
- * discards an order in progress.
+ * discards an order in progress. This file was called carousel-reorder.tsx until that grid
+ * (<CarouselReorder>) went away and left the name describing something no longer here.
  */
 export function useAssetOrder(postId: number, assets: OrderableAsset[]) {
   const savedOrder = assets.map((a) => a.id);

@@ -57,6 +57,8 @@ interface PostLite {
   topic_tags: string | null;
   target_platforms: string | null;
   has_queued_publication: boolean;
+  /** Any send already on the platform ('posted'/'publishing') — quick edit gates media on it. */
+  has_live_send: boolean;
 }
 interface ChannelLite {
   id: number;
@@ -1005,6 +1007,12 @@ export function LibraryView({
             // reorder notice already excludes 'publishing' (it can't be reordered — it's
             // mid-publish), and quick edit's notice needs to promise the same thing.
             queued_publication_count: quickEditPost.queued_publication_count,
+            // Without this the dialog offered a red "Delete the file entirely" button on a
+            // post already live on Instagram: the delete confirm's usage lookup counts
+            // publications.asset_id, which a FEED publication leaves NULL, so a published
+            // carousel looked completely unreferenced. The server refused it every time —
+            // but the button should never have been there.
+            has_live_send: quickEditPost.has_live_send,
           }}
           periods={periods}
           timeOfDayTags={timeOfDayTags}

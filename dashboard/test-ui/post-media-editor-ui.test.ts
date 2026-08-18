@@ -139,3 +139,48 @@ test("reorder controls appear only for 2+ slides, and only when reordering is wi
     /aria-label="Move (left|right)"/
   );
 });
+
+// ---- The live-send gate ---------------------------------------------------------------
+// A post already on Instagram must not be offered media controls. The server refuses these
+// edits with `live_send`, so nothing was ever destroyed — but the delete confirm's usage
+// lookup counts publications.asset_id, which a FEED publication leaves NULL, so a published
+// carousel looked entirely unreferenced and the red "Delete the file entirely" button was
+// being offered on it. Never offer an action that cannot succeed.
+
+test("with a live send, every slide's remove control is disabled", () => {
+  const html = render({ hasLiveSend: true, reorder: reorder([11, 22, 33]) });
+  for (const s of slides) {
+    const at = html.indexOf(`aria-label="Remove slide ${s.id}"`);
+    assert.ok(at > -1, `no ✕ for slide ${s.id}`);
+    // The attributes React emits before aria-label on this button: disabled, then title.
+    assert.match(
+      html.slice(Math.max(0, at - 200), at),
+      /disabled=""/,
+      `slide ${s.id}'s ✕ is not disabled`
+    );
+  }
+});
+
+test("with a live send, adding is disabled too — both the file input and Library", () => {
+  const html = render({ hasLiveSend: true });
+  assert.match(html, /type="file"[^>]*disabled=""|disabled=""[^>]*type="file"/);
+  // The Library button carries a disabled attribute of its own.
+  const at = html.indexOf(">Library<");
+  assert.ok(at > -1, "the Library control is gone entirely");
+  assert.match(html.slice(Math.max(0, at - 200), at), /disabled=""/, "Library is not disabled");
+});
+
+test("the live-send reason is visible on the page, not only in a title attribute", () => {
+  const html = render({ hasLiveSend: true });
+  assert.ok(
+    html.includes("already gone out"),
+    "the strip disables its controls without saying why"
+  );
+});
+
+test("without a live send nothing is gated — the default stays fully editable", () => {
+  const html = render({ reorder: reorder([11, 22, 33]) });
+  assert.ok(!html.includes("already gone out"));
+  const at = html.indexOf('aria-label="Remove slide 11"');
+  assert.doesNotMatch(html.slice(Math.max(0, at - 200), at), /disabled=""/);
+});

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
-import { useAssetOrder, type OrderableAsset } from "@/components/carousel-reorder";
+import { useAssetOrder, type OrderableAsset } from "@/components/use-asset-order";
 import { PostMediaEditor } from "@/components/post-media-editor";
 import {
   CaptionVariantsEditor,
@@ -81,6 +81,14 @@ export interface QuickEditPost {
    * promising it will "go out in this order" would be wrong.
    */
   queued_publication_count: number;
+  /**
+   * Has any send of this post reached the platform — 'posted' or 'publishing'?
+   *
+   * The media strip's controls are disabled on it. Both callers already have it: the
+   * Library's list query carries it per row, and the Overview's QueueQuickEdit gets it
+   * inside `quick_edit` from GET /api/posts/[id]/content.
+   */
+  has_live_send: boolean;
 }
 
 export function QuickEditModal({
@@ -405,6 +413,7 @@ export function QuickEditModal({
                 media_kind: a.media_kind,
                 cover_frame_ms: a.cover_frame_ms,
               }))}
+              hasLiveSend={post.has_live_send}
               reorder={
                 isCarousel
                   ? {

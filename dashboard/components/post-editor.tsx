@@ -20,7 +20,7 @@ import { isPostDirty } from "@/lib/post-editor-dirty";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
-import { useAssetOrder } from "@/components/carousel-reorder";
+import { useAssetOrder } from "@/components/use-asset-order";
 import { PostMediaEditor } from "@/components/post-media-editor";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
@@ -98,6 +98,12 @@ export function PostEditor({
   const queuedSendCount = sends.filter(
     (s) => s.status === "scheduled" || s.status === "pending_approval"
   ).length;
+  // Derived from the sends this page already loads rather than asking the DB a second
+  // question. The same rule postHasLiveSend() enforces server-side: 'posted' means it
+  // exists on the platform, 'publishing' means the worker is mid-flight with it. Media
+  // controls are disabled on it — the server refuses these edits anyway, so offering them
+  // (especially the irreversible "delete the file entirely") is a promise it can't keep.
+  const hasLiveSend = sends.some((s) => s.status === "posted" || s.status === "publishing");
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [unmergeOpen, setUnmergeOpen] = useState(false);
@@ -288,6 +294,7 @@ export function PostEditor({
                   cover_frame_ms: a.cover_frame_ms,
                 }))}
                 onChanged={() => startTransition(() => router.refresh())}
+                hasLiveSend={hasLiveSend}
                 // Only a real carousel can be reordered — a single image or a Reel has one
                 // slide and nothing to order. Keyed off the asset count rather than
                 // post.post_type so the arrows appear the moment a second slide is added,

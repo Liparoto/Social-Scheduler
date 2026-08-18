@@ -1,7 +1,7 @@
 # Design — Add and remove media on an existing post
 
 **Date:** 2026-08-18
-**Status:** approved, not yet built
+**Status:** built and shipped (2026-08-18). The sections below describe what exists.
 
 ## The problem
 
@@ -148,19 +148,57 @@ Clicking ✕ on a slide opens a confirm with two distinct buttons, not a generic
 
 ### The UI
 
-One shared component, `components/post-media-editor.tsx`, mounted in two places:
+**One strip, `components/post-media-editor.tsx`, and every slide appears on the page
+exactly once inside it.** The first draft of this design put an add/remove strip *next to*
+the existing `<CarouselReorder>` grid, which meant two grids of the same six photos side by
+side — one confusing feature, not two. Reordering moved into the strip instead and
+`<CarouselReorder>` was deleted; add, remove, reorder, the number badge and whatever the
+host hangs off a tile (the framing button, the lightbox badge) now share one tile.
 
-- The full editor at `/library/[id]` — the slide strip gains an "Add media" tile and a ✕
-  per slide.
-- `QuickEditModal` — the same strip, which the Library grid and the Overview queue already
-  share.
+Mounted in every edit surface:
+
+- The full editor at `/library/[id]`.
+- `QuickEditModal` — the same strip, which the Library grid and the Overview queue's
+  `QueueQuickEdit` both mount.
+
+Numbering and the ← → arrows appear only when the host wires up `reorder` **and** there are
+2+ slides. `useAssetOrder` (`components/use-asset-order.ts`) stays outside the strip because
+the two hosts disagree about when the order is saved: the post page has its own Save button,
+quick edit rides the dialog's single Save.
+
+**Modal layers, not modals.** The strip opens two overlays of its own — the asset picker and
+the remove-slide confirm — and in quick edit those stack on top of a dialog that is itself
+listening for Escape. `useModalLayer()` (`components/use-modal-focus-trap.ts`) makes Escape
+close only the topmost one; without it, backing out of the picker threw away the whole quick
+edit. Both overlays are separate components mounted only while open, so their focus trap
+activates on open rather than when the strip mounts.
 
 **Add and remove apply immediately, not behind Save.** `QuickEditModal` is
 confirm-on-dismiss and compares against the values it opened with; staging media changes
 inside that model would mean tracking pending deletes and orphaning uploaded files on
-Cancel. Slide *reorder* already works this way — its own Save button, separate from the
-text fields — so this matches an established precedent in the same dialog rather than
-introducing a new one.
+Cancel. Media therefore sits deliberately *outside* that dirty tracking. Slide *reorder* is
+the exception and stays the host's business — which is why an add or a remove first warns
+that an unsaved drag is about to be discarded, rather than saving it for you.
+
+**Nothing that cannot succeed is offered.** A post with a live send (`posted`/`publishing`)
+gets every media control disabled and the reason spelled out on the page —
+`hasLiveSend` is passed in by each host (`PostEditor` derives it from the sends it already
+loads; `QuickEditModal` reads `has_live_send`, which both callers already carry). This is
+purely about the UI: the server refused these edits from day one, but the delete confirm's
+usage lookup counts `publications.asset_id`, which a **feed** publication leaves NULL — so a
+published carousel looked unreferenced and the red "Delete the file entirely" button was
+being offered on history.
+
+**Uploads are pre-flighted.** `GET /api/posts/[id]/assets/can-add` answers the rules that
+need nothing but the post — live send, queued Story send, text post — *before* the browser
+uploads a byte, because `POST /api/assets/upload` writes the original, a conformed
+derivative and a thumbnail into `/data` before the add can be refused. Without it, every
+refused attempt left another orphaned copy in the library. It runs the same
+`checkCanAddMedia()` the write path runs, so there is one rule and one sentence. The
+asset-dependent rules (video mixing, already-on-post, carousel size) still run after upload:
+they cannot be judged without an asset row, and content-hash dedup makes re-uploading the
+same file resolve to the asset that already exists. The library picker needs no pre-flight —
+it writes nothing.
 
 ## Error handling
 
@@ -175,11 +213,16 @@ never leave files deleted, but a failed file delete only leaves harmless bytes b
 
 ## Testing
 
-- **Unit** — `lib/post-media-edit.test.ts` covers every row of the rules table.
-- **Route** — `test/post-assets-mutate-route.test.ts`, alongside the existing
-  `assets-order-route.test.ts` and `asset-delete-cleanup.test.ts`. Includes the case that
-  matters most: a refused `mode=everywhere` delete leaves the post link intact and the
-  files on disk.
+- **Unit** — `lib/post-media-edit.test.ts` covers every row of the rules table, plus
+  `checkCanAddMedia()` and the fact that it and `checkAddAssets()` refuse identically.
+  `lib/media-delete-confirm.test.ts` covers the fail-closed "delete entirely" gate.
+- **Route** — `test/post-assets-add-route.test.ts` and `post-assets-remove-route.test.ts`
+  (the design first guessed at one `post-assets-mutate-route.test.ts`; they split), plus
+  `post-media-queries.test.ts`, alongside the existing `assets-order-route.test.ts` and
+  `asset-delete-cleanup.test.ts`. Includes the case that matters most: a refused
+  `mode=everywhere` delete leaves the post link intact and the files on disk.
+- **Markup** — `test-ui/post-media-editor-ui.test.ts`: one tile per slide (the two-grid bug
+  this strip exists to prevent), the disabled sole-slide ✕, and the live-send gate.
 - **Browser** — against a **scratch copy of the database on port 3940**, never the live
   one. This flow deletes files irreversibly, and coordinates drift when media grids
   reflow, so the destructive paths are driven through Playwright rather than clicked by
@@ -188,19 +231,31 @@ never leave files deleted, but a failed file delete only leaves harmless bytes b
 ## Files
 
 **New**
-- `dashboard/lib/post-media-edit.ts` + `.test.ts` — the rules
+- `dashboard/lib/post-media-edit.ts` + `.test.ts` — the rules, including `checkCanAddMedia()`
+- `dashboard/lib/media-delete-confirm.ts` + `.test.ts` — whether "delete entirely" is offered, and why not
 - `dashboard/app/api/posts/[id]/assets/[assetId]/route.ts` — the remove endpoint
-- `dashboard/app/api/assets/[id]/usage/route.ts` — how many other posts hold this asset, so the confirm dialog knows whether to offer "delete entirely"
-- `dashboard/app/api/assets/route.ts` — the library list the picker reads (only if no list route already exists)
-- `dashboard/components/post-media-editor.tsx` — the shared strip
+- `dashboard/app/api/posts/[id]/assets/can-add/route.ts` — the upload pre-flight
+- `dashboard/app/api/assets/[id]/usage/route.ts` — what else references this asset, so the confirm dialog knows whether to offer "delete entirely"
+- `dashboard/app/api/assets/route.ts` — the library list the picker reads
+- `dashboard/components/post-media-editor.tsx` — the one strip (add + remove + reorder + the two overlays)
 - `dashboard/components/asset-picker-modal.tsx` — pick from the library
 - `dashboard/test/post-media-queries.test.ts`, `post-assets-add-route.test.ts`, `post-assets-remove-route.test.ts`
+- `dashboard/test-ui/post-media-editor-ui.test.ts` — the strip's markup
 
 **Modified**
 - `dashboard/app/api/posts/[id]/assets/route.ts` — add `POST`
-- `dashboard/components/post-editor.tsx`
-- `dashboard/components/quick-edit-modal.tsx`
-- `dashboard/lib/queries.ts` — `addPostAssets`, `removePostAsset`, `assetOtherPostUsage`
+- `dashboard/components/post-editor.tsx`, `quick-edit-modal.tsx` — mount the strip, pass `hasLiveSend`
+- `dashboard/components/library-view.tsx`, `queue-quick-edit.tsx`, `app/library/page.tsx` — carry `has_live_send`
+- `dashboard/lib/queries.ts` — `addPostAssets`, `removePostAsset`, the usage counts, and `live_send_count` on the list/quick-edit reads
+
+**Renamed**
+- `dashboard/components/carousel-reorder.tsx` → `use-asset-order.ts`. `<CarouselReorder>` was
+  deleted when reordering moved into the strip; the file holds only `useAssetOrder` and
+  `OrderableAsset` now, so the old name described something no longer in it.
+
+**Deleted**
+- `dashboard/components/carousel-reorder.tsx`'s `<CarouselReorder>` grid and its
+  `test-ui/carousel-reorder-ui.test.ts` — absorbed into the strip and its tests.
 
 **No migration.** `post_assets` already carries everything this needs.
 

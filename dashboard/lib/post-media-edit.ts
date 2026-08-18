@@ -68,6 +68,77 @@ function fail(code: MediaEditErrorCode, error: string, status: number): MediaEdi
 }
 
 /**
+ * The one sentence every live-send refusal uses, in every layer.
+ *
+ * Exported because the strip in components/post-media-editor.tsx disables its own controls
+ * with it: a button whose reason is worded differently from the error the server would have
+ * returned reads as two different rules. This module is pure and DB-free (see the header),
+ * so a client component can import it.
+ */
+export const LIVE_SEND_MESSAGE =
+  "This post has already gone out, or is going out right now, so its media can't be changed.";
+
+/** Same shape as MediaEditCheck's failure arm, for a question with no slide list to return. */
+export type MediaEditGate =
+  | { ok: true }
+  | { ok: false; code: MediaEditErrorCode; error: string; status: number };
+
+/**
+ * Can this post take ANY new slide at all — asked without knowing which file it would be.
+ *
+ * The subset of checkAddAssets' rules that depend only on the post: a live send, a queued
+ * per-slide Story send, and a text post. Split out so `GET /api/posts/[id]/assets/can-add`
+ * can answer it BEFORE the browser uploads a single byte. POST /api/assets/upload writes
+ * the original, a conformed derivative and a thumbnail to /data before this route ever sees
+ * the file, so without a pre-flight every refused attempt left another orphaned copy in the
+ * library with nothing to say where it came from.
+ *
+ * The asset-dependent rules (video mixing, already-on-post, carousel size) deliberately
+ * stay in checkAddAssets: they cannot be judged without the asset row, and content-hash
+ * dedup means re-uploading the same file after such a refusal costs one row, not a new one.
+ *
+ * checkAddAssets calls this rather than repeating it, so the pre-flight and the write can
+ * never disagree about either the rule or its wording.
+ */
+export function checkCanAddMedia(
+  ctx: Pick<MediaEditContext, "postType" | "hasLiveSend">,
+  /** See checkAddAssets' queuedPerSlideCount — the identical question, same query. */
+  queuedPerSlideCount: number
+): MediaEditGate {
+  if (ctx.hasLiveSend) {
+    return { ok: false, code: "live_send", error: LIVE_SEND_MESSAGE, status: 409 };
+  }
+  // A text post has zero slides on purpose. The reverse conversion (removing a media
+  // post's last slide to leave a text post) is refused by `last_slide`; this is the same
+  // boundary from the other side, so the two directions stay consistent.
+  if (ctx.postType === "text") {
+    return {
+      ok: false,
+      code: "text_post",
+      error:
+        "This is a text-only post, so it can't become a photo or video post. Make a new post instead.",
+      status: 400,
+    };
+  }
+  // Refuse rather than fan out a new publication, for the same reason checkRemoveAsset
+  // refuses rather than canceling one: this feature never writes to the owner's queue
+  // behind their back. A FEED send (asset_id IS NULL) is excluded by the query and must
+  // stay excluded — it publishes whatever slides the post holds at publish time, so
+  // adding a slide is exactly what it is supposed to pick up.
+  if (queuedPerSlideCount > 0) {
+    return {
+      ok: false,
+      code: "story_queued",
+      error:
+        "This post has a Story send queued, and a Story send is fixed to the slides it was " +
+        "scheduled with. Cancel or hold that send first, then add the slide.",
+      status: 409,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * The same rule createDraftPost derives from the database, without the database.
  * queries.ts's derivePostType() delegates here so the two can never drift.
  */
@@ -122,36 +193,11 @@ export function checkAddAssets(
   if (incoming.length === 0) {
     return fail("bad_body", "asset_ids must list at least one asset to add.", 400);
   }
-  if (ctx.hasLiveSend) {
-    return fail(
-      "live_send",
-      "This post has already gone out, or is going out right now, so its media can't be changed.",
-      409
-    );
-  }
-  // A text post has zero slides on purpose. The reverse conversion (removing a media
-  // post's last slide to leave a text post) is refused by `last_slide`; this is the same
-  // boundary from the other side, so the two directions stay consistent.
-  if (ctx.postType === "text") {
-    return fail(
-      "text_post",
-      "This is a text-only post, so it can't become a photo or video post. Make a new post instead.",
-      400
-    );
-  }
-  // Refuse rather than fan out a new publication, for the same reason checkRemoveAsset
-  // refuses rather than canceling one: this feature never writes to the owner's queue
-  // behind their back. A FEED send (asset_id IS NULL) is excluded by the query and must
-  // stay excluded — it publishes whatever slides the post holds at publish time, so
-  // adding a slide is exactly what it is supposed to pick up.
-  if (queuedPerSlideCount > 0) {
-    return fail(
-      "story_queued",
-      "This post has a Story send queued, and a Story send is fixed to the slides it was " +
-        "scheduled with. Cancel or hold that send first, then add the slide.",
-      409
-    );
-  }
+  // Live send, text post and queued Story send — the rules that need nothing but the post,
+  // which is exactly why they also live behind GET .../assets/can-add as a pre-flight. Same
+  // function, same order, same wording, so the two answers cannot drift.
+  const gate = checkCanAddMedia(ctx, queuedPerSlideCount);
+  if (!gate.ok) return fail(gate.code, gate.error, gate.status);
 
   const have = new Set(ctx.slides.map((s) => s.asset_id));
   const dupe = incoming.find((s) => have.has(s.asset_id));
@@ -199,11 +245,7 @@ export function checkRemoveAsset(
   otherRefs: OtherAssetReferences
 ): MediaEditCheck {
   if (ctx.hasLiveSend) {
-    return fail(
-      "live_send",
-      "This post has already gone out, or is going out right now, so its media can't be changed.",
-      409
-    );
+    return fail("live_send", LIVE_SEND_MESSAGE, 409);
   }
   if (!ctx.slides.some((s) => s.asset_id === assetId)) {
     return fail("not_on_post", "That file isn't on this post.", 404);

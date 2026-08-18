@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkAddAssets,
+  checkCanAddMedia,
   checkRemoveAsset,
   derivePostTypeFromKinds,
+  LIVE_SEND_MESSAGE,
   type MediaEditContext,
   type Slide,
 } from "./post-media-edit.ts";
@@ -234,4 +236,77 @@ test("delete-entirely is refused when the asset is some video's cover image", ()
 test("remove-from-post is allowed even when other references exist", () => {
   const res = checkRemoveAsset(ctx(), 2, "post", 0, 0, { sends: 4, covers: 2 });
   assert.equal(res.ok, true);
+});
+
+// ---- checkCanAddMedia: the pre-flight the strip runs BEFORE uploading a byte ----------
+// The point of splitting these three rules out is that a refusal must not cost an
+// orphaned conformed copy in /data. If any of them stopped being answerable from the post
+// alone, or stopped matching what checkAddAssets says, the pre-flight would be lying.
+
+test("checkCanAddMedia says yes for an ordinary editable post", () => {
+  assert.deepEqual(checkCanAddMedia({ postType: "carousel", hasLiveSend: false }, 0), {
+    ok: true,
+  });
+});
+
+test("checkCanAddMedia refuses a live send, with the shared sentence", () => {
+  const res = checkCanAddMedia({ postType: "carousel", hasLiveSend: true }, 0);
+  assert.equal(res.ok, false);
+  if (res.ok) return;
+  assert.equal(res.code, "live_send");
+  assert.equal(res.status, 409);
+  assert.equal(res.error, LIVE_SEND_MESSAGE);
+});
+
+test("checkCanAddMedia refuses a text post", () => {
+  const res = checkCanAddMedia({ postType: "text", hasLiveSend: false }, 0);
+  assert.equal(res.ok, false);
+  if (res.ok) return;
+  assert.equal(res.code, "text_post");
+  assert.equal(res.status, 400);
+});
+
+test("checkCanAddMedia refuses a post with a queued per-slide Story send", () => {
+  const res = checkCanAddMedia({ postType: "carousel", hasLiveSend: false }, 1);
+  assert.equal(res.ok, false);
+  if (res.ok) return;
+  assert.equal(res.code, "story_queued");
+  assert.equal(res.status, 409);
+});
+
+// The whole reason checkAddAssets delegates: the pre-flight's answer must be the SAME
+// answer, worded identically, or the browser would show one refusal and the server another.
+test("every rule the pre-flight knows gives checkAddAssets the identical refusal", () => {
+  const cases: { postType: MediaEditContext["postType"]; hasLiveSend: boolean; queued: number }[] =
+    [
+      { postType: "carousel", hasLiveSend: true, queued: 0 },
+      { postType: "text", hasLiveSend: false, queued: 0 },
+      { postType: "carousel", hasLiveSend: false, queued: 2 },
+    ];
+  for (const c of cases) {
+    const gate = checkCanAddMedia({ postType: c.postType, hasLiveSend: c.hasLiveSend }, c.queued);
+    const full = checkAddAssets(
+      ctx({ postType: c.postType, hasLiveSend: c.hasLiveSend, slides: [img(1)] }),
+      [img(9)],
+      c.queued
+    );
+    assert.equal(gate.ok, false);
+    assert.equal(full.ok, false);
+    if (gate.ok || full.ok) return;
+    assert.equal(gate.code, full.code);
+    assert.equal(gate.status, full.status);
+    assert.equal(gate.error, full.error);
+  }
+});
+
+// The rules that genuinely need the asset must NOT have migrated into the pre-flight —
+// answering them without an asset id would mean guessing.
+test("checkCanAddMedia does not pretend to judge the asset-dependent rules", () => {
+  // A post that already holds a video: adding anything to it is a video_mix refusal, but
+  // that is only knowable once you know what is being added.
+  assert.deepEqual(checkCanAddMedia({ postType: "reel", hasLiveSend: false }, 0), { ok: true });
+  const full = checkAddAssets(ctx({ slides: [vid(1)], postType: "reel" }), [img(9)], 0);
+  assert.equal(full.ok, false);
+  if (full.ok) return;
+  assert.equal(full.code, "video_mix");
 });
