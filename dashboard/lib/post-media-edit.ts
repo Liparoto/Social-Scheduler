@@ -18,9 +18,24 @@ export interface Slide {
   media_kind: string;
 }
 
+/** Non-post_assets references to an asset row — what blocks deleting the file outright. */
+export interface OtherAssetReferences {
+  /** publications.asset_id rows, any status. A Story send names its slide directly. */
+  sends: number;
+  /** assets.cover_asset_id rows — this image is some video's custom cover. */
+  covers: number;
+}
+
 export interface MediaEditContext {
   /** The post's slides right now, in order. */
   slides: Slide[];
+  /**
+   * posts.post_type as it stands right now — NOT the type this edit would produce. Only
+   * 'text' is acted on (see checkAddAssets): a text post has no slides by design, and
+   * turning one into a media post is out of scope for this feature, the same way removing
+   * a media post's last slide to make it text is (see the `last_slide` rule).
+   */
+  postType: PostType;
   /**
    * Any publication 'posted' or 'publishing'. Same live-send definition deletePost() uses:
    * 'posted' means it exists on the platform, 'publishing' means the worker is mid-flight
@@ -40,6 +55,8 @@ export type MediaEditErrorCode =
   | "last_slide"
   | "story_queued"
   | "shared_asset"
+  | "referenced_asset"
+  | "text_post"
   | "incompatible";
 
 export type MediaEditCheck =
@@ -85,7 +102,23 @@ function settle(ctx: MediaEditContext, next: Slide[]): MediaEditCheck {
   return { ok: true, post_type: postType, slides: next };
 }
 
-export function checkAddAssets(ctx: MediaEditContext, incoming: Slide[]): MediaEditCheck {
+export function checkAddAssets(
+  ctx: MediaEditContext,
+  incoming: Slide[],
+  /**
+   * Scheduled or pending-approval sends on this post that name a slide directly —
+   * publications.asset_id IS NOT NULL, i.e. an Instagram Story fan-out (see
+   * countQueuedPerSlideSendsForPost() in queries.ts).
+   *
+   * The mirror image of checkRemoveAsset's queuedStoryCount, and deliberately a DIFFERENT
+   * question. Remove asks "does a queued send name THIS slide"; add has to ask "does this
+   * post have ANY queued per-slide send", because the slide being added is precisely the
+   * one with no publications row. The Story fan-out happens once, at scheduling time, and
+   * there is no resync — so a slide added afterwards would silently never go out as a
+   * Story while the queue happily renders it as "Story 4 of 4".
+   */
+  queuedPerSlideCount: number
+): MediaEditCheck {
   if (incoming.length === 0) {
     return fail("bad_body", "asset_ids must list at least one asset to add.", 400);
   }
@@ -93,6 +126,29 @@ export function checkAddAssets(ctx: MediaEditContext, incoming: Slide[]): MediaE
     return fail(
       "live_send",
       "This post has already gone out, or is going out right now, so its media can't be changed.",
+      409
+    );
+  }
+  // A text post has zero slides on purpose. The reverse conversion (removing a media
+  // post's last slide to leave a text post) is refused by `last_slide`; this is the same
+  // boundary from the other side, so the two directions stay consistent.
+  if (ctx.postType === "text") {
+    return fail(
+      "text_post",
+      "This is a text-only post, so it can't become a photo or video post. Make a new post instead.",
+      400
+    );
+  }
+  // Refuse rather than fan out a new publication, for the same reason checkRemoveAsset
+  // refuses rather than canceling one: this feature never writes to the owner's queue
+  // behind their back. A FEED send (asset_id IS NULL) is excluded by the query and must
+  // stay excluded — it publishes whatever slides the post holds at publish time, so
+  // adding a slide is exactly what it is supposed to pick up.
+  if (queuedPerSlideCount > 0) {
+    return fail(
+      "story_queued",
+      "This post has a Story send queued, and a Story send is fixed to the slides it was " +
+        "scheduled with. Cancel or hold that send first, then add the slide.",
       409
     );
   }
@@ -127,7 +183,20 @@ export function checkRemoveAsset(
    * send pointing at a slide no longer on this post just as surely as deleting the file
    * outright would, so this check runs for BOTH modes.
    */
-  queuedStoryCount: number
+  queuedStoryCount: number,
+  /**
+   * Everything OTHER than post_assets that points at this asset row and would make the
+   * `mode=everywhere` DELETE fail on a foreign key: publications.asset_id in ANY status
+   * (ON DELETE RESTRICT, migration 0014) and assets.cover_asset_id (migration 0016). See
+   * countOtherAssetReferences() in queries.ts.
+   *
+   * Counted up front so the refusal is honest. Left to SQLite, the FK error surfaced as a
+   * generic constraint failure the route then reported as "another post picked this file
+   * up while you were editing" — a race that never happened. The case that hits it most is
+   * the one this feature exists for: a FAILED Story send, whose media you are fixing
+   * before retrying, is not 'scheduled'/'pending_approval' so queuedStoryCount misses it.
+   */
+  otherRefs: OtherAssetReferences
 ): MediaEditCheck {
   if (ctx.hasLiveSend) {
     return fail(
@@ -162,6 +231,19 @@ export function checkRemoveAsset(
       `This file is also used by ${otherPostCount} other post${
         otherPostCount === 1 ? "" : "s"
       }, so it can't be deleted outright. Remove it from this post instead.`,
+      409
+    );
+  }
+  if (mode === "everywhere" && (otherRefs.sends > 0 || otherRefs.covers > 0)) {
+    const what =
+      otherRefs.sends > 0 && otherRefs.covers > 0
+        ? "A send in the queue and a video's cover image both still point at this file"
+        : otherRefs.sends > 0
+          ? "A send still points at this file — a Story send names the exact slide it goes out with"
+          : "This file is a video's cover image";
+    return fail(
+      "referenced_asset",
+      `${what}, so it can't be deleted outright. Remove it from this post instead.`,
       409
     );
   }

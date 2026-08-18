@@ -140,11 +140,15 @@ test("removePostAsset refuses to delete an asset another post still holds", () =
   );
 });
 
-test("removePostAsset(alsoDeleteAsset: true) reports still_used when a Story send still references the asset row directly, not just when another post does", () => {
+test("removePostAsset(alsoDeleteAsset: true) reports referenced_asset — NOT still_used — when a Story send references the asset row directly", () => {
   // publications.asset_id REFERENCES assets(id) ON DELETE RESTRICT (migration 0014): a
   // scheduled Story send pinned to this exact slide isn't caught by dropAsset's own
   // NOT EXISTS (post_assets ...) guard, because post_assets has nothing to do with
   // publications. Without a catch, this used to escape as a raw SQLITE_CONSTRAINT error.
+  //
+  // It must NOT come back as "still_used": that word means a post_assets row appeared
+  // mid-request (a genuine race), and the route says so to the user. A foreign key is a
+  // standing reference, not a race.
   const a = mkAsset();
   const b = mkAsset();
   const post = mkPost([a, b]);
@@ -154,7 +158,7 @@ test("removePostAsset(alsoDeleteAsset: true) reports still_used when a Story sen
      VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled', 'story', ?)`
   ).run(post, channel, b);
 
-  assert.equal(q.removePostAsset(post, b, "single", true), "still_used");
+  assert.equal(q.removePostAsset(post, b, "single", true), "referenced_asset");
   assert.ok(slideIds(post).includes(b), "the post link must survive the refusal");
   assert.ok(q.getAsset(b), "the asset row must survive the refusal");
 });
@@ -195,4 +199,47 @@ test("removing a middle slide then appending closes the gap without a UNIQUE col
   const d = mkAsset();
   assert.equal(q.addPostAssets(post, [d], "carousel"), "ok");
   assert.deepEqual(slideIds(post), [a, c, d]);
+});
+
+test("countQueuedPerSlideSendsForPost counts Story rows and ignores feed rows", () => {
+  const a = mkAsset();
+  const b = mkAsset();
+  const post = mkPost([a, b]);
+  const channel = mkChannel("instagram");
+  assert.equal(q.countQueuedPerSlideSendsForPost(post), 0);
+
+  // A feed send names no slide — it publishes whatever the post holds at publish time, so
+  // it must never block adding one.
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled')`
+  ).run(post, channel);
+  assert.equal(q.countQueuedPerSlideSendsForPost(post), 0);
+
+  for (const slide of [a, b]) {
+    db.prepare(
+      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+       VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled', 'story', ?)`
+    ).run(post, channel, slide);
+  }
+  assert.equal(q.countQueuedPerSlideSendsForPost(post), 2);
+});
+
+test("countOtherAssetReferences sees publications of ANY status, and cover images", () => {
+  const a = mkAsset();
+  const b = mkAsset();
+  const post = mkPost([a, b]);
+  const channel = mkChannel("instagram");
+  assert.deepEqual(q.countOtherAssetReferences(b), { sends: 0, covers: 0 });
+
+  // 'failed' is the status countQueuedDirectSendsForSlide() deliberately misses — and the
+  // one that matters most, since fixing the media is often why a send failed.
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'failed', 'story', ?)`
+  ).run(post, channel, b);
+  assert.deepEqual(q.countOtherAssetReferences(b), { sends: 1, covers: 0 });
+
+  db.prepare("UPDATE assets SET cover_asset_id = ? WHERE id = ?").run(b, a);
+  assert.deepEqual(q.countOtherAssetReferences(b), { sends: 1, covers: 1 });
 });

@@ -22,7 +22,11 @@ import type {
 } from "./types";
 import type { ChannelLikeForCompat, Platform } from "./platforms";
 import { describeChannel, incompatibleChannelsForPostType, isPlatform } from "./platforms";
-import { derivePostTypeFromKinds, type Slide } from "./post-media-edit";
+import {
+  derivePostTypeFromKinds,
+  type OtherAssetReferences,
+  type Slide,
+} from "./post-media-edit";
 import { planMerge, type MergeCandidate, type MergeProblem } from "./merge-plan";
 import {
   planUnmerge,
@@ -694,6 +698,54 @@ export function countQueuedDirectSendsForSlide(postId: number, assetId: number):
   return row.n;
 }
 
+/**
+ * Queued sends on this post that name ONE slide directly — publications.asset_id IS NOT
+ * NULL, which is the Instagram Story fan-out from migration 0014 (one row per slide).
+ *
+ * The mirror of countQueuedDirectSendsForSlide() above, and a deliberately different
+ * question: that one asks "is a queued send pinned to THIS asset", which is the right
+ * question when removing a slide. Adding a slide has to ask "does this post have ANY
+ * per-slide send queued", because the new slide is by definition the one with no
+ * publications row — the fan-out happened at scheduling time and never re-runs.
+ *
+ * asset_id IS NULL (a feed send) is excluded for the same reason it is excluded there: a
+ * feed send publishes whatever slides the post holds at publish time, so adding a slide is
+ * exactly what it should pick up. Blocking on it would refuse a safe edit.
+ */
+export function countQueuedPerSlideSendsForPost(postId: number): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM publications
+        WHERE post_id = ? AND asset_id IS NOT NULL
+          AND status IN ('scheduled', 'pending_approval')`
+    )
+    .get(postId) as { n: number };
+  return row.n;
+}
+
+/**
+ * Everything besides post_assets that references this asset row, counted BEFORE any write
+ * so `mode=everywhere` can refuse honestly instead of letting SQLite raise a foreign-key
+ * error the caller can only describe vaguely.
+ *
+ * Both of these are references the `DELETE FROM assets ... NOT EXISTS (post_assets)` guard
+ * in removePostAsset() cannot see:
+ *  - publications.asset_id — ON DELETE RESTRICT (migrations/0014_story_surface.sql). ANY
+ *    status counts, not just the queued ones: a 'failed' or 'canceled' Story row restricts
+ *    the delete just as hard, and 'failed' is the case this whole feature exists to serve.
+ *  - assets.cover_asset_id — a video's custom cover image (migrations/0016_cover_asset.sql).
+ */
+export function countOtherAssetReferences(assetId: number): OtherAssetReferences {
+  const db = getDb();
+  const sends = db
+    .prepare("SELECT COUNT(*) AS n FROM publications WHERE asset_id = ?")
+    .get(assetId) as { n: number };
+  const covers = db
+    .prepare("SELECT COUNT(*) AS n FROM assets WHERE cover_asset_id = ?")
+    .get(assetId) as { n: number };
+  return { sends: sends.n, covers: covers.n };
+}
+
 /** Append slides to a post. `postType` comes from checkAddAssets — never re-derived here. */
 export function addPostAssets(
   postId: number,
@@ -770,7 +822,7 @@ export function removePostAsset(
   assetId: number,
   postType: PostType,
   alsoDeleteAsset: boolean
-): "ok" | "has_live" | "still_used" | "not_found" {
+): "ok" | "has_live" | "still_used" | "referenced_asset" | "not_found" {
   const db = getDb();
   const unlink = db.prepare(
     `DELETE FROM post_assets
@@ -820,13 +872,18 @@ export function removePostAsset(
     if (err instanceof StillUsedError) return "still_used";
     if (err instanceof NotFoundError) return "not_found";
     // dropAsset's own NOT EXISTS only covers post_assets. publications.asset_id (a Story
-    // send pinned to this one slide, migration 0014) and assets.cover_asset_id (migration
-    // 0016) are both ON DELETE RESTRICT/NO ACTION references the DELETE statement itself
-    // can't see, so SQLite raises the FK error instead of the DELETE just no-opping. Same
-    // precedent as deleteAsset() above: a still-referenced asset is "still_used" from the
-    // caller's point of view no matter which foreign key caught it.
+    // send pinned to one slide, migration 0014) and assets.cover_asset_id (migration 0016)
+    // are ON DELETE RESTRICT/NO ACTION references the DELETE statement itself can't see, so
+    // SQLite raises the FK error instead of the DELETE just no-opping.
+    //
+    // Reported SEPARATELY from "still_used" on purpose. "still_used" means the NOT EXISTS
+    // matched a post_assets row that appeared mid-request — a real race, and the caller
+    // says so. A foreign key is not that: nothing raced, the reference was there all along,
+    // and countOtherAssetReferences() is meant to have caught it first. Folding the two
+    // together is what let the route tell people "another post picked this file up while
+    // you were editing" about a failed Story send that had sat there for a week.
     const code = (err as { code?: string }).code ?? "";
-    if (code.startsWith("SQLITE_CONSTRAINT")) return "still_used";
+    if (code.startsWith("SQLITE_CONSTRAINT")) return "referenced_asset";
     throw err;
   }
 }

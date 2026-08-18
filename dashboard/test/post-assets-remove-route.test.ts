@@ -196,3 +196,57 @@ test("removing the middle slide leaves a gap-free order that can be appended to"
   assert.equal(q.addPostAssets(p, [extra], "carousel"), "ok");
   assert.deepEqual(q.getPostSlides(p).map((s) => s.asset_id), [a, c, extra]);
 });
+
+function mkChannel(name: string): number {
+  return Number(
+    db
+      .prepare(
+        "INSERT INTO channels (platform, account_name, remote_account_id, is_active) VALUES ('instagram', ?, ?, 1)"
+      )
+      .run(name, `remote-${name}`).lastInsertRowid
+  );
+}
+
+test("mode=everywhere is refused honestly when a FAILED Story send still names the slide", async () => {
+  // The case the design cares about most: fixing the media before retrying is very often
+  // exactly why a send failed. 'failed' is not 'scheduled'/'pending_approval', so the
+  // story_queued rule doesn't fire — but publications.asset_id is ON DELETE RESTRICT, so
+  // the asset DELETE cannot go through. This used to reach SQLite and come back as
+  // "Another post picked this file up while you were editing", which was simply untrue.
+  const a = mkAsset();
+  const b = mkAsset();
+  const p = mkPost([a, b]);
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'failed', 'story', ?)`
+  ).run(p, mkChannel("failed-story"), b);
+
+  const res = await del(p, b, "everywhere");
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.code, "referenced_asset");
+  assert.doesNotMatch(body.error, /another post/i, "must not blame a post that isn't involved");
+  assert.doesNotMatch(body.error, /while you were editing/i, "must not blame a race");
+  assert.ok(q.getPostSlides(p).some((s) => s.asset_id === b), "still on the post");
+  assert.ok(fs.existsSync(fileFor(b)), "file untouched");
+
+  // And the fallback the message points at actually works.
+  const unlink = await del(p, b, "post");
+  assert.equal(unlink.status, 200);
+  assert.ok(q.getAsset(b), "the file itself is left alone");
+});
+
+test("mode=everywhere is refused when the slide is some video's cover image", async () => {
+  const a = mkAsset();
+  const b = mkAsset();
+  const p = mkPost([a, b]);
+  db.prepare("UPDATE assets SET cover_asset_id = ? WHERE id = ?").run(b, a);
+
+  const res = await del(p, b, "everywhere");
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.code, "referenced_asset");
+  assert.match(body.error, /cover image/);
+  assert.ok(q.getAsset(b), "the asset row survives");
+  assert.ok(fs.existsSync(fileFor(b)), "the file survives");
+});

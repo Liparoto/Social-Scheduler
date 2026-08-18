@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   addPostAssets,
+  countQueuedPerSlideSendsForPost,
   getAsset,
   getPost,
   getPostAssets,
@@ -109,7 +110,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const postId = Number(id);
-  if (!Number.isInteger(postId) || !getPost(postId)) {
+  const post = Number.isInteger(postId) ? getPost(postId) : undefined;
+  if (!post) {
     return NextResponse.json({ error: "Post not found." }, { status: 404 });
   }
 
@@ -139,10 +141,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const checked = checkAddAssets(
     {
       slides: getPostSlides(postId),
+      postType: post.post_type,
       hasLiveSend: postHasLiveSend(postId),
       channels: getPostCompatChannels(postId),
     },
-    incoming
+    incoming,
+    // The mirror of the rule the remove route enforces. An Instagram Story send is fanned
+    // out one publications row per slide, once, at scheduling time — nothing resyncs it —
+    // so a slide added now would get no row and silently never post, while the queue
+    // renders it as "Story 4 of 4" because story_slide_no is computed live from
+    // post_assets. Refused rather than fanned out: this feature never writes to the
+    // owner's queue for them. A feed send (asset_id IS NULL) is excluded and must stay
+    // excluded — it publishes whatever slides exist at publish time.
+    countQueuedPerSlideSendsForPost(postId)
   );
   if (!checked.ok) {
     return NextResponse.json(

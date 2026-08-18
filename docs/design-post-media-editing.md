@@ -103,7 +103,11 @@ function the route calls, unit-tested without a database.
 | Last slide | Refused. "A post needs at least one photo. Delete the post instead." |
 | Video mixing | Refused in both directions — no video into a post that has other slides, and nothing added alongside an existing video. Mirrors the composer. |
 | `post_type` | Re-derived: 1 image = `single`, 1 video = `reel`, 2+ = `carousel`. |
-| Channel fit | `incompatiblePostError(newType, newCount, targetChannels)` → 409 naming the offending channel and its real limit. |
+| Channel fit | `incompatiblePostError(newType, newCount, targetChannels)` → **400** naming the offending channel and its real limit. It is an invalid request, like the video-mixing rule beside it, so it follows the "Error handling" convention below rather than the 409 an earlier draft of this table said. |
+| Queued Story send — removing | Refused → 409 when a `scheduled`/`pending_approval` publication names THIS slide (`publications.asset_id`). Cancel or hold the send first. Never auto-canceled: this feature does not write to the queue for you. |
+| Queued Story send — adding | Refused → 409 when the post has ANY `scheduled`/`pending_approval` publication with a non-NULL `asset_id`. The Story fan-out is one row per slide and happens once, at scheduling time, with no resync — a slide added afterwards would have no row and silently never post, while the queue rendered it as "Story 4 of 4". Never fanned out for you, for the same reason removal is never auto-canceled. A **feed** send (`asset_id IS NULL`) does not block adding: it publishes whatever slides exist at publish time, so picking the new one up is the point. |
+| Text post | Refused → 400. A `post_type='text'` post has no slides by design and cannot become a media post; make a new post instead. The mirror of `Last slide`, which refuses the same conversion from the other direction. |
+| Other references (`mode=everywhere`) | Refused → 409 when anything outside `post_assets` points at the asset row: `publications.asset_id` in **any** status (ON DELETE RESTRICT, migration 0014 — `failed` and `canceled` count) or `assets.cover_asset_id` (migration 0016). Counted up front so the refusal names the real reason; left to SQLite it surfaced as a bare constraint error that got reported as a shared-asset race that never happened. `mode=post` still works and the message says so. |
 
 ### Which posts are editable
 

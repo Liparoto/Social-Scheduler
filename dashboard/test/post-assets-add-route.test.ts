@@ -100,3 +100,77 @@ test("a live send is a 409 and adds nothing", async () => {
   assert.equal((await res.json()).code, "live_send");
   assert.equal(q.getPostSlides(p).length, 1);
 });
+
+/** An IG Story send is fanned out one publications row per slide, at scheduling time. */
+function mkChannel(name: string): number {
+  return Number(
+    db
+      .prepare(
+        "INSERT INTO channels (platform, account_name, remote_account_id, is_active) VALUES ('instagram', ?, ?, 1)"
+      )
+      .run(name, `remote-${name}`).lastInsertRowid
+  );
+}
+
+test("a post with a queued Story send refuses a new slide, and adds nothing", async () => {
+  // The mirror of the rule the remove route enforces. The Story fan-out happens once, at
+  // scheduling time, and nothing resyncs it — so a slide added now would get no
+  // publications row and silently never post as a Story, while the queue rendered it as
+  // "Story 3 of 3" (story_slide_no is computed live from post_assets).
+  const a = mkAsset();
+  const b = mkAsset();
+  const p = mkPost([a, b]);
+  const channel = mkChannel("story-add");
+  for (const slide of [a, b]) {
+    db.prepare(
+      `INSERT INTO publications (post_id, channel_id, scheduled_at, status, surface, asset_id)
+       VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled', 'story', ?)`
+    ).run(p, channel, slide);
+  }
+
+  const res = await post(p, { asset_ids: [mkAsset()] });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.code, "story_queued");
+  assert.match(body.error, /Cancel or hold/);
+  assert.deepEqual(q.getPostSlides(p).map((s) => s.asset_id), [a, b], "nothing was added");
+  assert.equal(
+    (db.prepare("SELECT COUNT(*) AS n FROM publications WHERE post_id = ?").get(p) as {
+      n: number;
+    }).n,
+    2,
+    "and no publication was created behind the owner's back"
+  );
+});
+
+test("a queued FEED send does NOT block adding a slide", async () => {
+  // asset_id IS NULL: a feed send publishes whatever slides the post holds at publish
+  // time, so picking up the new slide is exactly the intended behaviour. Blocking here
+  // would be a regression, not a safety check.
+  const a = mkAsset();
+  const p = mkPost([a]);
+  db.prepare(
+    `INSERT INTO publications (post_id, channel_id, scheduled_at, status)
+     VALUES (?, ?, '2026-01-01T00:00:00Z', 'scheduled')`
+  ).run(p, mkChannel("feed-add"));
+
+  const extra = mkAsset();
+  const res = await post(p, { asset_ids: [extra] });
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).asset_ids, [a, extra]);
+});
+
+test("a text-only post cannot be turned into a media post", async () => {
+  const p = q.createDraftPost({
+    caption: "just words",
+    first_comment: "",
+    asset_ids: [],
+    post_type: "text",
+  });
+  const res = await post(p, { asset_ids: [mkAsset()] });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.code, "text_post");
+  assert.equal(q.getPostSlides(p).length, 0);
+  assert.equal(q.getPost(p)!.post_type, "text", "the post type must not be rewritten");
+});

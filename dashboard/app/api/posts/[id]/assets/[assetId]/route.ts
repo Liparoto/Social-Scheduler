@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assetFilePaths, unlinkInsideStore } from "@/lib/asset-files";
 import {
+  countOtherAssetReferences,
   countOtherPostsUsingAsset,
   countQueuedDirectSendsForSlide,
   getAsset,
@@ -36,7 +37,8 @@ export async function DELETE(
   const { id, assetId: rawAssetId } = await params;
   const postId = Number(id);
   const assetId = Number(rawAssetId);
-  if (!Number.isInteger(postId) || !getPost(postId)) {
+  const post = Number.isInteger(postId) ? getPost(postId) : undefined;
+  if (!post) {
     return NextResponse.json({ error: "Post not found." }, { status: 404 });
   }
   if (!Number.isInteger(assetId)) {
@@ -52,6 +54,7 @@ export async function DELETE(
   const checked = checkRemoveAsset(
     {
       slides: getPostSlides(postId),
+      postType: post.post_type,
       hasLiveSend: postHasLiveSend(postId),
       channels: getPostCompatChannels(postId),
     },
@@ -62,7 +65,12 @@ export async function DELETE(
     // otherwise survive unlinking and still try to publish a slide the post no longer has —
     // in either mode, not only "everywhere". checkRemoveAsset refuses rather than
     // auto-canceling the send: see its own comment for why.
-    countQueuedDirectSendsForSlide(postId, assetId)
+    countQueuedDirectSendsForSlide(postId, assetId),
+    // Everything else that points at this asset row, so `mode=everywhere` refuses up front
+    // and honestly. Without this the foreign keys on publications.asset_id and
+    // assets.cover_asset_id only surfaced as a constraint error mid-transaction, which the
+    // route then described as a race that had not happened.
+    countOtherAssetReferences(assetId)
   );
   if (!checked.ok) {
     return NextResponse.json(
@@ -88,6 +96,21 @@ export async function DELETE(
           "Another post picked this file up while you were editing, so it wasn't deleted. " +
           "Nothing was changed.",
         code: "shared_asset",
+      },
+      { status: 409 }
+    );
+  }
+  if (result === "referenced_asset") {
+    // Not a race — a foreign key. checkRemoveAsset's countOtherAssetReferences() check is
+    // meant to catch this first, so reaching here means a reference appeared in the gap.
+    // Either way `mode=post` would have gone through, so say so rather than leaving the
+    // owner with a refusal and no next step.
+    return NextResponse.json(
+      {
+        error:
+          "Something still references this file, so it wasn't deleted and nothing was " +
+          "changed. Removing it from just this post would work.",
+        code: "referenced_asset",
       },
       { status: 409 }
     );
