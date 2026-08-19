@@ -2163,3 +2163,86 @@ exactly when someone is reviewing content.
 **Not done, deliberately:** `library-view.tsx` stays at ~990 lines. The bar reads a dozen
 pieces of parent state, so extracting it is a far larger change than a collapse toggle should
 drag in.
+
+## Post media editing: add and remove slides on an existing post — 2026-08-18  `[x] done`
+
+Design: `docs/design-post-media-editing.md`. Task briefs/reports:
+`.superpowers/sdd/2026-08-18-post-media-editing/`. A post's media used to be fixed the moment
+it was composed — every edit surface could change the words, tags, status, schedule and slide
+*order*, but never which slides existed. Fixing one wrong photo in a ten-slide carousel meant
+rebuilding the post from scratch, and `DELETE /api/assets/[id]` refused any asset attached to
+a post with an error pointing at a door that did not exist.
+
+What it does:
+
+- **Add** — upload new files or pick existing ones from the library; they append as slides
+  through `POST /api/posts/[id]/assets`.
+- **Remove** — ✕ on a slide opens a two-button confirm: *remove from this post* (file stays in
+  the library) or *delete the file entirely* (gone from disk), one endpoint
+  (`DELETE /api/posts/[id]/assets/[assetId]?mode=post|everywhere`) so nothing is unlinked
+  before a shared-asset refusal can stop it.
+- `post_type` is re-derived on every add/remove (1 image → `single`, 1 video → `reel`, 2+ →
+  `carousel`), reusing `incompatiblePostError()` for channel-fit checks rather than
+  re-deriving the strictest-target rule a second time.
+- Refusals with a reason a person can act on: last slide, video mixed into/out of a carousel
+  (the worker has no publish path for a video inside one), a queued Story send that names the
+  slide being removed or a post with any per-slide Story send queued for an add (the fan-out
+  never resyncs), a shared or otherwise-referenced asset on `mode=everywhere`, a text post (no
+  slides by design), and any live (`posted`/`publishing`) publication.
+- One shared strip, `components/post-media-editor.tsx`, mounted in **every** edit surface: the
+  full editor at `/library/[id]`, the Library grid's quick-edit dialog, and the Overview
+  queue's quick-edit dialog (the latter two share one component).
+- Changes apply **immediately**, not behind Save — `QuickEditModal` is confirm-on-dismiss and
+  compares against what it opened with, so media lives deliberately outside that dirty
+  tracking, the same precedent slide *reorder* already set in the same dialog.
+- **Uploads are pre-flighted.** `GET /api/posts/[id]/assets/can-add` answers the rules that
+  need nothing but the post (live send, queued Story send, text post) *before* a byte is
+  uploaded. `POST /api/assets/upload` writes the original, a conformed derivative and a
+  thumbnail into `/data` and only then returns an id, so without this every refused attempt
+  left another orphaned conformed copy in the library with nothing to say where it came from.
+  It runs the same `checkCanAddMedia()` the write path runs — one rule, one sentence, tested
+  side by side. The asset-dependent rules (video mixing, already-on-post, carousel size) still
+  run after upload: they cannot be judged without an asset row, and content-hash dedup makes a
+  re-upload of the same file resolve to the asset that already exists.
+- **A live post is not offered media controls at all.** `hasLiveSend` disables every ✕ and both
+  add affordances and says why on the page. The server refused these edits from the start, but
+  the delete confirm's usage lookup counts `publications.asset_id` — which a **feed**
+  publication leaves NULL — so an already-published carousel looked completely unreferenced and
+  the red "Delete the file entirely" button was being offered on history. `PostEditor` derives
+  the flag from the sends it already loads; `QuickEditModal` takes `has_live_send`, batched into
+  `listPosts()` and `getPostQuickEdit()` as `live_send_count` rather than fetched per row.
+
+**One strip, not two grids, and one Escape per dialog.** The first cut mounted the add/remove
+strip *next to* the existing `<CarouselReorder>` grid, which drew every photo on the post twice,
+side by side. Reordering moved into the strip and `<CarouselReorder>` was deleted — add, remove,
+reorder, the number badge and the host's own per-tile extras (the framing button, the lightbox
+badge) now share one tile. That left `components/carousel-reorder.tsx` holding only
+`useAssetOrder` and `OrderableAsset`, so it is now `components/use-asset-order.ts`. The strip
+also opens two overlays of its own (the asset picker, the remove confirm) which in quick edit
+stack on top of a dialog already listening for Escape; `useModalLayer()` makes Escape close only
+the topmost one, after the capture-phase listener plus `stopPropagation()` closed both at once
+and threw away the whole quick edit.
+
+**The quick-edit dialog needed a real fix, not just a mount.** It only ever fetched slides for
+an already-multi-slide carousel (`if (!isCarousel) return`), so a single image, a Reel, or a
+text post showed no media block at all — exactly the posts you most want to add a second photo
+to. The fetch is now unconditional and re-runnable (`reloadSlides`), and `isCarousel` is
+derived from the fetched slides rather than the Library list's stale `post.post_type` /
+`post.asset_count` snapshot, so a post that becomes a carousel mid-edit shows the reorder block
+without needing to be reopened. `PostMediaEditor`'s `onChanged` refetches those slides *and*
+calls `router.refresh()` directly (not the dialog's `onSaved`, which both callers use to force
+the dialog closed — a media edit must not do that) so `useAssetOrder`'s baseline moves with the
+slide list and the Library/Overview row behind the dialog stays in sync without waiting for a
+Cancel or Save.
+
+**Verified:** `npx tsc --noEmit` clean (only the pre-existing `lib/queries.tags.test.ts:54`
+error), `npm run lint` 0 errors (13 pre-existing warnings, unchanged), `npm test` 670 passed,
+0 failed. Browser-verified against a scratch DB copy on port 3940: the merged strip on a
+6-slide carousel (one tile per photo, arrows and numbering in place), nested Escape closing
+only the topmost dialog, adding a slide moving a post `single` → `carousel`, and
+"delete the file entirely" removing the `post_assets` row, both files on disk, and
+re-sequencing the remaining `sort_order` values.
+
+**Not done, deliberately (per design):** editing media on a post that already went out,
+replacing a slide in place, video slides inside a carousel, and converting a media post to a
+text post by removing its last slide.

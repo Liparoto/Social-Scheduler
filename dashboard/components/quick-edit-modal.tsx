@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
-import { CarouselReorder, useAssetOrder, type OrderableAsset } from "@/components/carousel-reorder";
+import { useAssetOrder, type OrderableAsset } from "@/components/use-asset-order";
+import { PostMediaEditor } from "@/components/post-media-editor";
 import {
   CaptionVariantsEditor,
   overLimitCaptionVariants,
@@ -22,6 +24,7 @@ import {
   overLimitGenericCaptions,
 } from "@/lib/quick-edit-captions";
 import { platformLabel } from "@/lib/platforms";
+import { useModalLayer } from "@/components/use-modal-focus-trap";
 import type { ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/types";
 
 /**
@@ -30,9 +33,10 @@ import type { ContentKind, ContentStatus, Period, PeriodMode, Tag } from "@/lib/
  * editor at `/library/[id]` uses, so there is only ever one write path and one set of
  * validators to keep correct.
  *
- * Deliberately NOT here: images, scheduled sends and targets. Those have real
- * consequences and already have considered UI in the full editor. Fields this dialog
- * doesn't send are left untouched by the route.
+ * Deliberately NOT here: scheduled sends and targets. Those have real consequences and
+ * already have considered UI in the full editor. Fields this dialog doesn't send are left
+ * untouched by the route. (Slides ARE here — see PostMediaEditor below — because adding a
+ * photo to the post you're already editing shouldn't mean leaving the page.)
  *
  * Everything except the captions is passed in from the Library list, which already carries
  * it. Captions are fetched on open instead — they are the bulk of a post's text and
@@ -77,6 +81,14 @@ export interface QuickEditPost {
    * promising it will "go out in this order" would be wrong.
    */
   queued_publication_count: number;
+  /**
+   * Has any send of this post reached the platform — 'posted' or 'publishing'?
+   *
+   * The media strip's controls are disabled on it. Both callers already have it: the
+   * Library's list query carries it per row, and the Overview's QueueQuickEdit gets it
+   * inside `quick_edit` from GET /api/posts/[id]/content.
+   */
+  has_live_send: boolean;
 }
 
 export function QuickEditModal({
@@ -86,6 +98,7 @@ export function QuickEditModal({
   topicTags,
   initialCaptions,
   note,
+  onMediaChanged,
   onClose,
   onSaved,
 }: {
@@ -109,9 +122,23 @@ export function QuickEditModal({
   initialCaptions?: CaptionVariantDraft[];
   /** One line of context under the title, for callers that opened this from elsewhere. */
   note?: string;
+  /**
+   * The post's media just changed, so anything the CALLER derived from it is now stale.
+   *
+   * The Library passes `post` straight down from a server-rendered list, so router.refresh()
+   * fixes it. The Overview's QueueQuickEdit holds it in local state from a one-shot fetch
+   * that a route refresh never touches, and `post_type` — which sets the caption limits —
+   * moves when a second slide is added. That caller re-fetches through this.
+   */
+  onMediaChanged?: () => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const router = useRouter();
+  // Not the bare router.refresh() the rest of this file avoids: a refresh outside a
+  // transition drops the pending indicator, and the first loading.tsx anyone adds would
+  // unmount this dialog mid-edit.
+  const [, startTransition] = useTransition();
   const [status, setStatus] = useState<ContentStatus>(post.content_status);
   const [kind, setKind] = useState<ContentKind>(post.content_kind);
   const [cooldown, setCooldown] = useState(
@@ -165,28 +192,51 @@ export function QuickEditModal({
     return () => controller.abort();
   }, [post.id, captionAttempt, hasInitialCaptions]);
 
-  const isCarousel = post.post_type === "carousel" && post.asset_count > 1;
   // null until the fetch lands. While it is null there is nothing to reorder and nothing
-  // to save — exactly like openedCaptions above.
-  const [orderAssets, setOrderAssets] = useState<OrderableAsset[] | null>(null);
+  // to save — exactly like openedCaptions above. Carries cover_frame_ms too, on top of
+  // what OrderableAsset declares: reordering only ever needed id/media_kind, but
+  // PostMediaEditor's EditorSlide needs cover_frame_ms as well (it draws a video slide's
+  // cover frame), and GET /api/posts/[id]/assets already returns it.
+  const [orderAssets, setOrderAssets] = useState<
+    (OrderableAsset & { cover_frame_ms: number | null })[] | null
+  >(null);
+
+  // Loads unconditionally, not just for a carousel. Reordering only ever needed these for
+  // a multi-slide post, but adding media needs them for a single too — and `post.post_type`
+  // / `post.asset_count` come from the Library list, so they go stale the moment media
+  // changes. `orderAssets` is the live truth once it lands.
+  // Which reload is the current one. Two removals in quick succession fire two of these,
+  // and without the check the SLOWER response wins — leaving a slide the user just deleted
+  // sitting on screen until something else refetched.
+  const reloadSeq = useRef(0);
+  const reloadSlides = useCallback(async (signal?: AbortSignal) => {
+    const seq = ++reloadSeq.current;
+    try {
+      const res = await fetch(`/api/posts/${post.id}/assets`, { signal });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(body.assets)) return;
+      if (seq !== reloadSeq.current) return;
+      setOrderAssets(body.assets);
+    } catch {
+      // A failed load leaves the dialog exactly as it is today: captions and scheduling
+      // still work, there is simply no media block. Not worth an error banner.
+    }
+  }, [post.id]);
 
   useEffect(() => {
-    if (!isCarousel) return;
     const controller = new AbortController();
-    async function loadAssets() {
-      try {
-        const res = await fetch(`/api/posts/${post.id}/assets`, { signal: controller.signal });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || !Array.isArray(body.assets)) return;
-        setOrderAssets(body.assets);
-      } catch {
-        // A failed load leaves the dialog exactly as it is today: captions and scheduling
-        // still work, there is simply no reorder block. Not worth an error banner.
-      }
-    }
-    loadAssets();
+    // reloadSlides only setState after its await, same fetch-on-mount/abort-on-cleanup
+    // shape as the captions effect above — the linter can't see through the useCallback
+    // indirection to confirm that, the same reason update-banner.tsx's check() effect
+    // carries this same disable.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above.
+    reloadSlides(controller.signal);
     return () => controller.abort();
-  }, [post.id, isCarousel]);
+  }, [reloadSlides]);
+
+  // Derived from the fetched slides, not post.post_type/post.asset_count: those are the
+  // Library list's snapshot and do not move when media is added or removed here.
+  const isCarousel = (orderAssets?.length ?? 0) > 1;
 
   const slideOrder = useAssetOrder(post.id, orderAssets ?? []);
 
@@ -226,6 +276,9 @@ export function QuickEditModal({
     ),
   ];
 
+  // This dialog's place on the app-wide modal stack. See use-modal-focus-trap.ts.
+  const layer = useModalLayer();
+
   /** The single funnel every dismissal path goes through. Nothing calls onClose directly. */
   function requestClose() {
     if (saving) return;
@@ -239,6 +292,11 @@ export function QuickEditModal({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
+      // A nested overlay — the asset picker or the remove-slide confirm, both opened from
+      // the media strip below — is stacked on top of this dialog and owns Escape while it
+      // is open. Without this, the capture-phase listener plus stopPropagation() closed
+      // BOTH at once, so backing out of the picker threw away the whole quick edit.
+      if (!layer.isTop()) return;
       e.stopPropagation();
       // Esc never destroys: while the discard prompt is up it backs out of the prompt
       // (= keep editing) rather than confirming the discard it just asked about.
@@ -341,15 +399,49 @@ export function QuickEditModal({
             under the cursor. */}
         {note ? <p className="mt-1 text-xs text-muted">{note}</p> : null}
 
-        {isCarousel && orderAssets ? (
-          <div className="space-y-2">
-            <h3 className="text-xs font-medium text-muted">Slide order</h3>
-            <CarouselReorder
-              assets={orderAssets}
-              order={slideOrder.order}
-              onOrderChange={slideOrder.setOrder}
-              queuedSendCount={post.queued_publication_count}
+        {/* ONE tile per slide. This used to be two blocks — a Media strip and a separate
+            "Slide order" grid — which drew every photo on the post twice. Add, remove and
+            reorder now share the same tile. Never offered for a text post: it has no slides
+            and POST /api/posts/[id]/assets refuses it with `text_post`. */}
+        {orderAssets && post.post_type !== "text" ? (
+          <div className="mt-5 space-y-2">
+            <h3 className="text-xs font-medium text-muted">Media</h3>
+            <PostMediaEditor
+              postId={post.id}
+              slides={orderAssets.map((a) => ({
+                id: a.id,
+                media_kind: a.media_kind,
+                cover_frame_ms: a.cover_frame_ms,
+              }))}
+              hasLiveSend={post.has_live_send}
+              reorder={
+                isCarousel
+                  ? {
+                      order: slideOrder.order,
+                      onOrderChange: slideOrder.setOrder,
+                      isDirty: slideOrder.isDirty,
+                    }
+                  : undefined
+              }
+              onChanged={() => {
+                // Media changes are immediate and OUTSIDE this dialog's dirty tracking, so
+                // refetch rather than patching local state: post_type may have changed too,
+                // and slideOrder's baseline has to move with it or a later reorder save
+                // would send a stale permutation. router.refresh() also syncs the parent
+                // list (Library grid / Overview queue row) — those callers' own onSaved
+                // forces this dialog closed, which a mid-edit media change must not do, so
+                // this refreshes them directly instead of routing through onSaved.
+                void reloadSlides();
+                onMediaChanged?.();
+                startTransition(() => router.refresh());
+              }}
             />
+            {isCarousel && post.queued_publication_count > 0 ? (
+              <p className="data text-[11px] text-muted">
+                {post.queued_publication_count} queued send
+                {post.queued_publication_count === 1 ? "" : "s"} will go out in this order.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -501,7 +593,7 @@ export function QuickEditModal({
 
         <div className="mt-6 flex items-center justify-between gap-4">
           <p className="text-[11px] text-faint">
-            Images, targets and sends stay in the full editor.
+            Targets and sends stay in the full editor.
           </p>
           <div className="flex gap-2">
             <button

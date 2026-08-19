@@ -48,6 +48,10 @@ export default function LibraryPage() {
     // post, and its scheduled/pending_approval publications cascade away with it. The merge
     // modal warns about that before the owner confirms; boolean is all it needs.
     has_queued_publication: p.queued_publication_count > 0,
+    // Derived here rather than fetched per row: quick edit's media strip has to know
+    // whether this post already went out, and the list query answers it for every post in
+    // the same pass. 'posted' or 'publishing' — see PostLibraryRow.live_send_count.
+    has_live_send: p.live_send_count > 0,
   }));
   const channels = getActiveChannels().map((c) => ({
     id: c.id,

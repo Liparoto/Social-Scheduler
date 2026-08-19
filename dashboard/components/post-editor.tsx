@@ -20,7 +20,8 @@ import { isPostDirty } from "@/lib/post-editor-dirty";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
-import { CarouselReorder, useAssetOrder } from "@/components/carousel-reorder";
+import { useAssetOrder } from "@/components/use-asset-order";
+import { PostMediaEditor } from "@/components/post-media-editor";
 import { CaptionVariantsEditor, overLimitCaptionVariants } from "./caption-variants-editor";
 import { FIRST_COMMENT_MAX_CHARS } from "@/lib/caption-limits";
 import { captionLength } from "@/lib/caption-length";
@@ -86,6 +87,10 @@ export function PostEditor({
   const slideOrder = useAssetOrder(post.id, assets);
   const [savingOrder, setSavingOrder] = useState(false);
   const isCarousel = post.post_type === "carousel" && assets.length > 1;
+  // What the strip gates its numbering and arrows on. Deliberately just the slide count:
+  // post.post_type is re-derived server-side after a media change, so keying off it would
+  // leave a freshly two-slide post without arrows until the refresh landed.
+  const canReorderSlides = assets.length > 1;
   // Deliberately excludes 'publishing': a send already mid-publish can't be reordered at
   // all, so counting it here would make the "will go out in this order" notice promise
   // something for a send it doesn't apply to. Quick edit's own reorder notice must agree
@@ -93,6 +98,12 @@ export function PostEditor({
   const queuedSendCount = sends.filter(
     (s) => s.status === "scheduled" || s.status === "pending_approval"
   ).length;
+  // Derived from the sends this page already loads rather than asking the DB a second
+  // question. The same rule postHasLiveSend() enforces server-side: 'posted' means it
+  // exists on the platform, 'publishing' means the worker is mid-flight with it. Media
+  // controls are disabled on it — the server refuses these edits anyway, so offering them
+  // (especially the irreversible "delete the file entirely") is a promise it can't keep.
+  const hasLiveSend = sends.some((s) => s.status === "posted" || s.status === "publishing");
   const [openMedia, setOpenMedia] = useState<{ asset: LightboxAsset; label: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [unmergeOpen, setUnmergeOpen] = useState(false);
@@ -264,110 +275,136 @@ export function PostEditor({
           onClose={() => setOpenMedia(null)}
         />
       ) : null}
-      {/* Read-only context strip */}
+      {/* Context strip — ONE tile per slide. It used to be two grids side by side (an
+          add/remove strip next to a separate reorder grid), which drew every photo twice;
+          <PostMediaEditor> now owns add, remove AND reorder on the same tile. */}
       <section className={card}>
         <div className="flex items-start gap-4">
-          {isCarousel ? (
+          {post.post_type === "text" ? (
+            <div className="flex h-24 w-24 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
+              Text post
+            </div>
+          ) : (
             <div className="space-y-2">
-              <CarouselReorder
-                assets={assets}
-                order={slideOrder.order}
-                onOrderChange={slideOrder.setOrder}
-                queuedSendCount={queuedSendCount}
-                // Same per-image framing review the non-carousel branch below renders —
-                // this component has the full Asset[] server-side, so it can supply the
-                // control directly rather than widening OrderableAsset for it.
-                renderExtra={(assetId) => {
-                  const a = assets.find((x) => x.id === assetId);
-                  // Rendered unconditionally: gating on needs_review is the second half of
-                  // the one-way bug — the control vanished once a choice was made.
+              <PostMediaEditor
+                postId={post.id}
+                slides={assets.map((a) => ({
+                  id: a.id,
+                  media_kind: a.media_kind,
+                  cover_frame_ms: a.cover_frame_ms,
+                }))}
+                onChanged={() => startTransition(() => router.refresh())}
+                hasLiveSend={hasLiveSend}
+                // Only a real carousel can be reordered — a single image or a Reel has one
+                // slide and nothing to order. Keyed off the asset count rather than
+                // post.post_type so the arrows appear the moment a second slide is added,
+                // without waiting for the server to re-derive the type.
+                reorder={
+                  canReorderSlides
+                    ? {
+                        order: slideOrder.order,
+                        onOrderChange: slideOrder.setOrder,
+                        isDirty: slideOrder.isDirty,
+                      }
+                    : undefined
+                }
+                // The single-slide tile is not a plain thumbnail here: a Reel gets the
+                // cover-frame picker, and an image gets the lightbox badge. A carousel keeps
+                // the strip's own thumbnails.
+                renderTile={
+                  canReorderSlides
+                    ? undefined
+                    : (slide) => {
+                        const a = assets.find((x) => x.id === slide.id);
+                        if (!a) return null;
+                        return a.media_kind === "video" ? (
+                          <div className="w-40">
+                            {/* MediaBadge positions itself bottom-right of its nearest
+                                positioned ancestor, so the slot goes around the picker's
+                                VIDEO — not around the whole picker, whose scrubber and Save
+                                control sit underneath. */}
+                            <CoverFramePicker
+                              asset={a}
+                              overlay={
+                                <MediaBadge
+                                  mediaKind="video"
+                                  label={post.caption ?? undefined}
+                                  onOpen={() =>
+                                    setOpenMedia({
+                                      asset: a,
+                                      label: post.caption || `Post ${post.id}`,
+                                    })
+                                  }
+                                />
+                              }
+                            />
+                          </div>
+                        ) : (
+                          <div className="relative h-24 w-24">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={`/api/media/${a.id}?variant=thumb`}
+                              alt=""
+                              className="h-24 w-24 rounded-lg object-cover"
+                            />
+                            <MediaBadge
+                              mediaKind="image"
+                              label={post.caption ?? undefined}
+                              onOpen={() =>
+                                setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
+                              }
+                            />
+                          </div>
+                        );
+                      }
+                }
+                // Per-image framing review, under every slide on both paths. Rendered
+                // unconditionally: gating on needs_review is the second half of the one-way
+                // bug — the control vanished once a choice was made.
+                renderExtra={(slide) => {
+                  const a = assets.find((x) => x.id === slide.id);
                   return a ? (
-                    <FramingButton
-                      asset={a}
-                      scheduledSendCount={scheduledSendCounts[a.id] ?? 0}
-                    />
+                    <FramingButton asset={a} scheduledSendCount={scheduledSendCounts[a.id] ?? 0} />
                   ) : null;
                 }}
               />
-              {slideOrder.error ? (
-                <p className="text-xs text-status-failed">{slideOrder.error}</p>
+              {canReorderSlides ? (
+                <>
+                  {slideOrder.error ? (
+                    <p className="text-xs text-status-failed">{slideOrder.error}</p>
+                  ) : null}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveSlideOrder}
+                      disabled={!slideOrder.isDirty || savingOrder}
+                      className="rounded-md border border-border px-2.5 py-1 text-xs text-ink transition-colors hover:bg-surface-sunken disabled:opacity-40"
+                    >
+                      {savingOrder ? "Saving…" : "Save order"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={slideOrder.reset}
+                      disabled={!slideOrder.isDirty || savingOrder}
+                      className="rounded-md px-2 py-1 text-xs text-muted transition-colors hover:text-ink disabled:opacity-40"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  {queuedSendCount > 0 ? (
+                    <p className="data text-[11px] text-muted">
+                      {queuedSendCount} queued send{queuedSendCount === 1 ? "" : "s"} will go out
+                      in this order.
+                    </p>
+                  ) : null}
+                </>
               ) : null}
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={saveSlideOrder}
-                  disabled={!slideOrder.isDirty || savingOrder}
-                  className="rounded-md border border-border px-2.5 py-1 text-xs text-ink transition-colors hover:bg-surface-sunken disabled:opacity-40"
-                >
-                  {savingOrder ? "Saving…" : "Save order"}
-                </button>
-                <button
-                  type="button"
-                  onClick={slideOrder.reset}
-                  disabled={!slideOrder.isDirty || savingOrder}
-                  className="rounded-md px-2 py-1 text-xs text-muted transition-colors hover:text-ink disabled:opacity-40"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              {assets.length ? (
-                assets.slice(0, 4).map((a) =>
-                  a.media_kind === "video" ? (
-                    <div key={a.id} className="w-40">
-                      {/* MediaBadge positions itself bottom-right of its nearest positioned
-                          ancestor, so the slot goes around the picker's VIDEO — not around
-                          the whole picker, whose scrubber and Save control sit underneath. */}
-                      <CoverFramePicker
-                        asset={a}
-                        overlay={
-                          <MediaBadge
-                            mediaKind="video"
-                            label={post.caption ?? undefined}
-                            onOpen={() =>
-                              setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
-                            }
-                          />
-                        }
-                      />
-                    </div>
-                  ) : (
-                    <div key={a.id}>
-                      <div className="relative h-16 w-16">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`/api/media/${a.id}?variant=thumb`}
-                          alt=""
-                          className="h-16 w-16 rounded-lg object-cover"
-                        />
-                        <MediaBadge
-                          mediaKind="image"
-                          label={post.caption ?? undefined}
-                          onOpen={() =>
-                            setOpenMedia({ asset: a, label: post.caption || `Post ${post.id}` })
-                          }
-                        />
-                      </div>
-                      <FramingButton
-                        asset={a}
-                        scheduledSendCount={scheduledSendCounts[a.id] ?? 0}
-                      />
-                    </div>
-                  )
-                )
-              ) : (
-                <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-surface-sunken text-center text-xs text-faint">
-                  {post.post_type === "text" ? "Text post" : "no image"}
-                </div>
-              )}
             </div>
           )}
           <div className="data text-xs text-ink-soft">
             <p>{post.post_type}{assets.length > 1 ? ` · ${assets.length} imgs` : ""}</p>
             <p className="mt-1 text-muted">Schedule status: {post.status}</p>
-            <p className="mt-0.5 text-faint">Images and scheduling are managed elsewhere.</p>
+            <p className="mt-0.5 text-faint">Scheduling is managed further down this page.</p>
           </div>
         </div>
       </section>

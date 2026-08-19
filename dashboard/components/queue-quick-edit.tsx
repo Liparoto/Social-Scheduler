@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { QuickEditModal, type QuickEditPost } from "@/components/quick-edit-modal";
 import { captionsToDrafts } from "@/lib/quick-edit-captions";
 import type { CaptionVariantDraft } from "@/components/caption-variants-editor";
@@ -98,6 +98,29 @@ export function QueueQuickEdit({
     return () => controller.abort();
   }, [postId]);
 
+  // Re-read the post after its media changed. The Library hands QuickEditModal a row from
+  // a server-rendered list, so router.refresh() is enough there; here `post` is local state
+  // from the one-shot fetch above and nothing refreshes it — leaving post_type (which picks
+  // the caption limits) and asset_count on their opening values after a slide is added.
+  //
+  // Captions are deliberately NOT touched: they were handed to the dialog as its opening
+  // baseline and may have been edited since, so overwriting them with the server's copy
+  // would silently throw that edit away.
+  const refreshSeq = useRef(0);
+  const refreshPost = useCallback(async () => {
+    const seq = ++refreshSeq.current;
+    try {
+      const res = await fetch(`/api/posts/${postId}/content`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.quick_edit) return;
+      if (seq !== refreshSeq.current) return;
+      setPost(body.quick_edit as QuickEditPost);
+    } catch {
+      // The dialog keeps working off what it already has. A stale caption limit is a worse
+      // reason to interrupt an edit in progress than it is a problem.
+    }
+  }, [postId]);
+
   // Only while this shell is on screen. Once the dialog mounts it owns Esc — and it must,
   // because by then there can be unsaved edits and Esc has to ask before discarding them.
   const settled = post !== null;
@@ -127,6 +150,7 @@ export function QueueQuickEdit({
         // headed to Instagram also rewrites what goes to Facebook, and that is not
         // guessable from the row you clicked.
         note={noteFor(queued, isFailedSend)}
+        onMediaChanged={refreshPost}
         onClose={onClose}
         onSaved={onSaved}
       />
