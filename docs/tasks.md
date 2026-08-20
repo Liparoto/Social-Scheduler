@@ -185,7 +185,7 @@ Design: `docs/design-content-model.md` · Plan: `docs/superpowers/plans/2026-07-
 - [x] One-time auto-retirement once all targets have posted; dry-runs don't count.
 - [x] Caption-variant rotation at publish (platform-specific → generic rotated → fallback).
 - [x] Verified: 61 worker tests pass; each task TDD + reviewed; whole-branch review clean.
-- [ ] **Owner action:** run `python3 migrate.py` on the live DB to apply `0002` (the launcher
+- [x] **Owner action:** run `python3 migrate.py` on the live DB to apply `0002` (the launcher
       does this automatically). Backfills the existing Grand Teton post to ready/targeted.
 
 ### Phase B — dashboard UI  `[x] done`
@@ -979,10 +979,11 @@ Media-page incident above, all destructive UI was driven with Playwright, never 
 **Deliberately out of scope:** splitting a carousel back into singles, reordering an existing
 carousel outside a merge, merging from the Media page.
 
-- [ ] **Follow-up (pre-existing, unrelated to merge):** `createDraftPost` derives `post_type`
+- [x] **Follow-up (pre-existing, unrelated to merge):** `createDraftPost` derives `post_type`
       from asset count alone and ignores `media_kind`, so a single *video* saved as a draft
       becomes `single` rather than `reel` — which the worker then refuses to publish. Confirmed
       live 2026-07-30.
+      **FIXED (confirmed 2026-08-20).** `derivePostType` now reads `media_kind` from the `assets` row for the single-asset case and delegates to `derivePostTypeFromKinds`, which returns `reel` for `video` (`dashboard/lib/queries.ts:1050`, `lib/post-media-edit.ts:145`).
 - [x] **FIXED 2026-08-05 — publish-in-flight race: merge could cascade-delete a publication the worker was actively sending.** The worker fetches `status='scheduled'` publications, loads the post and assets into Python memory, does an HTTP quota check, and only *then* writes `'publishing'` to the database. During that window the row still reads `scheduled`, so the merge's guard (which blocks `posted`/`publishing`) lets it through. The merge deletes the post, CASCADE removes the publication, and the worker's later status writes silently update 0 rows. Outcome: a real Instagram post exists with no database record, and the same photo sits in the merged carousel ready to post a second time. Pre-existing — `deletePost` has the identical guard — but merging widens the exposure because the merge modal explicitly invites merging posts that have queued sends. **Fix is worker-side:** claim the publication row conditionally before loading it — `UPDATE publications SET status='publishing' WHERE id=? AND status='scheduled'` — and abort if it updates 0 rows. The dashboard's `.immediate()` transaction cannot help because the worker is not writing during the window; it is holding state in memory.
       **Resolution:** `db.claim_publication()` does exactly that conditional UPDATE, and `publish_one` now calls it as step 0, before loading anything. A dry run deliberately does not claim. Pinned by `worker/tests/test_publish_claim.py`, including a test that asserts the row already reads `publishing` *during* the quota check — the RED run of that test showed `scheduled`, which is the race itself. The same claim closes the two-daemon double-publish hole, since only one caller can win the row.
 - [x] **Follow-up created by that fix — a crash between the claim and the publish stranded the row at `publishing`. FIXED 2026-08-05 (`29f34f0`).** `db.recover_stale_claims` runs each cycle and marks any row held past `PUBLISH_CLAIM_LEASE_SECONDS` (default 1800) as **failed, never back to `scheduled`** — a worker can die after the platform accepted the post but before writing the result, so re-queueing would double-post. The lease is set well clear of the Reel worst case (~17 min: 90 polls x 10s + tunnel); raise it if that poll budget grows. Runs above the kill-switch return, since flipping that mid-send is one of the ways a row strands.
