@@ -497,14 +497,34 @@ export interface AssetWithUsage {
   cover_frame_ms: number | null;
   created_at: string;
   post_count: number;
+  /**
+   * How many VIDEO assets point at this one as their Reels cover (assets.cover_asset_id,
+   * migration 0016). A second, entirely separate way to be referenced: a cover carries no
+   * post_assets row, so post_count alone reports it as unused — and deleteAsset() then
+   * refuses it anyway, because the foreign key vetoes. /media must treat this as usage.
+   */
+  cover_use_count: number;
   first_post_id: number | null;
   first_post_status: string | null;
 }
 
 /**
- * Every asset with how many posts use it. The nested SELECT does the GROUP BY, then the
- * outer join resolves the post's status — an aggregate (MIN) can't be referenced from a
+ * Every asset with how many things reference it. The nested SELECT does the GROUP BY, then
+ * the outer join resolves the post's status — an aggregate (MIN) can't be referenced from a
  * correlated subquery in the same SELECT list, so it has to happen one level up.
+ *
+ * TWO kinds of reference, counted separately because they mean different things to the page:
+ *   - post_count      — post_assets rows: this asset is a slide in a post.
+ *   - cover_use_count — assets.cover_asset_id: a video uses this image as its Reels cover.
+ *
+ * Both must be reported, and for one reason: /media decides whether to offer a Delete button
+ * (and what to add up as reclaimable space) from what this returns, while deleteAsset() lets
+ * ANY foreign key veto. Counting only post_assets is what made a cover show as "Unused" with
+ * a Delete button that could only ever fail, its bytes inflating the reclaim total.
+ *
+ * The cover count is a correlated scalar subquery rather than another LEFT JOIN: joining a
+ * second one-to-many table would multiply the post_assets rows and silently inflate
+ * post_count. Not an aggregate over the join, so it needs no GROUP BY entry of its own.
  */
 export function listAssetsWithUsage(): AssetWithUsage[] {
   return getDb()
@@ -513,7 +533,9 @@ export function listAssetsWithUsage(): AssetWithUsage[] {
          FROM (
            SELECT a.*,
                   COUNT(pa.post_id) AS post_count,
-                  MIN(pa.post_id)   AS first_post_id
+                  MIN(pa.post_id)   AS first_post_id,
+                  (SELECT COUNT(*) FROM assets cov WHERE cov.cover_asset_id = a.id)
+                    AS cover_use_count
              FROM assets a
              LEFT JOIN post_assets pa ON pa.asset_id = a.id
             GROUP BY a.id

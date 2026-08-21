@@ -113,3 +113,74 @@ test("listAssetsWithUsage reports usage that matches what delete will allow", as
   assert.equal(q.deleteAsset(unused), "ok");
   assert.equal(q.deleteAsset(used), "in_use");
 });
+
+// ---- A Reels cover is a USE, even though it has no post_assets row --------------------
+// The test above states the invariant these keep honest: the page decides whether to offer
+// a Delete button from what listAssetsWithUsage() reports, so anything deleteAsset() will
+// refuse has to be reported as used. migration 0016 added a second way to reference an
+// asset — assets.cover_asset_id, a video pointing at the image it uses as its Reels cover —
+// and it carries no post_assets row at all.
+
+async function coverSetup() {
+  const base = await setup();
+  const mkVideo = (n: number) =>
+    Number(
+      base.db
+        .prepare(
+          "INSERT INTO assets (content_hash, media_kind, storage_path) VALUES (?, 'video', ?)"
+        )
+        .run(`cover-hash-${n}-${Math.random()}`, `v/${n}.mp4`).lastInsertRowid
+    );
+  return { ...base, mkVideo };
+}
+
+test("an asset used only as a Reels cover is reported as used, not as free space", async () => {
+  const { q, mkAsset, mkVideo } = await coverSetup();
+  const video = mkVideo(1);
+  const cover = mkAsset(1);
+  q.setAssetCoverImage(video, cover);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  const row = byId.get(cover);
+  assert.equal(row?.post_count, 0, "a cover genuinely has no post_assets row");
+  assert.equal(row?.cover_use_count, 1, "but it IS referenced, and /media has to say so");
+
+  // The invariant: whatever delete refuses must never be shown as deletable.
+  assert.equal(q.deleteAsset(cover), "in_use");
+});
+
+test("clearing the cover releases the asset again", async () => {
+  const { q, mkAsset, mkVideo } = await coverSetup();
+  const video = mkVideo(2);
+  const cover = mkAsset(2);
+  q.setAssetCoverImage(video, cover);
+  q.setAssetCoverImage(video, null);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  assert.equal(byId.get(cover)?.cover_use_count, 0);
+  assert.equal(q.deleteAsset(cover), "ok", "nothing references it any more");
+});
+
+test("one image serving as the cover for several videos counts every one", async () => {
+  const { q, mkAsset, mkVideo } = await coverSetup();
+  const cover = mkAsset(3);
+  const videos = [mkVideo(3), mkVideo(4)];
+  for (const v of videos) q.setAssetCoverImage(v, cover);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  assert.equal(byId.get(cover)?.cover_use_count, 2);
+  // The videos themselves are unused — pointing AT a cover is not being used BY anything.
+  assert.equal(byId.get(videos[0])?.cover_use_count, 0);
+});
+
+test("an asset in a post AND serving as a cover reports both", async () => {
+  const { q, mkAsset, mkVideo, mkDraft } = await coverSetup();
+  const video = mkVideo(5);
+  const cover = mkAsset(4);
+  mkDraft([cover]);
+  q.setAssetCoverImage(video, cover);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  assert.equal(byId.get(cover)?.post_count, 1);
+  assert.equal(byId.get(cover)?.cover_use_count, 1);
+});

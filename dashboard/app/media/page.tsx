@@ -12,7 +12,7 @@ export default function MediaPage() {
     <div>
       <PageHeader
         title="Media"
-        subtitle="Every file in your asset store. Anything not attached to a post can be deleted to reclaim disk space."
+        subtitle="Every file in your asset store. Anything nothing else is using can be deleted to reclaim disk space."
       />
       <div className="px-8 py-6">
         {assets.length === 0 ? (

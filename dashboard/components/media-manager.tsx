@@ -50,7 +50,11 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
   }
 
   const summary = useMemo(() => {
-    const unused = assets.filter((a) => a.post_count === 0);
+    // "Unused" has to mean "nothing at all references this", not "no post references this".
+    // A Reels cover (assets.cover_asset_id) has no post_assets row but IS referenced, and
+    // deleteAsset() refuses it — counting its bytes here would promise space that cannot be
+    // reclaimed. Any future reference to an asset belongs in this condition too.
+    const unused = assets.filter((a) => a.post_count === 0 && a.cover_use_count === 0);
     const bytes = (list: AssetWithUsage[]) =>
       list.reduce((sum, a) => sum + (a.byte_size ?? 0), 0);
     return {
@@ -82,7 +86,17 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
       <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         {assets.map((a) => {
           const name = a.original_filename ?? `Asset ${a.id}`;
-          const used = a.post_count > 0;
+          const inPost = a.post_count > 0;
+          const isCover = a.cover_use_count > 0;
+          // Plain words, because this line is the whole explanation of why a file has no
+          // Delete button. A cover is attached to a VIDEO, not to a post, so "in post #N"
+          // would be a lie — and the post link would point at nothing.
+          //
+          // Two spellings rather than one lowercased at the call site: "Reels" is a proper
+          // noun and .toLowerCase() rendered it as "a reels cover".
+          const coverTail = a.cover_use_count > 1 ? ` (${a.cover_use_count} videos)` : "";
+          const coverLabel = `Used as a Reels cover${coverTail}`;
+          const coverAlso = `also used as a Reels cover${coverTail}`;
           return (
             <li
               key={a.id}
@@ -136,7 +150,7 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
                   {a.width && a.height ? ` · ${a.width}×${a.height}` : ""}
                   {durationLabel(a.duration_ms) ? ` · ${durationLabel(a.duration_ms)}` : ""}
                 </p>
-                {used ? (
+                {inPost ? (
                   <p className="text-xs text-faint">
                     In{" "}
                     <Link
@@ -147,7 +161,12 @@ export function MediaManager({ assets }: { assets: AssetWithUsage[] }) {
                     </Link>
                     {a.first_post_status ? ` (${a.first_post_status})` : ""}
                     {a.post_count > 1 ? ` +${a.post_count - 1} more` : ""}
+                    {isCover ? ` · ${coverAlso}` : ""}
                   </p>
+                ) : isCover ? (
+                  // Referenced, but by a video rather than a post — so it gets a reason and
+                  // no Delete button, matching what deleteAsset() would actually allow.
+                  <p className="text-xs text-faint">{coverLabel}</p>
                 ) : (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-faint">Unused</span>
