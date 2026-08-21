@@ -16,14 +16,15 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Threads sends show "metrics not fetched yet" while holding real numbers | P2 | `~1h` | Easy | 24 sends affected on this install: Threads reports views into `impressions` and never `reach`, but the UI gates the whole metrics line on `reach !== null`. |
-| 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+
+**Nothing else is open.** The one task on this table is a brainstorm, not work.
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
 missing row), `/media`'s blindness to Reels covers, a restorable backup (`socialscheduler.db` in
 every export + `Restore-Mac.command`/`Restore-Windows.bat`), bulk retarget no longer abandoning a
-batch, and media → post links reaching every post. One P2 remains, and it is a brainstorm rather
-than a task.
+batch, media → post links reaching every post, and the Threads metrics line (below). One P2
+remains, and it is a brainstorm rather than a task.
 
 **Scrapped 2026-08-21 (owner-approved) — do not re-propose without re-litigating:**
 approval-workflow UI · re-import from `export.json` · `--since`/`--channel` export filters ·
@@ -55,13 +56,31 @@ boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: i
       **Verified live:** worker restarted, logged `(1/3)`, `(2/3)`, then `giving up:` once — and
       then **760 log lines about pub 48 stayed at 760** across several further poll cycles. The
       post page shows the badge. 8 worker tests + 3 dashboard tests, all failing first.
-- [ ] **Threads sends read "metrics not fetched yet" while holding real numbers.** Found while
-      verifying the fix above. Publication 49 on the same post has **18 metric snapshots** and
-      still shows that line. Threads reports views into `impressions` and never populates
-      `reach`, but `post-sends-panel.tsx` gates the entire metrics line on
-      `send.reach !== null`. **24 sends on this install are affected.** Same class of bug as the
-      one above — the page saying something untrue about metrics — and the same fix shape: gate
-      on "any metric present", and show each platform the numbers it actually reports.
+- [x] **Threads sends read "metrics not fetched yet" while holding real numbers — FIXED
+      2026-08-21 (`b4c256d`), verified in a browser against a copy of the live DB.** Found while
+      verifying the fix above. `post-sends-panel.tsx` gated the entire metrics line on
+      `send.reach !== null`, using one metric as a stand-in for "has the worker fetched yet".
+      Instagram always reports reach, so the proxy held there; Threads reports none at all, so
+      every Threads run looked permanently unfetched. **All 24 posted Threads sends on this
+      install were affected, across 1,150 metric snapshots** — plus 7 Instagram runs whose reach
+      happened to be null. Facebook would have joined them the moment a Page is connected, since
+      its reach is best-effort. The worker was never wrong; only the display condition was.
+      **Not "gate on any metric present", which is what this entry originally proposed.** That
+      would have fixed Threads and kept the underlying error — a value standing in for a fact it
+      does not represent — and it collapses two different states: a fetch that returned nothing
+      and a fetch that never ran. The gate is now `post_metrics.fetched_at`, the actual record
+      of a fetch, added to `getPostPublications` and to `PostPublicationRow`.
+      **Each platform gets its own vocabulary**, the way `publication-queue.tsx` already did:
+      Threads speaks views/likes/replies/reposts (no reach, no saves — it has neither concept),
+      Facebook reactions/comments/shares plus best-effort reach, Instagram keeps
+      reach/views/likes/comments/saves. `metricLine()` returns three distinct outcomes so
+      "fetched, nothing reported" cannot read as "not fetched yet", and an unrecognised platform
+      renders visibly wrong rather than silently borrowing Instagram's metric set.
+      **Verified:** all three paths exercised in a real browser on a scratch DB (real numbers →
+      `20 views · 2 likes · 1 replies`; metrics row deleted → the old message, correctly; empty
+      metrics row → "no numbers reported"). 710 dashboard tests pass, lint at 0 errors, no new
+      type errors. Checked and found already correct: `autofill.py` ranks on reach+saves and
+      takes MAX across group members *because* Threads scores 0 there — see line 347.
 
 **Blocked on something external (not schedulable):**
 - Facebook Pages adapter — real-post verification. Written, never proved live; no Page connected.
