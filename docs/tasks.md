@@ -3,7 +3,34 @@
 Phased breakdown. **One phase at a time**; each phase must pass its verification before the next
 begins. Mark items `[x]` as completed and update status as we go.
 
-Legend: `[ ]` todo · `[~]` in progress · `[x]` done
+Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` considered and rejected (not work)
+
+---
+
+## Open work at a glance  ·  audited 2026-08-21
+
+Everything below this heading is history. **This table is the whole of what is actually open.**
+Re-audit before trusting it. The sweep that produced it found **nine items still marked `[ ]`
+that had in fact shipped**, and **two shipped features never written down at all** (asset
+download, the auto-fill timestamp fix — both now recorded at the end of this file).
+
+| # | Open item | Priority | Time | Difficulty | Why it matters |
+|---|---|---|---|---|---|
+| 1 | Make the backup restorable — export a `socialscheduler.db` copy + `Restore-Mac.command` | P1 | `~1h` | Easy | The export records your data but cannot restore it; the whole install is one SQLite file on one Mac. |
+| 2 | Bulk retarget abandons the whole batch on the first over-limit post | P2 | `~1h` | Easy | Blocks folding a new account into existing content on any mixed selection; nothing is written and the error names one post. |
+| 3 | Media → post links dead-end on reused media (`MIN(post_id)`) | P2 | `~half day` | Medium | Posts using a reused asset are unreachable from `/media`; design + plan already written. |
+| 4 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+
+**Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
+missing row) and `/media`'s blindness to Reels covers. Both were `<30m` Easy rows above.
+
+**Scrapped 2026-08-21 (owner-approved) — do not re-propose without re-litigating:**
+approval-workflow UI · re-import from `export.json` · `--since`/`--channel` export filters ·
+boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: it is intentional).
+
+**Blocked on something external (not schedulable):**
+- Facebook Pages adapter — real-post verification. Written, never proved live; no Page connected.
+- Facebook Pages insights — same blocker; metric names must be probed, never guessed.
 
 ---
 
@@ -51,8 +78,9 @@ Highest-risk API surface, proven first against a **test** account.
 - [x] Dry-run single image → correct plan logged, nothing posted (unit + real entrypoint).
 - [x] Dry-run 3-image carousel → correct child/parent/publish sequence (unit test asserts
       exact call order); real entrypoint logged the ordered plan.
-- [ ] **Real single image to a test account → appears on IG, `remote_post_id` stored.**
-      ⏳ BLOCKED on real Meta app + test IG account credentials (owner to provide).
+- [x] **Real single image to a test account → appears on IG, `remote_post_id` stored.**
+      **DONE — live since 2026-07-30** (`DRY_RUN=0`). Verified 2026-08-21: 55 publications at
+      `status='posted'`, all 55 carrying a `remote_post_id`.
 - [x] Forced failure → publication retries with backoff then lands terminal `failed`; a second
       publication is provably untouched (independence test).
 - [x] Kill switch active → `run_once` publishes nothing, rows untouched.
@@ -452,9 +480,20 @@ without touching the database directly.
 - [x] Secrets excluded by allow-list (`CHANNEL_COLUMNS` in `worker/export/collect.py`); guarded
       by both a name-specific test and a structural test that rejects any future
       token/secret/password/key/credential-shaped column, plus a grep over a real export.
-- [ ] Future: re-import from `export.json`; `--since` / `--channel` filters.
+- [-] **SCRAPPED 2026-08-21 (owner-approved) — re-import from `export.json`.** Multi-day work
+      to reconstruct a database from a lossy spreadsheet, when a byte-perfect copy of the real
+      thing already exists on disk. Replaced by the item below.
+- [-] **SCRAPPED 2026-08-21 (owner-approved) — `--since` / `--channel` export filters.** Solving
+      a scale problem this install does not have: 139 posts, and a full export runs in seconds.
+- [ ] **REPLACEMENT (P1) — make the backup restorable.** Today's export folder holds posts,
+      images and stats in a readable form, but nothing that can be *restored*: the whole install
+      lives in one SQLite file on one Mac, and the export does not include it. Have `worker.export`
+      also write a `socialscheduler.db` copy using SQLite's own `.backup` (safe against a live
+      WAL-mode database — a plain file copy is NOT, it can catch a torn page), plus a
+      `Restore-Mac.command` that puts it back. ~1h, and a strictly better restore than the
+      re-importer would have been.
 
-## Phase 6 — Extend adapters  `[ ]`
+## Phase 6 — Extend adapters  `[~]` — IG, Threads, Discord, Telegram live; FB written but unverified
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 Done one sub-project at a time (own spec → plan → build), not all at once.
 - [x] **Facebook Pages publish + metrics adapter** — spec
@@ -647,10 +686,16 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       creation now — before, only the composer could set it, so bulk-imported and extracted
       posts could never have one at all.
       Facebook remains the one unverified adapter (no FB channel on this install).
-- [ ] Approval-workflow UI (activates the `requires_approval` flag).
+- [-] **SCRAPPED 2026-08-21 (owner-approved) — approval-workflow UI.** An approval step needs
+      two people: one to submit, one to approve. This install has one, and zero channels set
+      `requires_approval`. The DB column stays (it costs nothing and the schema was always meant
+      to carry v1's full scope); only the UI work is dropped. Revisit if an install is ever
+      genuinely shared.
 
 ### Verification
-- [ ] Each adapter dry-run first, then one real post to a test account, before automation.
+- [~] Each adapter dry-run first, then one real post to a test account, before automation.
+      Done for Instagram, Threads, Discord and Telegram. **Facebook is the only adapter never
+      proved against a live account** — no Page is connected to this install.
 
 ---
 
@@ -919,13 +964,19 @@ target CSS selectors rather than coordinates that a media-heavy grid invalidates
 used asset, thumbnail backfill for assets that have none. Two unused personal files
 (`IMG_3707_1080.mov`, the Malaya photo) were kept at the owner's direction.
 
-- [ ] **Follow-up:** when migration `0016_cover_asset.sql` (the `custom-cover-image` branch;
-      renumbered from `0012` once main shipped its own 0012–0015)
-      merges to main, `listAssetsWithUsage()` must learn about `assets.cover_asset_id`. Until
-      it does, a Reels cover image has no `post_assets` row, so `/media` will show it as
-      "Unused" with a Delete button and count its bytes in the reclaim total. The delete
-      itself is safe — the foreign key rejects it — but the page's "unused" figure would
-      overstate.
+- [x] **Follow-up — FIXED 2026-08-21.** `listAssetsWithUsage()` now reports `cover_use_count`
+      alongside `post_count`: a correlated subquery over `assets.cover_asset_id`, deliberately
+      not a second `LEFT JOIN`, which would multiply the `post_assets` rows and inflate
+      `post_count`. `/media` treats either count as usage, so a cover shows **"Used as a Reels
+      cover"** instead of "Unused", loses its Delete button, and stops counting toward the
+      reclaim total. The page and `deleteAsset()` now agree — the invariant the existing
+      `listAssetsWithUsage` test already stated, which covers had quietly broken.
+      **Verified:** 4 DB tests in `queries.assets.test.ts` (RED first) and 6 render tests in the
+      new `test-ui/media-manager-ui.test.ts`. The render pass caught a real copy bug on the way
+      through — lowercasing the label for the combined case rendered "a reels cover".
+      Fixed live in a real browser sense too: `/media` on the running dashboard returns 200 with
+      no `post #null` links. A live cover could not be exercised end-to-end because this install
+      has 0 covers set and the owner's dev server owns the directory (no second `next dev`).
 
 ---
 
@@ -988,7 +1039,27 @@ carousel outside a merge, merging from the Media page.
       **Resolution:** `db.claim_publication()` does exactly that conditional UPDATE, and `publish_one` now calls it as step 0, before loading anything. A dry run deliberately does not claim. Pinned by `worker/tests/test_publish_claim.py`, including a test that asserts the row already reads `publishing` *during* the quota check — the RED run of that test showed `scheduled`, which is the race itself. The same claim closes the two-daemon double-publish hole, since only one caller can win the row.
 - [x] **Follow-up created by that fix — a crash between the claim and the publish stranded the row at `publishing`. FIXED 2026-08-05 (`29f34f0`).** `db.recover_stale_claims` runs each cycle and marks any row held past `PUBLISH_CLAIM_LEASE_SECONDS` (default 1800) as **failed, never back to `scheduled`** — a worker can die after the platform accepted the post but before writing the result, so re-queueing would double-post. The lease is set well clear of the Reel worst case (~17 min: 90 polls x 10s + tunnel); raise it if that poll budget grows. Runs above the kill-switch return, since flipping that mid-send is one of the ways a row strands.
 - [x] **Single-instance guard — ADDED 2026-08-05 (`d996195`).** `worker/single_instance.py` takes an `flock` on `data/run/worker.lock` at startup. A kernel lock, not a pid file: it is released when the holder dies however it dies, so a `kill -9` cannot leave a stale one that blocks the next start. Scoped per install, so a second clone is unaffected.
-- [ ] **Follow-up — spec gap: caption-length guard never implemented.** The design doc's §5 lists a `captionLimitError` guard (reusing the per-post-type limit from `lib/caption-limits.ts`) that was never implemented — `planMerge` never receives the caption at all, so the check cannot run. Only reachable if someone merges posts with a caption that exceeds the `carousel` limit (where `single` captions were within bounds). The worker re-validates at publish and fails visibly at send rather than silently, so it surfaces eventually; low priority but the design doc currently overstates what ships.
+- [x] **Follow-up — spec gap: caption-length guard. FIXED 2026-08-21 as planMerge's guard 8.**
+      The design doc's §5 always listed a `captionLimitError` guard; it was never implemented
+      because `planMerge` was never handed the caption at all, so the check could not run.
+      **The original note here understated it.** It assumed the guard only mattered if the
+      `carousel` limit were stricter than `single` — and it never is, on any platform in
+      `platforms.ts`. The real path is the **target union**: `mergePostsIntoCarousel` unions
+      every merged post's `post_targets` onto the survivor, so a post targeting only Instagram
+      (no enforced caption limit) can acquire a **Threads** channel (500) from a sibling while
+      keeping its 1,500-character caption. Nothing about the caption changed; its audience did.
+      That is this install exactly — one Instagram channel, one Threads channel.
+      **Shape of the fix:** `planMerge` takes a required 4th argument (`MergeCaptionCheck`:
+      the caption the merge will write + the unioned target channels). Required, not optional —
+      an optional one is how the hole stayed open. `mergeTargetChannels()` replaces
+      `mergeTargetPlatforms(db, ...)` as the single read; the cap derives from it. A cleared
+      caption (`null`/`""`/whitespace, all of which mean CLEAR) is skipped, not measured, or
+      the "No caption" option would be blocked. Measured against the post type the merge
+      *produces*, since that is what merging changes.
+      **Verified:** 6 unit tests in `merge-plan.test.ts` (RED first — 3 failed before the
+      guard), 3 DB-level tests in `queries.merge.test.ts` proving the union path end to end and
+      that a rejected merge writes nothing. The DB tests were confirmed non-vacuous by
+      sabotaging the wiring and watching them fail.
 
 ---
 
@@ -1051,23 +1122,31 @@ startup — so it was polling happily against the OLD per-channel autofill, whic
 because a grouped channel's own `autofill_enabled` is 0. **Restart the worker after any change
 to worker code.** A live heartbeat proves the daemon is alive, not that it is running current code.
 
-- [ ] **Before first real use:** only 3 of 139 posts are `content_status='ready'`, and posts 1 and
-      2 target Instagram only. Since targeting is a *rule*, any post not targeted at **every**
-      member is invisible to the group. Retarget before expecting a full queue — and note
-      `POST /api/posts/targets/bulk` returns 400 on the first over-caption-limit post and abandons
-      the whole batch, so a mixed set cannot be bulk-retargeted in one go.
-- [ ] **Follow-up — grouped channels keep their own `channels.timezone`,** which the *manual*
-      scheduling paths still read. A channel card can therefore truthfully show a zone different
-      from the group's auto-fill zone. Not a defect; a decision left open.
-- [ ] **Follow-up — `worker/export/collect.py` was not extended:** `channel_groups` is not
-      collected and `group_id` is not in the channel allow-list, so a portable backup silently
-      loses all group configuration. The allow-list exists to keep credentials out, so omitting it
-      is defensible — but nobody decided it.
+- [x] **Before first real use: resolved.** Verified 2026-08-21 — all 111 posts now read
+      `content_status='ready'` and the group auto-fills against a full queue. (Targeting is a
+      *rule*: a post not targeted at **every** group member stays invisible to the group.)
+- [ ] **Split out of the item above — bulk retarget abandons the whole batch on the first bad
+      post.** `POST /api/posts/targets/bulk` (`dashboard/app/api/posts/targets/bulk/route.ts:45`)
+      pre-checks every post against `captionLimitError` and `return`s 400 on the first failure,
+      before `bulkAddTargets` runs. Nothing is written, so a mixed selection cannot be retargeted
+      in one go and the message names only one post. Still true 2026-08-21. Fix shape: collect
+      every offender, apply the rest, and report both halves.
+- [-] **DECISION CLOSED 2026-08-21 (owner-approved) — grouped channels keep their own
+      `channels.timezone`, and that is correct.** The *manual* scheduling paths still read it, so a
+      channel card can truthfully show a zone different from the group's auto-fill zone. This is
+      intentional, not a defect: `DEFAULT_TIMEZONE` is `America/Los_Angeles` (where the owner is)
+      while channels are `America/New_York` (where the audience is). Do not "fix" it. Recorded so
+      it stops reading as pending work.
+- [x] **Follow-up — FIXED 2026-08-05 (`db614da`).** `collect_channel_groups()` and a "Channel
+      groups" tab now ship in the backup, and `group_id` is in the channel allow-list
+      (`worker/export/collect.py:320`, `:192`). The allow-list still excludes credentials, with a
+      test asserting no token can reach the file.
 
 ---
 
 ## Phase 6+ backlog (owner-requested 2026-07-23, brainstorm each as its own sub-project)
-- [ ] **BPP — Best-Performing-Post recycling.** Auto-prioritize re-posting top performers.
+- [x] **BPP — Best-Performing-Post recycling. SHIPPED 2026-08-06** — rebuilt as *curation*
+      (a human mark, not an engagement score). See "Phase — BPP, rebuilt as curation" below.
       Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing
       (IG done; FB from the adapter above). Design after the FB adapter lands.
 - [ ] **"Fire with the Mac off" scheduling — simple, free, self-serviceable.** For FB, Meta's
@@ -1271,13 +1350,11 @@ commit `a927704`; re-measured afterward at exactly 64×64 with the layers offset
   Save button actually surface the "being published right now" message on screen.
 
 **Deferred (spec §9), not lost:**
-- [ ] **Adding or removing slides on an existing post.** This branch only reorders a fixed set
-      of slides — it deliberately never changes which assets belong to the post. Add/remove
-      moves `posts.post_type`, has to re-run platform compatibility, and needs the conform
-      pipeline for any newly uploaded asset. Merge-into-carousel covers the "assemble a carousel
-      from scratch" case today; there is still no way to add one more photo to an existing
-      carousel or drop one slide from it without rebuilding the post.
-- [ ] **Reordering from inside the lightbox.** Considered and rejected during design: the
+- [x] **Adding or removing slides on an existing post — SHIPPED 2026-08-18.** Left open by the
+      reorder branch (which deliberately only reordered a fixed set); delivered by "Post media
+      editing: add and remove slides on an existing post" below, which moves `posts.post_type`,
+      re-runs platform compatibility, and runs the conform pipeline on newly uploaded assets.
+- [-] **REJECTED (not pending work) — reordering from inside the lightbox.** Decided during design: the
       lightbox is a read-only viewer shared by three screens, and giving it a save state would
       turn it into a write surface with its own dirty/discard handling duplicated across all
       three. Recorded here so it isn't re-proposed without re-litigating that trade-off.
@@ -1292,7 +1369,7 @@ commit `a927704`; re-measured afterward at exactly 64×64 with the layers offset
 
 ---
 
-## Custom Reels cover image (2026-07-29, rebased and finished 2026-08-04)  `[x] done — not yet merged to main`
+## Custom Reels cover image (2026-07-29, rebased and finished 2026-08-04)  `[x] done` — merged to main; migration `0016_cover_asset.sql` is applied
 
 **Design:** `docs/superpowers/specs/2026-07-29-custom-cover-image-design.md` · **Plan:**
 `docs/superpowers/plans/2026-07-29-custom-cover-image.md`
@@ -1372,10 +1449,9 @@ not document whether it is possible); generating a cover (title cards, text over
 for Threads or TikTok (no equivalent — TikTok has a timestamp, like `thumb_offset`); cropping
 the cover locally to 9:16.
 
-- [ ] **Follow-up:** `listAssetsWithUsage()` still doesn't know about `assets.cover_asset_id`,
-      so a linked cover shows on `/media` as "Unused" with a Delete button and counts toward the
-      reclaim total. The delete itself is safe — the foreign key rejects it — but the figure
-      overstates. (Same item noted under the `/media` work above.)
+- [x] **Follow-up — FIXED 2026-08-21** (duplicate of the `/media` item above, which carries the
+      detail). `listAssetsWithUsage()` reports `cover_use_count`; a linked cover is shown as used
+      and is no longer offered for deletion or counted as reclaimable.
 
 ---
 
@@ -1460,10 +1536,11 @@ order of operations, then write `docs/design-unmerge-carousel.md`.
 
 ### Known landmines already documented elsewhere in this file
 
-- [ ] **`createDraftPost` derives `post_type` from asset count alone and ignores `media_kind`**
-      (follow-up under the merge section, confirmed live 2026-07-30). **Still open — unmerge
-      sidesteps it rather than fixing it:** `unmergeCarousel` writes its own `INSERT` with an
-      explicit `post_type`, so it never reaches this derivation.
+- [x] **`createDraftPost` derives `post_type` from asset count alone and ignores `media_kind`
+      — FIXED 2026-08-20.** `derivePostType` now reads `media_kind` off the `assets` row and
+      delegates to `derivePostTypeFromKinds`, returning `reel` for video
+      (`dashboard/lib/queries.ts:1069`). Unmerge never depended on it either way —
+      `unmergeCarousel` writes its own `INSERT` with an explicit `post_type`.
 - [x] **Publish-in-flight race — FIXED 2026-08-05.** The worker now claims a publication
       conditionally before loading anything, so a row being sent reads `publishing` from the
       first moment and the dashboard's existing guards see it. Unmerge inherits that protection
@@ -1605,9 +1682,13 @@ Windows uses an at-logon Scheduled Task (`SocialSchedulerWorker`).
 exit 0, no respawn, still registered), exactly one worker process throughout, heartbeat
 advancing on the 30s poll.
 
-- [ ] **Not done — this is login-scoped, not boot-scoped.** A LaunchAgent runs when the owner
-      logs in. If the Mac reboots and sits at the login window, the worker does not run. A
-      true boot-scoped daemon needs a `LaunchDaemon` in `/Library/LaunchDaemons` and `sudo`.
+- [-] **SCRAPPED 2026-08-21 (owner-approved) — boot-scoped `LaunchDaemon`.** Login-scoped is
+      what ships: a LaunchAgent runs when the owner logs in, so a Mac that reboots and sits at the
+      login window does not run the worker. The fix as specified means a `LaunchDaemon` in
+      `/Library/LaunchDaemons` running as **root**, with `sudo`, on a repo meant to be cloned by a
+      non-technical owner — a bad trade for one scenario. **Cheaper answers that stay:** turn on
+      macOS automatic login (zero code), or solve it properly inside the "fire with the Mac off"
+      brainstorm, which has to answer this anyway.
 - [x] **Windows parity — same three-option menu**, backed by `schtasks /SC ONLOGON` instead
       of launchd, with `Stop-...bat` ending the running task and
       `Disable-Worker-Autostart-Windows.bat` removing it. **Every Windows script in this
@@ -1726,9 +1807,12 @@ demographic breakdowns. Suites: **651 worker + 394 dashboard**, 0 lint errors.
   Every adapter registers `facebook: None` deliberately, and the hub says so on screen.
   If a Page is added later: connect it, run `python3 -m worker.insights_probe --channel N`,
   then wire the adapters using the names it reports.
-- [ ] **Reels `video_views`** is never requested — the shared post-metric list omits it,
-      and Instagram 400s the whole call if one name is invalid, so adding it needs a probe.
-- [ ] Meta's CDN thumbnail URLs expire; there is no local proxy for posts we did not publish.
+- [x] **Reels view count — FIXED 2026-08-05 (`db614da`).** The probe showed `video_views` AND
+      `plays` now 400 on *every* media type; `views` replaced both and works everywhere
+      (`worker/metrics.py:29`). Metric sets are per-media-type now, since Instagram rejects the
+      whole call when one name is invalid. Views is a sortable column.
+- [x] **Meta's CDN thumbnail URLs expire — FIXED 2026-08-05 (`db614da`).** Leaderboard
+      thumbnails are cached to our own disk and served locally, mirroring avatars and 0012.
 
 ---
 
@@ -1763,13 +1847,16 @@ Four items handled together after the Insights work, per owner request.
 **Verified:** 692 worker + 401 dashboard tests, 0 lint errors, clean typecheck. Live install
 re-synced: 146/146 posts carry views, the Reel reads 293 views, 120 thumbnails cached.
 
-### Still open (unchanged)
-- [ ] Facebook Pages insights — skipped by decision; no Page connected to probe against.
-- [ ] Autostart is login-scoped, not boot-scoped (works against "fire with the Mac off").
-- [ ] `/media` overstates reclaimable space (`listAssetsWithUsage` ignores `cover_asset_id`).
+### Still open (re-audited 2026-08-21 — see "Open work at a glance" at the top of this file)
+- [ ] Facebook Pages insights — blocked by decision; no Page connected to probe against.
+- [-] Autostart login-scoped vs boot-scoped — **SCRAPPED 2026-08-21**; folded into "fire with
+      the Mac off". Interim answer: macOS automatic login.
+- [x] `/media` overstates reclaimable space — **FIXED 2026-08-21** (`cover_use_count`).
 - [ ] Media → post links dead-end on reused media (`MIN(post_id)` is arbitrary).
-- [ ] BPP recycling — now unblocked: `media_metrics` ranks every post, ours or not.
-- [ ] Approval-workflow UI (flag exists, no UI; no channel uses it).
+      *(Same item as "Media page → the post, properly" above, which carries the fix shape
+      and the owner's original request — track it there, not here.)*
+- [x] BPP recycling — **SHIPPED 2026-08-06** as curation; see the two BPP phases below.
+- [-] Approval-workflow UI — **SCRAPPED 2026-08-21**, needs two people; this install has one.
 
 ---
 
@@ -2301,3 +2388,52 @@ SQLite fills with NULL keys and would never serve the Library's `IS NULL` scan �
 partial on `archived_at IS NOT NULL`. Re-verified: 681 dashboard tests, 825 worker tests, 0 lint
 errors, and a second browser pass on 3940 covering the delete-card copy, the cleared selection
 (110 → 0 on view switch) and the error strip.
+
+---
+
+## Save a copy of any asset to your computer — 2026-08-17  `[x] done`
+
+**Added to this file 2026-08-21 by audit — the work shipped (`58df8b1`, `87fbcfa`) but was
+never written down here.**
+
+Every image and video was viewable but not *gettable*: assets are stored under content-hash
+filenames, so "find it in Finder" meant hunting an opaque name.
+- [x] `GET /api/media/[id]?download=1` marks the response as an attachment named from the
+      asset's `original_filename`. Where it lands is the browser's decision — ticking "ask where
+      to save each file" turns it into a save dialog on any OS. `showSaveFilePicker()` was
+      rejected: Chromium-only, so it would do nothing at all in Safari (the owner's browser).
+- [x] The flag sits **above every variant branch on purpose.** A download means the original as
+      uploaded — never the thumbnail, the story canvas, or the H.264 derivative the preview
+      substitutes so Chrome can decode iPhone HEVC. Those exist to make the browser show
+      something; none of them is the file being asked for.
+- [x] `lib/download-filename.ts` sanitises the name before it enters an HTTP header.
+      `original_filename` is attacker-adjacent — it is whatever the uploading browser claimed, a
+      channel already shown untrustworthy here (see the MIME-sniffing work) — and a CR/LF splits
+      the response while a quote ends the header value early. Directory components are dropped;
+      both the ASCII and RFC 5987 forms are emitted so emoji and accented names survive.
+
+---
+
+## Auto-fill stalled by a timestamp spelling — 2026-08-18  `[x] done`
+
+**Added to this file 2026-08-21 by audit — the fix shipped (`d2e2424`) but was never written
+down here.** This is the kind of bug worth keeping on the record: it failed *silently*.
+
+A group's queue quietly stopped refilling. Nothing errored and nothing failed — auto-fill just
+decided the queue was already healthy and scheduled nothing.
+- [x] **Root cause: two writers, two spellings of the same instant.** `scheduled_at` holds a UTC
+      instant, but nothing pinned how that instant is *spelled*. The worker writes
+      `datetime.isoformat()` → `...+00:00`; the dashboard writes JS `toISOString()` → `...000Z`.
+      Same moment, different text. A group writes one row per member at a single instant and
+      counted its queued **slots** with `COUNT(DISTINCT scheduled_at)` — a *text* comparison. A
+      slot written half by each writer counted as **two**. With `min_queue_depth` 2, a one-slot
+      queue read as full and auto-fill returned early every cycle. A dashboard reschedule that
+      rewrote one member of a pair was enough to trigger it.
+- [x] **Dashboard:** `toUtcIso()` makes `+00:00` the only spelling this app writes. Every
+      `scheduled_at` path funnels through `zonedTimeToUtc`, so one change covers them all.
+- [x] **Worker:** `_INSTANT` (`strftime('%s', scheduled_at)`) makes the slot count and the three
+      "latest queued" lookups compare **instants, not text**. SQLite reads both spellings as the
+      same epoch, so a stray format can no longer wedge a queue.
+- [x] **`scripts/repair_scheduled_at_format.py`** restates legacy rows. Dry-run by default;
+      `--apply` writes in one transaction. Text only — a non-zero fraction is kept, because that
+      fraction *is* the instant. Other installs likely carry the same mixed data.
