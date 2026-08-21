@@ -220,11 +220,29 @@ export function LibraryView({
     }
     const verb = action === "add" ? "Added" : "Removed";
     const prep = action === "add" ? "to" : "from";
+    // The server's count, never selected.length. A post whose caption is too long for a
+    // channel being added is skipped rather than queued to fail at publish, so the two
+    // numbers genuinely differ — and claiming the selected count would be a false receipt.
+    const updated: number = body.updated ?? 0;
     setNotice(
       `${verb} ${effectiveChans.size} account${effectiveChans.size === 1 ? "" : "s"} ${prep} ${
-        selected.length
-      } post${selected.length === 1 ? "" : "s"}.`
+        updated
+      } post${updated === 1 ? "" : "s"}.`
     );
+    // Shown ALONGSIDE the notice, not instead of it: partial success is both things at
+    // once, and the skipped posts need naming or they cannot be found and fixed.
+    const skipped: { post_id: number; reason: string }[] = body.skipped ?? [];
+    if (skipped.length > 0) {
+      const named = skipped
+        .slice(0, 3)
+        .map((s) => `#${s.post_id}: ${s.reason}`)
+        .join(" ");
+      const more = skipped.length > 3 ? ` (+${skipped.length - 3} more)` : "";
+      setError(
+        `${skipped.length} post${skipped.length === 1 ? " was" : "s were"} skipped — ` +
+          `the caption is too long for a channel you're adding. ${named}${more}`
+      );
+    }
     setSelected([]);
     startT(() => router.refresh());
   }

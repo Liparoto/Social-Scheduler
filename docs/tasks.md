@@ -16,9 +16,8 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Bulk retarget abandons the whole batch on the first over-limit post | P2 | `~1h` | Easy | Blocks folding a new account into existing content on any mixed selection; nothing is written and the error names one post. |
-| 2 | Media → post links dead-end on reused media (`MIN(post_id)`) | P2 | `~half day` | Medium | Posts using a reused asset are unreachable from `/media`; design + plan already written. |
-| 3 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | Media → post links dead-end on reused media (`MIN(post_id)`) | P2 | `~half day` | Medium | Posts using a reused asset are unreachable from `/media`; design + plan already written. |
+| 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
 missing row) and `/media`'s blindness to Reels covers. Both were `<30m` Easy rows above.
@@ -1144,12 +1143,23 @@ to worker code.** A live heartbeat proves the daemon is alive, not that it is ru
 - [x] **Before first real use: resolved.** Verified 2026-08-21 — all 111 posts now read
       `content_status='ready'` and the group auto-fills against a full queue. (Targeting is a
       *rule*: a post not targeted at **every** group member stays invisible to the group.)
-- [ ] **Split out of the item above — bulk retarget abandons the whole batch on the first bad
-      post.** `POST /api/posts/targets/bulk` (`dashboard/app/api/posts/targets/bulk/route.ts:45`)
-      pre-checks every post against `captionLimitError` and `return`s 400 on the first failure,
-      before `bulkAddTargets` runs. Nothing is written, so a mixed selection cannot be retargeted
-      in one go and the message names only one post. Still true 2026-08-21. Fix shape: collect
-      every offender, apply the rest, and report both halves.
+- [x] **Split out of the item above — bulk retarget abandons the whole batch. FIXED 2026-08-21.**
+      `POST /api/posts/targets/bulk` pre-checked every post against `captionLimitError` and
+      `return`ed 400 on the first failure, before `bulkAddTargets` ran — so one long caption in a
+      selection of fifty meant nothing happened at all, and the message named only that post.
+      Now every offender is collected, the rest are applied, and both halves are reported:
+      `{ updated, skipped: [{ post_id, reason }] }`.
+      **Decisions worth keeping:** the offender is SKIPPED, not applied anyway — the send it
+      would create dies terminally at the worker, which is what the caption check exists to
+      prevent. A batch where *nothing* could be applied stays a 400: a 200 with `updated: 0`
+      would render the caller's green "Added 0 accounts" notice and read as success. Unknown post
+      ids are still silently ignored but are no longer counted as updated. `remove` still skips
+      the caption check entirely, since removing can only relax constraints.
+      The Library now reports the SERVER's count rather than `selected.length`, and shows the
+      skipped posts in the error line *alongside* the success notice — partial success is both
+      things at once, and a skipped post has to be named to be findable.
+      **Verified:** 7 route tests in `dashboard/test/targets-bulk-route.test.ts`, 5 of which
+      failed first. The two that passed before the change are the behaviours it had to preserve.
 - [-] **DECISION CLOSED 2026-08-21 (owner-approved) — grouped channels keep their own
       `channels.timezone`, and that is correct.** The *manual* scheduling paths still read it, so a
       channel card can truthfully show a zone different from the group's auto-fill zone. This is
