@@ -16,7 +16,8 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | Metrics retry forever on a post that no longer exists on the platform | P2 | `~1h` | Easy | Publication 48 has failed **703 times** in the current log and will keep going every cycle — real failures get buried in the noise. |
+| 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
 missing row), `/media`'s blindness to Reels covers, a restorable backup (`socialscheduler.db` in
@@ -27,6 +28,21 @@ than a task.
 **Scrapped 2026-08-21 (owner-approved) — do not re-propose without re-litigating:**
 approval-workflow UI · re-import from `export.json` · `--since`/`--channel` export filters ·
 boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: it is intentional).
+
+**Found 2026-08-21 while restarting the app — not yet fixed:**
+- [ ] **A post deleted on the platform retries its metrics forever.** Publication 48
+      (`instagram`/`Liparoto`, feed, remote id `18126387970809680`, posted 2026-08-11) returns
+      Meta error 100/33 — "object does not exist, cannot be loaded due to missing permissions,
+      or does not support this operation" — and the worker has logged that **703 times** in the
+      current log alone, once per metrics cycle, forever. Almost certainly deleted on Instagram
+      after publishing. Nothing is broken by it, which is exactly the problem: it is permanent
+      log noise that a genuine metrics failure would hide behind. There is no give-up, no
+      backoff, and nothing on screen says this post's numbers are frozen.
+      **Fix shape (needs a decision first):** error 100 subcode 33 is *terminal*, not
+      retryable — the object will never come back. Mark the publication so metrics stop being
+      requested for it, and surface it somewhere (Insights, or the post) as "no longer on
+      Instagram" rather than silently stale. Decide whether that state should be visible in the
+      Library too, since the post still exists here.
 
 **Blocked on something external (not schedulable):**
 - Facebook Pages adapter — real-post verification. Written, never proved live; no Page connected.
@@ -1905,9 +1921,8 @@ re-synced: 146/146 posts carry views, the Reel reads 293 views, 120 thumbnails c
 - [-] Autostart login-scoped vs boot-scoped — **SCRAPPED 2026-08-21**; folded into "fire with
       the Mac off". Interim answer: macOS automatic login.
 - [x] `/media` overstates reclaimable space — **FIXED 2026-08-21** (`cover_use_count`).
-- [ ] Media → post links dead-end on reused media (`MIN(post_id)` is arbitrary).
-      *(Same item as "Media page → the post, properly" above, which carries the fix shape
-      and the owner's original request — track it there, not here.)*
+- [x] Media → post links dead-end on reused media — **SHIPPED 2026-08-21**; every post an
+      asset is used in is now its own link. See "Media page → the post, properly" above.
 - [x] BPP recycling — **SHIPPED 2026-08-06** as curation; see the two BPP phases below.
 - [-] Approval-workflow UI — **SCRAPPED 2026-08-21**, needs two people; this install has one.
 
