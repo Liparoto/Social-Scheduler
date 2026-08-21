@@ -1827,6 +1827,11 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
               -- Per RUN, not per post, and that is the point: reposting only earns its
               -- place if you can see whether run two beat run one.
               pm.reach, pm.impressions, pm.likes, pm.comments, pm.saves, pm.shares,
+              -- WHETHER we have numbers, which is a different question from whether any
+              -- single metric came back. Platforms do not report the same set: Threads has
+              -- no reach at all, and Facebook's is best-effort. Reading "has metrics" off
+              -- one column marks a whole platform as never-fetched.
+              pm.fetched_at AS metrics_fetched_at,
               -- Whether the post this run created is still on the platform. NULL means we
               -- have no mirror row for it at all — which is the normal case for a Story
               -- (they are not on the /media edge) and for anything published before this

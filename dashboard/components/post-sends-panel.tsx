@@ -21,6 +21,68 @@ const segBtn = (active: boolean) =>
     active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
 
+/**
+ * The metric line for one run, in that platform's own vocabulary.
+ *
+ * Platforms do not measure the same things, and pretending otherwise is how a Threads send
+ * with 38 views ends up reading as "metrics not fetched yet": Threads reports no reach at
+ * all, so anything that treats reach as the sign of a fetch marks every Threads run as
+ * empty. Same trap on Facebook, where reach is best-effort.
+ *
+ * Three outcomes, deliberately distinct: a line to show, a fetch that came back with nothing
+ * to say, and a platform we have no metric vocabulary for. The last one is a bug in this
+ * file, not a quiet day on the account, and it must not be able to hide as either of the
+ * others. Mirrors the per-platform split in publication-queue.tsx.
+ */
+type MetricLine =
+  | { kind: "line"; text: string }
+  | { kind: "empty" }
+  | { kind: "unknown" };
+
+function metricLine(send: PostPublicationRow): MetricLine {
+  // Shown whenever we have them, zero included — a real 0 is a result. The "only if
+  // non-zero" ones below are secondary: an empty engagement slot on every row is noise.
+  const parts: string[] = [];
+  const always = (v: number | null, label: string) => {
+    if (v !== null) parts.push(`${v.toLocaleString()} ${label}`);
+  };
+  const nonZero = (v: number | null, label: string) => {
+    if (v) parts.push(`${v.toLocaleString()} ${label}`);
+  };
+
+  switch (send.channel_platform) {
+    case "instagram":
+      always(send.reach, "reach");
+      always(send.impressions, "views");
+      always(send.likes, "likes");
+      nonZero(send.comments, "comments");
+      nonZero(send.saves, "saves");
+      // A Story is gone after 24h by design, so its numbers are done climbing. Only
+      // alongside actual numbers — on its own, "final" describes nothing.
+      if (send.surface === "story" && parts.length) parts.push("final");
+      break;
+    case "threads":
+      // Threads' own names: no reach, no saves, and "replies"/"reposts" rather than
+      // comments/shares — the columns they land in are ours, not theirs.
+      always(send.impressions, "views");
+      always(send.likes, "likes");
+      nonZero(send.comments, "replies");
+      nonZero(send.shares, "reposts");
+      break;
+    case "facebook":
+      always(send.likes, "reactions");
+      nonZero(send.comments, "comments");
+      nonZero(send.shares, "shares");
+      // Best-effort only (Meta keeps retiring the metric names), so it goes last and only
+      // when it actually came back.
+      always(send.reach, "reach");
+      break;
+    default:
+      return { kind: "unknown" };
+  }
+  return parts.length ? { kind: "line", text: parts.join(" · ") } : { kind: "empty" };
+}
+
 function SendRow({ send, postId }: { send: PostPublicationRow; postId: number }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -35,6 +97,7 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
   const [time, setTime] = useState(prefill.time);
 
   const readOnly = READ_ONLY_STATUSES.has(send.status);
+  const metrics = metricLine(send);
 
   async function act(action: "hold" | "resume") {
     setError(null);
@@ -151,15 +214,23 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
               removed from platform
             </span>
           ) : null}
-          {send.status === "posted" && send.is_dry_run !== 1 && send.reach !== null ? (
-            <span className="data text-[11px] text-muted">
-              {send.reach?.toLocaleString()} reach
-              {send.impressions !== null ? ` · ${send.impressions.toLocaleString()} views` : ""}
-              {send.likes !== null ? ` · ${send.likes.toLocaleString()} likes` : ""}
-              {send.comments ? ` · ${send.comments.toLocaleString()} comments` : ""}
-              {send.saves ? ` · ${send.saves.toLocaleString()} saves` : ""}
-              {send.surface === "story" ? " · final" : ""}
-            </span>
+          {/* Gated on metrics_fetched_at — the record of a fetch — never on a metric value.
+              No single metric is reported by every platform, so any one of them standing in
+              for "did we fetch" writes off a whole platform as empty. */}
+          {send.status === "posted" && send.is_dry_run !== 1 && send.metrics_fetched_at ? (
+            metrics.kind === "line" ? (
+              <span className="data text-[11px] text-muted">{metrics.text}</span>
+            ) : metrics.kind === "unknown" ? (
+              // Matches lib/platforms.ts's fallback style: an unrecognised platform should
+              // look wrong rather than borrow Instagram's metric set.
+              <span className="data text-[11px] text-status-failed">
+                Unknown platform &quot;{send.channel_platform}&quot; — no metrics display for it.
+              </span>
+            ) : (
+              // Fetched, and the platform genuinely returned nothing we keep a column for.
+              // Distinct from "not fetched yet": there is nothing further to wait for.
+              <span className="text-[11px] text-faint">no numbers reported</span>
+            )
           ) : send.status === "posted" && send.is_dry_run !== 1 ? (
             <span className="text-[11px] text-faint">
               {/* "not fetched yet" implies it still might be. For a post that is gone from

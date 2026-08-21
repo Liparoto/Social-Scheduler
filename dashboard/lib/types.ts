@@ -198,7 +198,9 @@ export interface Publication {
 export interface PostPublicationRow {
   id: number;
   published_at: string | null;
-  /** How this particular run did. Null until the worker has fetched metrics for it. */
+  /** How this particular run did. Null until the worker has fetched metrics for it —
+   *  and null FOREVER on platforms that do not report it, so never treat a null metric
+   *  as "not fetched". Use metrics_fetched_at for that. */
   reach: number | null;
   impressions: number | null;
   likes: number | null;
@@ -230,4 +232,7 @@ export interface PostPublicationRow {
   first_comment_error: string | null;
   /** 1 while a human-requested retry is waiting for the worker to pick it up. */
   first_comment_retry_requested: number;
+  /** When the worker last fetched metrics for this run, or null if it never has. This —
+   *  not the presence of any one metric — is the answer to "do we have numbers yet". */
+  metrics_fetched_at: string | null;
 }
