@@ -1175,6 +1175,54 @@ export function deletePost(id: number): "ok" | "not_found" | "has_live" {
   return info.changes > 0 ? "ok" : "has_live";
 }
 
+/**
+ * Archive a post out of the Library, or bring it back.
+ *
+ * The answer to the one thing deletePost() can't do: a post with a live send is permanent
+ * by design (erasing it would erase the record of something that is on Instagram), which
+ * left test posts and mistakes cluttering the Library forever. Archiving hides the post
+ * instead of destroying it — every publication, metric and insight stays exactly where it
+ * was, and unarchiving is a single click.
+ *
+ * Deliberately NOT an automation gate, and deliberately unguarded:
+ *  - Auto-fill eligibility still runs entirely off content_status, the switch that is
+ *    visible in the UI and has always meant "may this be picked up". Archiving OFFERS to
+ *    set it (the caller passes `also`, and the UI defaults that to 'retired'), so the
+ *    post lands in a bucket you can see rather than behind a second, invisible rule.
+ *  - There is no live-send guard here, unlike deletePost(): nothing is destroyed and
+ *    nothing the worker is mid-flight with changes, so there is no race to lose. An
+ *    already-scheduled send on an archived post still goes out — the Archive control says
+ *    so on screen rather than silently cancelling a decision that was made on purpose.
+ */
+export function setPostArchived(
+  id: number,
+  archived: boolean,
+  also?: { content_status?: ContentStatus; content_kind?: ContentKind }
+): "ok" | "not_found" {
+  const db = getDb();
+  const fields: string[] = ["archived_at = @archived_at", "updated_at = @updated_at"];
+  const params: Record<string, string | number | null> = {
+    id,
+    archived_at: archived ? nowIso() : null,
+    updated_at: nowIso(),
+  };
+  // Only ever applied on the way IN. Unarchiving restores visibility and nothing else:
+  // guessing which content_status a post had before it was archived would be inventing
+  // an answer, and quietly making a retired post 'ready' again is the wrong guess to make.
+  if (archived && also?.content_status) {
+    fields.push("content_status = @content_status");
+    params.content_status = also.content_status;
+  }
+  if (archived && also?.content_kind) {
+    fields.push("content_kind = @content_kind");
+    params.content_kind = also.content_kind;
+  }
+  const info = db
+    .prepare(`UPDATE posts SET ${fields.join(", ")} WHERE id = @id`)
+    .run(params);
+  return info.changes > 0 ? "ok" : "not_found";
+}
+
 // ---- Merge several drafts into one carousel --------------------------------------
 // The decision half of this lives in lib/merge-plan.ts (pure, no DB). Everything here is
 // the other half: load the rows planMerge needs, then — only if it says yes — perform the
@@ -1772,7 +1820,23 @@ export interface PostLibraryPeriod extends PeriodWindow {
  * A few thousand rows is nothing for better-sqlite3, and the card grid lazy-loads its
  * thumbnails, so the honest default is "all of them".
  */
-export function listPosts(limit?: number): PostLibraryRow[] {
+/**
+ * Which side of the archive line a listing wants.
+ *
+ * 'active' is every caller's default and the Library's normal view. 'archived' is the
+ * Library's Archived view, and 'all' exists so ONE query can feed a page that offers both
+ * without a second round trip. See migrations/0023_archive_library.sql — this is a
+ * visibility split, never an eligibility one.
+ */
+export type LibraryScope = "active" | "archived" | "all";
+
+const LIBRARY_SCOPE_SQL: Record<LibraryScope, string> = {
+  active: "WHERE p.archived_at IS NULL",
+  archived: "WHERE p.archived_at IS NOT NULL",
+  all: "WHERE 1 = 1",
+};
+
+export function listPosts(limit?: number, scope: LibraryScope = "active"): PostLibraryRow[] {
   const db = getDb();
   const posts = db
     .prepare(
@@ -1813,6 +1877,7 @@ export function listPosts(limit?: number): PostLibraryRow[] {
          (SELECT COUNT(*) FROM publications pub WHERE pub.post_id = p.id
             AND pub.status IN ('posted','publishing')) AS live_send_count
        FROM posts p
+       ${LIBRARY_SCOPE_SQL[scope]}
        ORDER BY p.created_at DESC, p.id DESC
        LIMIT ?`
     )

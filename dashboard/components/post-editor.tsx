@@ -110,6 +110,16 @@ export function PostEditor({
   const [extractOpen, setExtractOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  // What archiving should ALSO do to this post's automation bucket. 'retired' is the
+  // default because it is what archiving nearly always means — "I'm done with this" — and
+  // leaving it at 'ready' would let auto-fill re-queue a post that is no longer visible in
+  // the Library. "keep" is offered rather than forced: archiving is a visibility decision,
+  // and the owner may be shelving something they still want in rotation.
+  const [archiveStatus, setArchiveStatus] = useState<ContentStatus | "keep">("retired");
+  const [archiveKind, setArchiveKind] = useState<ContentKind | "keep">("keep");
   const [kind, setKind] = useState<ContentKind>(post.content_kind);
   const [status, setStatus] = useState<ContentStatus>(post.content_status);
   const [cooldown, setCooldown] = useState(
@@ -252,6 +262,35 @@ export function PostEditor({
     if (ok) startTransition(() => router.refresh());
   }
 
+  async function setArchived(archived: boolean) {
+    setArchiveError(null);
+    setArchiving(true);
+    const res = await fetch(`/api/posts/${post.id}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        archived,
+        // "keep" is a UI-only choice; the API takes an absent field to mean "don't touch".
+        content_status: archived && archiveStatus !== "keep" ? archiveStatus : undefined,
+        content_kind: archived && archiveKind !== "keep" ? archiveKind : undefined,
+      }),
+    });
+    setArchiving(false);
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setArchiveError(b.error ?? "Could not change this post's archive state.");
+      return;
+    }
+    if (archived) {
+      // Back to the Library, where the post is now absent — the same ending as a delete,
+      // which is what makes archiving read as the answer to "get this out of my Library".
+      router.push("/library");
+      return;
+    }
+    setArchiveOpen(false);
+    startTransition(() => router.refresh());
+  }
+
   async function deletePost() {
     setDeleteError(null);
     setDeleting(true);
@@ -274,6 +313,32 @@ export function PostEditor({
           label={openMedia.label}
           onClose={() => setOpenMedia(null)}
         />
+      ) : null}
+      {/* Archived — stated at the TOP, because every control below it still works and an
+          archived post is otherwise indistinguishable from a live one. */}
+      {post.archived_at ? (
+        <section className="rounded-card border border-border bg-surface-sunken p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-display text-sm font-semibold text-ink">Archived</h3>
+              <p className="mt-0.5 text-xs text-muted">
+                Hidden from the Library and from Compose&apos;s reuse picker. Nothing was
+                deleted — its sends, metrics and insights are all still here.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setArchived(false)}
+              disabled={archiving}
+              className="shrink-0 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-ink hover:bg-surface-sunken disabled:opacity-50"
+            >
+              {archiving ? "Working…" : "Unarchive"}
+            </button>
+          </div>
+          {archiveError ? (
+            <p className="mt-3 text-sm text-status-failed">{archiveError}</p>
+          ) : null}
+        </section>
       ) : null}
       {/* Context strip — ONE tile per slide. It used to be two grids side by side (an
           add/remove strip next to a separate reorder grid), which drew every photo twice;
@@ -605,12 +670,103 @@ export function PostEditor({
           }}
         />
       ) : null}
+      {/* Archive — the reversible way out of the Library, and the ONLY way out for a post
+          that has already gone out (delete is refused for those, on purpose). */}
+      {post.archived_at ? null : (
+        <section className={card}>
+          <h3 className="mb-1 font-display text-sm font-semibold text-ink">Archive post</h3>
+          <p className="mb-3 text-xs text-muted">
+            Hides this post from the Library and from Compose&apos;s reuse picker. Nothing is
+            deleted: the Instagram post stays live, and its sends, metrics and insights are
+            kept. You can unarchive it any time.
+          </p>
+          {archiveError ? (
+            <p className="mb-3 text-sm text-status-failed">{archiveError}</p>
+          ) : null}
+          {archiveOpen ? (
+            <div className="space-y-4">
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">
+                  Also set content status to
+                </p>
+                <div className="inline-flex flex-wrap rounded-lg border border-border p-0.5">
+                  <button type="button" className={segBtn(archiveStatus === "retired")} onClick={() => setArchiveStatus("retired")}>Retired</button>
+                  <button type="button" className={segBtn(archiveStatus === "draft")} onClick={() => setArchiveStatus("draft")}>Draft</button>
+                  <button type="button" className={segBtn(archiveStatus === "keep")} onClick={() => setArchiveStatus("keep")}>Leave as is</button>
+                </div>
+                <p className="mt-1.5 text-xs text-muted">
+                  {archiveStatus === "keep" && status === "ready"
+                    ? "Heads up: this post stays Ready, so auto-fill can still schedule it even though you won't see it in the Library."
+                    : "Retired and Draft content is never picked up by auto-fill. Archiving on its own doesn't change that — this is the switch that does."}
+                </p>
+              </div>
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-ink-soft">Also set content kind to</p>
+                <div className="inline-flex flex-wrap rounded-lg border border-border p-0.5">
+                  <button type="button" className={segBtn(archiveKind === "keep")} onClick={() => setArchiveKind("keep")}>Leave as is</button>
+                  <button type="button" className={segBtn(archiveKind === "one_time")} onClick={() => setArchiveKind("one_time")}>One-time</button>
+                  <button type="button" className={segBtn(archiveKind === "evergreen")} onClick={() => setArchiveKind("evergreen")}>Evergreen</button>
+                </div>
+              </div>
+              {queuedSendCount > 0 ? (
+                <p className="text-xs text-status-scheduled">
+                  {queuedSendCount === 1
+                    ? "This post has 1 send still scheduled. Archiving does not cancel it — it will still go out. Cancel it in Scheduled sends above first if you don't want that."
+                    : `This post has ${queuedSendCount} sends still scheduled. Archiving does not cancel them — they will still go out. Cancel them in Scheduled sends above first if you don't want that.`}
+                </p>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setArchived(true)}
+                  disabled={archiving}
+                  className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {archiving ? "Archiving…" : "Archive post"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setArchiveOpen(false)}
+                  disabled={archiving}
+                  className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted hover:text-ink disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setArchiveOpen(true)}
+              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-ink hover:bg-surface-sunken"
+            >
+              Archive post…
+            </button>
+          )}
+        </section>
+      )}
       {/* Delete post — guarded, irreversible */}
       <section className="rounded-card border border-status-failed/30 bg-surface p-5">
         <h3 className="mb-1 font-display text-sm font-semibold text-status-failed">Delete post</h3>
         <p className="mb-3 text-xs text-muted">
           This deletes the post and all its scheduled/failed sends (shared images are kept).
         </p>
+        {/* The pointer to Archive only makes sense while that card is on the page — it is
+            replaced by the Unarchive strip once the post is archived. */}
+        {hasLiveSend ? (
+          <p className="mb-3 text-xs text-muted">
+            Delete is blocked on this post — it has sends that already went out, and erasing
+            it would erase the record of something that is live.{" "}
+            {post.archived_at ? (
+              <>It is already archived, so it is out of the Library.</>
+            ) : (
+              <>
+                Use <span className="font-medium text-ink">Archive post</span> above to take it
+                out of the Library instead.
+              </>
+            )}
+          </p>
+        ) : null}
         {deleteError ? <p className="mb-3 text-sm text-status-failed">{deleteError}</p> : null}
         {confirmDelete ? (
           <div className="flex items-center gap-2">

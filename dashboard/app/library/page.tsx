@@ -9,7 +9,10 @@ export const dynamic = "force-dynamic";
 
 export default function LibraryPage() {
   const evaluationDate = localDate(new Date(), config.defaultTimezone);
-  const posts = listPosts().map((p) => ({
+  // "all", not the default "active": the Library owns the Archived view, and one query
+  // feeding both sides means switching between them costs no round trip. Compose's reuse
+  // picker takes the default and never sees archived posts.
+  const posts = listPosts(undefined, "all").map((p) => ({
     id: p.id,
     is_bpp: p.is_bpp,
     caption: p.caption,
@@ -52,6 +55,7 @@ export default function LibraryPage() {
     // whether this post already went out, and the list query answers it for every post in
     // the same pass. 'posted' or 'publishing' — see PostLibraryRow.live_send_count.
     has_live_send: p.live_send_count > 0,
+    archived_at: p.archived_at,
   }));
   const channels = getActiveChannels().map((c) => ({
     id: c.id,

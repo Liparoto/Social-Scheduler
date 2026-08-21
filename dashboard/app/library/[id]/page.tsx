@@ -35,7 +35,10 @@ export default async function EditPostPage({
   const assets = getPostAssets(postId);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    // pb-12: this page had NO vertical padding at all, so the Delete card's border sat flush
+    // against the bottom of the document. Double the app's usual py-6 because this page ends
+    // on a destructive control, which reads better with room under it than pinned to the edge.
+    <div className="mx-auto max-w-3xl space-y-6 pb-12">
       <Link href="/library" className="inline-block text-sm text-brand underline underline-offset-2">
         ← Back to Library
       </Link>

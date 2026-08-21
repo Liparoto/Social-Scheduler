@@ -59,6 +59,8 @@ interface PostLite {
   has_queued_publication: boolean;
   /** Any send already on the platform ('posted'/'publishing') — quick edit gates media on it. */
   has_live_send: boolean;
+  /** Archived out of the Library (visibility only) — see migrations/0023_archive_library.sql. */
+  archived_at: string | null;
 }
 interface ChannelLite {
   id: number;
@@ -121,6 +123,15 @@ export function LibraryView({
     undefined,
     createLibraryCheckboxFilterState,
   );
+  // A VIEW, not a filter — which is why everything below (the summary counts, the format
+  // counts, "showing N of M") is computed over `inView` rather than `posts`. Archived posts
+  // aren't a subset of the Library you're narrowing down; they're the other side of it.
+  const [archiveView, setArchiveView] = useState<"active" | "archived" | "all">("active");
+  const [unarchiving, setUnarchiving] = useState<number | null>(null);
+  // Deliberately NOT the shared `error` state: that one renders inside the bulk bar, which
+  // is a persisted collapsible — a failed unarchive would land in a closed panel at the
+  // bottom of the page, i.e. nowhere. This one renders next to the grid.
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "ready" | "retired">("all");
   // Deliberately separate from statusFilter: content_status is the lifecycle (is this piece
   // usable), sendFilter is publication history (has it actually gone out). Folding them into
@@ -302,15 +313,50 @@ export function LibraryView({
     return () => controller.abort();
   }, [openMediaPostId, openMediaExpected, openMediaLoaded]);
 
-  // Counted over the whole library, not the filtered view, so the numbers stay put while
+  // The Library or its archive — chosen before any filter runs, so every count below
+  // describes the view you're actually looking at.
+  const archivedCount = posts.filter((p) => p.archived_at).length;
+  // Falls back to the Library the moment the archive empties. Unarchiving the LAST archived
+  // post otherwise left you on an empty Archived view with the view dropdown gone (it only
+  // renders when something is archived) and no way back — verified in a browser.
+  const view = archivedCount === 0 ? "active" : archiveView;
+  const inView = posts.filter((p) =>
+    view === "all" ? true : view === "archived" ? p.archived_at : !p.archived_at
+  );
+  // Archived but still eligible for auto-fill: the one combination that can surprise you,
+  // because a post you can't see in the Library can still be scheduled and published.
+  // Archiving offers to set content_status for exactly this reason; this catches the ones
+  // archived with "Leave as is", or set back to Ready afterwards.
+  const archivedStillReady = posts.filter(
+    (p) => p.archived_at && p.content_status === "ready"
+  ).length;
+
+  async function unarchive(id: number) {
+    setArchiveError(null);
+    setUnarchiving(id);
+    const res = await fetch(`/api/posts/${id}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: false }),
+    });
+    setUnarchiving(null);
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      setArchiveError(b.error ?? "Could not unarchive that post.");
+      return;
+    }
+    startT(() => router.refresh());
+  }
+
+  // Counted over the whole view, not the filtered subset, so the numbers stay put while
   // you click between formats instead of collapsing to "N Carousel" the moment one is on.
   const formatCounts = POST_FORMATS.map((f) => ({
     ...f,
-    count: posts.filter((p) => p.post_type === f.value).length,
+    count: inView.filter((p) => p.post_type === f.value).length,
   })).filter((f) => f.count > 0);
 
   const q = search.trim().toLowerCase();
-  const shown = posts.filter((p) => {
+  const shown = inView.filter((p) => {
     if (
       !matchesLibraryCheckboxFilters(
         {
@@ -416,12 +462,12 @@ export function LibraryView({
     <div className="space-y-5">
       {/* Summary: whole-library makeup */}
       <div className="data flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted">
-        <span><span className="text-status-posted">{posts.filter((p) => p.content_status === "ready").length}</span> Ready</span>
-        <span><span className="text-ink-soft">{posts.filter((p) => p.content_status === "draft").length}</span> Draft</span>
-        <span><span className="text-faint">{posts.filter((p) => p.content_status === "retired").length}</span> Retired</span>
+        <span><span className="text-status-posted">{inView.filter((p) => p.content_status === "ready").length}</span> Ready</span>
+        <span><span className="text-ink-soft">{inView.filter((p) => p.content_status === "draft").length}</span> Draft</span>
+        <span><span className="text-faint">{inView.filter((p) => p.content_status === "retired").length}</span> Retired</span>
         <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <span>{posts.filter((p) => p.content_kind === "evergreen").length} Evergreen</span>
-        <span>{posts.filter((p) => p.content_kind === "one_time").length} One-time</span>
+        <span>{inView.filter((p) => p.content_kind === "evergreen").length} Evergreen</span>
+        <span>{inView.filter((p) => p.content_kind === "one_time").length} One-time</span>
         {/* Format counts double as one-click filters — the fastest way to pull up every
             carousel. A format with nothing in it is omitted rather than shown as a dead 0. */}
         {formatCounts.length > 0 ? (
@@ -442,11 +488,57 @@ export function LibraryView({
             </button>
           );
         })}
-        <span className="ml-auto">{posts.length} total</span>
+        <span className="ml-auto">{inView.length} total</span>
       </div>
 
-      {/* Controls: status / kind / search / sort */}
+      {archiveError ? (
+        <p className="rounded-card border border-status-failed/30 bg-surface px-4 py-3 text-sm text-status-failed">
+          {archiveError}
+        </p>
+      ) : null}
+
+      {/* What "archived" means, said where you'd need to hear it — plus the one case that
+          can bite: hidden here, but still eligible for auto-fill to schedule. */}
+      {view !== "active" ? (
+        <div className="rounded-card border border-border bg-surface-sunken px-4 py-3 text-xs text-muted">
+          Archived posts are hidden from the Library. Nothing was deleted — their sends,
+          metrics and insights are all intact, and anything already live stayed live.
+          {archivedStillReady > 0 ? (
+            <span className="mt-1 block text-status-publishing">
+              {archivedStillReady} archived post{archivedStillReady === 1 ? " is" : "s are"}{" "}
+              still set to Ready, so auto-fill can still schedule{" "}
+              {archivedStillReady === 1 ? "it" : "them"}. Open{" "}
+              {archivedStillReady === 1 ? "it" : "them"} and set Content status to Retired to
+              stop that.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Controls: view / status / kind / search / sort */}
       <div className="flex flex-wrap items-center gap-2">
+        {/* Only offered once something is actually archived — an empty archive is a
+            dropdown that can only disappoint. */}
+        {archivedCount > 0 ? (
+          <select
+            className={field}
+            aria-label="Library or archive"
+            value={view}
+            onChange={(e) => {
+              setArchiveView(e.target.value as typeof archiveView);
+              // A selection made in one view must not act on another. Without this, five
+              // posts picked in the Library stayed selected after switching to Archived —
+              // and in the mixed view "Select all shown" would sweep archived posts into a
+              // bulk schedule, which is exactly the archived-but-still-posting case the
+              // rest of this feature works to make loud.
+              setSelected([]);
+            }}
+          >
+            <option value="active">Library</option>
+            <option value="archived">Archived ({archivedCount})</option>
+            <option value="all">Library + archived</option>
+          </select>
+        ) : null}
         <select className={field} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
           <option value="all">All statuses</option>
           <option value="draft">Draft</option>
@@ -502,7 +594,7 @@ export function LibraryView({
           <option value="recent">Recently posted</option>
           <option value="stale">Least recently posted</option>
         </select>
-        <span className="data text-[11px] text-muted">showing {shown.length} of {posts.length}</span>
+        <span className="data text-[11px] text-muted">showing {shown.length} of {inView.length}</span>
         <button
           type="button"
           onClick={() => setSelected(shown.map((post) => post.id))}
@@ -696,9 +788,32 @@ export function LibraryView({
                   >
                     Edit
                   </button>
+                  {/* Same stopPropagation reasoning as Edit above: the card is a
+                      role=button that toggles bulk-selection. */}
+                  {p.archived_at ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        unarchive(p.id);
+                      }}
+                      disabled={unarchiving === p.id}
+                      aria-label={`Unarchive ${p.caption ? truncateChars(p.caption, 40) : `post ${p.id}`}`}
+                      className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-50"
+                    >
+                      {unarchiving === p.id ? "…" : "Unarchive"}
+                    </button>
+                  ) : null}
                 </div>
                 <div className="data mt-1 flex flex-wrap gap-x-2 text-[10px] text-faint">
                   <span>{p.post_type}</span>
+                  {/* Only meaningful in the mixed view — in the Archived view every card
+                      carries it, which is noise rather than information. */}
+                  {p.archived_at && view === "all" ? (
+                    <span className="rounded-full border border-border-strong px-1.5 py-px text-ink-soft">
+                      archived
+                    </span>
+                  ) : null}
                   {p.posted_count > 0 ? (
                     <span className="text-status-posted">posted×{p.posted_count}</span>
                   ) : (

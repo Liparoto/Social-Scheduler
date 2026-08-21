@@ -138,6 +138,10 @@ export interface Post {
   cooldown_days: number | null;
   created_by: string | null;
   is_recycled: number;
+  // Local visibility only — see migrations/0023_archive_library.sql. NULL means the post
+  // is in the Library; a UTC ISO timestamp means it has been archived out of it. It is
+  // NOT an automation gate: content_status still decides what auto-fill may pick up.
+  archived_at: string | null;
   created_at: string;
   updated_at: string | null;
 }

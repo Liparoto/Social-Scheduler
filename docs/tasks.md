@@ -2247,3 +2247,57 @@ re-sequencing the remaining `sort_order` values.
 **Not done, deliberately (per design):** editing media on a post that already went out,
 replacing a slide in place, video slides inside a carousel, and converting a media post to a
 text post by removing its last slide.
+
+---
+
+## Archive a post out of the Library — 2026-08-20  `[x] done`
+
+**Why:** filed by Brittany against `/library/20`. `deletePost()` blocks any post with a
+`posted`/`publishing` send — correctly, and the guard stays — which left test posts, duplicates
+and mistakes permanently in the Library with no way out from the UI. Design:
+`docs/design-archive-library.md`.
+
+**What shipped**
+- `migrations/0023_archive_library.sql` — `posts.archived_at` (NULL = in the Library) + an index.
+- `setPostArchived()` and a `LibraryScope` argument on `listPosts()` (`active` default,
+  `archived`, `all`) in `lib/queries.ts`.
+- `POST /api/posts/[id]/archive` — `{archived, content_status?, content_kind?}`, validating both
+  optional fields rather than letting a bad value hit a CHECK constraint.
+- Post page: an Archive card above Delete (with the content status / kind pickers, a
+  queued-sends warning, and Retired as the default), an Archived strip with Unarchive at the
+  top of an archived post, and a Delete card that now explains the block and points at Archive.
+- Library: a Library / Archived (N) / Library + archived **view** select, an explainer strip,
+  per-card Unarchive, and an archived badge in the mixed view.
+
+**The design decision to not undo:** archiving is visibility only — auto-fill eligibility stays
+on `content_status`, which is visible in the UI, and the Archive dialog sets it in the same
+step (defaulting to Retired). The worker is untouched. `worker/tests/test_migration_0023.py`
+asserts an archived post is STILL picked by `eligible_candidates()`, so making archive a second
+automation gate breaks a test and starts a conversation instead of slipping in as a tidy-up.
+Already-scheduled sends are likewise left alone — archiving warns about them rather than
+cancelling a decision made on purpose.
+
+**Verified:** `npx tsc --noEmit` clean (only the pre-existing `lib/queries.tags.test.ts:54`
+error), `npx eslint` 0 errors (12 pre-existing warnings, unchanged), `npm test` 680 passed /
+0 failed (10 new in `test/archive-route.test.ts`), `pytest worker/tests` 825 passed / 0 failed
+(4 new in `test_migration_0023.py`). Migration applied cleanly to a `sqlite3 .backup` copy of
+the live DB. Browser-verified on port 3940 against that copy: archiving a post with 5 live
+sends (delete still 409s, archive works, the post leaves the grid), the Archived view and its
+explainer, per-card Unarchive, the 2-queued-sends warning, the "Leave as is" Ready heads-up,
+and the archived-still-Ready count.
+
+**Found in the browser, not by tests:** unarchiving the LAST archived post stranded the view on
+an empty Archived grid — the view select only renders when something is archived, so there was
+no way back. The view now falls back to the Library when the archive empties.
+
+**Fixed after code review (all five findings):** a failed unarchive was invisible (it reused the
+shared `error`, which renders inside the collapsible bulk bar — it now has its own strip above
+the grid); the delete card pointed at an "Archive post" card that isn't rendered on an
+already-archived post; a bodyless or malformed POST silently UNARCHIVED and answered 200
+(`archived` is now required and strictly boolean, with a test); a bulk selection survived a view
+switch, so "Select all shown" in the mixed view could sweep archived posts into a bulk schedule
+(switching views clears the selection); and `idx_posts_archived_at` was a plain index that
+SQLite fills with NULL keys and would never serve the Library's `IS NULL` scan — it is now
+partial on `archived_at IS NOT NULL`. Re-verified: 681 dashboard tests, 825 worker tests, 0 lint
+errors, and a second browser pass on 3940 covering the delete-card copy, the cleared selection
+(110 → 0 on view switch) and the error strip.
