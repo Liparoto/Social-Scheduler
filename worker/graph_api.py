@@ -23,7 +23,59 @@ from .redact import redact
 
 class GraphAPIError(Exception):
     """Raised when the Graph API returns a non-OK response, or the underlying request
-    fails at the network layer. Never carries an unredacted access_token."""
+    fails at the network layer. Never carries an unredacted access_token.
+
+    Carries Meta's own error `code`/`error_subcode` when the body had them, so a caller can
+    decide whether a failure is worth retrying instead of pattern-matching the message
+    text. All three are None for a network-layer failure, where there is no response at all.
+
+    The codes are not secrets and are parsed from the raw body; the MESSAGE is still built
+    from `redact()`, so nothing here changes what can reach a log.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: int | None = None,
+        error_subcode: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.error_subcode = error_subcode
+
+    @property
+    def is_missing_object(self) -> bool:
+        """Meta saying the thing we asked about is not there.
+
+        Code 100 with subcode 33. Meta's own text is "Object with ID '…' does not exist,
+        cannot be loaded due to missing permissions, or does not support this operation" —
+        note that it covers a DELETED object and a PERMISSIONS problem with one code, which
+        is why no caller should treat a single occurrence as proof of deletion.
+        """
+        return self.code == 100 and self.error_subcode == 33
+
+
+def _error_fields(body: str) -> dict:
+    """Pull Meta's error code/subcode out of a response body, tolerating anything.
+
+    An error path must never raise on its way to raising. A body that is HTML, empty, or a
+    proxy's plain-text timeout is normal here, and all of it degrades to "no codes known".
+    """
+    try:
+        error = json.loads(body).get("error", {})
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(error, dict):
+        return {}
+    fields = {}
+    for src, dest in (("code", "code"), ("error_subcode", "error_subcode")):
+        value = error.get(src)
+        if isinstance(value, int):
+            fields[dest] = value
+    return fields
 
 
 class GraphClient:
@@ -108,7 +160,11 @@ class GraphClient:
             # via __cause__. The redacted message above already carries what's useful.
             raise GraphAPIError(f"POST {path} -> request failed: {redact(str(exc))}") from None
         if not resp.ok:
-            raise GraphAPIError(f"POST {path} -> {resp.status_code}: {redact(resp.text)}")
+            raise GraphAPIError(
+                f"POST {path} -> {resp.status_code}: {redact(resp.text)}",
+                status_code=resp.status_code,
+                **_error_fields(resp.text),
+            )
         return resp.json()
 
     def _get(self, path: str, params: dict) -> dict:
@@ -118,7 +174,11 @@ class GraphClient:
             raise GraphAPIError(f"GET {path} -> request failed: {redact(str(exc))}") from None
         self._record_usage(resp)
         if not resp.ok:
-            raise GraphAPIError(f"GET {path} -> {resp.status_code}: {redact(resp.text)}")
+            raise GraphAPIError(
+                f"GET {path} -> {resp.status_code}: {redact(resp.text)}",
+                status_code=resp.status_code,
+                **_error_fields(resp.text),
+            )
         return resp.json()
 
     def _get_url(self, url: str) -> dict:

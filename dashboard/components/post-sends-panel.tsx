@@ -162,9 +162,14 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
             </span>
           ) : send.status === "posted" && send.is_dry_run !== 1 ? (
             <span className="text-[11px] text-faint">
-              {send.surface === "story"
-                ? "story expired before metrics were fetched"
-                : "metrics not fetched yet"}
+              {/* "not fetched yet" implies it still might be. For a post that is gone from
+                  the platform it never will be, and saying otherwise leaves someone waiting
+                  for numbers that are never coming. */}
+              {send.removed_from_platform === 1
+                ? "no metrics — the post was removed before any were collected"
+                : send.surface === "story"
+                  ? "story expired before metrics were fetched"
+                  : "metrics not fetched yet"}
             </span>
           ) : null}
         </div>

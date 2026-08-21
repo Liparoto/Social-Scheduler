@@ -76,6 +76,17 @@ COLUMN_MAP = {
 }
 
 
+# Consecutive gone-shaped failures before a publication stops being asked about.
+#
+# Not 1, deliberately. Meta returns error 100/33 both for an object that has been DELETED
+# and for one it will not load "due to missing permissions" — the same code for a permanent
+# fact and a temporary one. An expired or downgraded token returns it for every post on the
+# account at once, so marking on the first failure could freeze an entire account's metrics
+# on a problem that fixes itself. Three in a row, with any success resetting the count, is
+# cheap insurance; a genuinely deleted post reaches it within a couple of minutes anyway.
+METRICS_FAILURE_LIMIT = 3
+
+
 def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hours: int):
     max_age_cutoff = (now - timedelta(days=max_age_days)).isoformat()
     interval_cutoff = (now - timedelta(hours=min_interval_hours)).isoformat()
@@ -111,6 +122,12 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
               -- manually-flagged row must still be selectable once below, or
               -- run_metrics' finally block never clears metrics_refresh_requested_at.
               AND (pub.surface != 'story' OR pub.published_at >= ?)
+              -- The platform has told us this post is not there. Same shape as the Story
+              -- rule above and for the same reason: asking again only produces another
+              -- error, forever. INSIDE the automatic branch, so an explicit refresh below
+              -- still overrides it — error 100/33 also covers a permissions problem, and a
+              -- post frozen by one must stay one click from being retried.
+              AND pub.remote_missing_at IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM post_metrics pm
                 WHERE pm.publication_id = pub.id AND pm.fetched_at > ?
@@ -125,6 +142,70 @@ def publications_needing_metrics(conn, now, max_age_days: int, min_interval_hour
         """,
         (*no_metrics_platforms, max_age_cutoff, story_cutoff, interval_cutoff),
     ).fetchall()
+
+
+def _note_failure(conn, pub, exc, now_iso: str, logger) -> None:
+    """Record one failed fetch, and stop asking once the platform has said "gone" enough.
+
+    Only a MISSING-OBJECT error counts toward the streak. An ordinary failure — a timeout, a
+    connection reset, a 500 — says nothing about whether the post still exists, so it must
+    never accumulate toward giving up on it.
+    """
+    if not getattr(exc, "is_missing_object", False):
+        if logger:
+            logger.info("[metrics pub %s] fetch failed: %s", pub["id"], exc)
+        return
+
+    streak = (pub["metrics_failure_streak"] or 0) + 1
+    if streak < METRICS_FAILURE_LIMIT:
+        conn.execute(
+            "UPDATE publications SET metrics_failure_streak = ? WHERE id = ?",
+            (streak, pub["id"]),
+        )
+        conn.commit()
+        if logger:
+            logger.info(
+                "[metrics pub %s] the platform says this post is not there (%d/%d)",
+                pub["id"], streak, METRICS_FAILURE_LIMIT,
+            )
+        return
+
+    # Stored, not the raw response: this string is shown in the dashboard, and an API body
+    # can carry material that has no business being persisted.
+    reason = "The platform reports this post is no longer there (it was probably deleted)."
+    conn.execute(
+        """UPDATE publications
+              SET metrics_failure_streak = ?, remote_missing_at = ?, remote_missing_reason = ?
+            WHERE id = ?""",
+        (streak, now_iso, reason, pub["id"]),
+    )
+    conn.commit()
+    if logger:
+        # ONCE, and then silence. The noise this replaces was the actual complaint: the same
+        # line 703 times in one log file, which is where a real failure would have hidden.
+        logger.info(
+            "[metrics pub %s] giving up: %s No further metrics will be requested for it "
+            "unless you refresh it by hand.",
+            pub["id"], reason,
+        )
+
+
+def _clear_failures(conn, pub) -> None:
+    """A publication that answered is not missing, whatever it did before.
+
+    Clears the mark as well as the streak, so an explicit refresh that succeeds genuinely
+    un-freezes the row rather than leaving it flagged with fresh numbers beside it.
+    """
+    if not (pub["metrics_failure_streak"] or pub["remote_missing_at"]):
+        return
+    conn.execute(
+        """UPDATE publications
+              SET metrics_failure_streak = 0, remote_missing_at = NULL,
+                  remote_missing_reason = NULL
+            WHERE id = ?""",
+        (pub["id"],),
+    )
+    conn.commit()
 
 
 def _record(conn, publication_id: int, fetched_at: str, insights: dict) -> None:
@@ -270,10 +351,10 @@ def run_metrics(conn, config: Config, client, now, logger=None, client_for=None)
                     pub["surface"] if "surface" in pub.keys() else "feed",
                 )
             except Exception as exc:  # noqa: BLE001 — a metrics fetch failure is non-fatal
-                if logger:
-                    logger.info("[metrics pub %s] fetch failed: %s", pub["id"], exc)
+                _note_failure(conn, pub, exc, now_iso, logger)
                 continue
             _record(conn, pub["id"], now_iso, insights)
+            _clear_failures(conn, pub)
             fetched += 1
         finally:
             if was_flagged:

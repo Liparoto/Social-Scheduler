@@ -16,7 +16,7 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Metrics retry forever on a post that no longer exists on the platform | P2 | `~1h` | Easy | Publication 48 has failed **703 times** in the current log and will keep going every cycle — real failures get buried in the noise. |
+| 1 | Threads sends show "metrics not fetched yet" while holding real numbers | P2 | `~1h` | Easy | 24 sends affected on this install: Threads reports views into `impressions` and never `reach`, but the UI gates the whole metrics line on `reach !== null`. |
 | 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
@@ -29,20 +29,39 @@ than a task.
 approval-workflow UI · re-import from `export.json` · `--since`/`--channel` export filters ·
 boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: it is intentional).
 
-**Found 2026-08-21 while restarting the app — not yet fixed:**
-- [ ] **A post deleted on the platform retries its metrics forever.** Publication 48
-      (`instagram`/`Liparoto`, feed, remote id `18126387970809680`, posted 2026-08-11) returns
-      Meta error 100/33 — "object does not exist, cannot be loaded due to missing permissions,
-      or does not support this operation" — and the worker has logged that **703 times** in the
-      current log alone, once per metrics cycle, forever. Almost certainly deleted on Instagram
-      after publishing. Nothing is broken by it, which is exactly the problem: it is permanent
-      log noise that a genuine metrics failure would hide behind. There is no give-up, no
-      backoff, and nothing on screen says this post's numbers are frozen.
-      **Fix shape (needs a decision first):** error 100 subcode 33 is *terminal*, not
-      retryable — the object will never come back. Mark the publication so metrics stop being
-      requested for it, and surface it somewhere (Insights, or the post) as "no longer on
-      Instagram" rather than silently stale. Decide whether that state should be visible in the
-      Library too, since the post still exists here.
+**Found 2026-08-21 while restarting the app:**
+- [x] **A post deleted on the platform retried its metrics forever — FIXED 2026-08-21, and
+      confirmed on the live install.** Publication 48 (`instagram`/`Liparoto`, feed, posted
+      2026-08-11) returned Meta error 100/33 and the worker had logged it **703 times** in one
+      log file. The owner confirmed they deleted that post on Instagram.
+      **Why it retried every 30s rather than every 6h** — the part worth remembering: the
+      refresh interval gate is `NOT EXISTS (a post_metrics row newer than the cutoff)`, and a
+      FAILED fetch writes no such row. Failure never counted as an attempt, so the throttle only
+      ever applied to publications that succeeded. Nothing tracked failure at all.
+      **Shape:** migration `0024` adds `remote_missing_at` / `remote_missing_reason` /
+      `metrics_failure_streak` to `publications`. `GraphAPIError` now carries Meta's own
+      `code`/`error_subcode`, so "is this terminal?" is a decision on codes rather than a regex
+      over prose Meta can reword. Three consecutive *gone-shaped* failures mark the row and it
+      leaves the automatic branch of the due-query — the same shape as the existing Story rule,
+      and deliberately inside that branch so a manual refresh still overrides it.
+      **Three in a row, not one, on purpose:** error 100/33 covers a DELETED object *and* a
+      permissions problem with one code, so an expired token would otherwise freeze every post
+      on an account at once. Any success resets the streak and clears the mark.
+      **Not a second concept in the UI:** the dashboard already had a "removed from platform"
+      badge fed by `remote_media.is_deleted`. That path infers deletion from a post vanishing
+      off the account's media list and needs a mirror row to exist — publication 48 has none and
+      never will, since the post was gone before it was ever synced. The query now folds both
+      into the one field, so there are two detection paths and one fact on screen.
+      **Verified live:** worker restarted, logged `(1/3)`, `(2/3)`, then `giving up:` once — and
+      then **760 log lines about pub 48 stayed at 760** across several further poll cycles. The
+      post page shows the badge. 8 worker tests + 3 dashboard tests, all failing first.
+- [ ] **Threads sends read "metrics not fetched yet" while holding real numbers.** Found while
+      verifying the fix above. Publication 49 on the same post has **18 metric snapshots** and
+      still shows that line. Threads reports views into `impressions` and never populates
+      `reach`, but `post-sends-panel.tsx` gates the entire metrics line on
+      `send.reach !== null`. **24 sends on this install are affected.** Same class of bug as the
+      one above — the page saying something untrue about metrics — and the same fix shape: gate
+      on "any metric present", and show each platform the numbers it actually reports.
 
 **Blocked on something external (not schedulable):**
 - Facebook Pages adapter — real-post verification. Written, never proved live; no Page connected.

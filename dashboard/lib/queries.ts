@@ -1832,7 +1832,17 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
               -- (they are not on the /media edge) and for anything published before this
               -- install started syncing. Absence is not deletion, and the UI must not
               -- present it as such.
-              rm.is_deleted AS removed_from_platform
+              --
+              -- TWO detection paths, ONE fact, so the page keeps showing one badge:
+              --   * rm.is_deleted — media_sync noticed the post vanish from the account's
+              --     media list. Inference from absence, and it needs a mirror row to exist.
+              --   * publications.remote_missing_at — the metrics fetch asked about the post
+              --     and the platform said it is not there. First-hand, and it works where
+              --     the sync cannot: a post deleted before it was ever synced has no mirror
+              --     row, so absence-based inference has nothing to notice it missing FROM.
+              -- The direct evidence wins; rm.is_deleted still answers when it has not spoken.
+              CASE WHEN pub.remote_missing_at IS NOT NULL THEN 1 ELSE rm.is_deleted END
+                AS removed_from_platform
        FROM publications pub
        JOIN channels c ON c.id = pub.channel_id
        LEFT JOIN remote_media rm ON rm.publication_id = pub.id
