@@ -120,6 +120,19 @@ or it isn't a git checkout, it stops with a plain explanation and changes nothin
 - **Windows:** double-click **`Export-Windows.bat`** — same export, into
   `%USERPROFILE%\Documents\SocialScheduler Exports\`, opened in File Explorer when done.
 
+Each export folder contains a `socialscheduler.db` — the restorable copy of the whole install
+— alongside the readable spreadsheet, JSON and images. It carries **no access tokens**: they
+are scrubbed on the way out, so the folder is safe to keep in cloud storage.
+
+**Restore a backup (onto this or a new computer):**
+- **macOS:** double-click **`Restore-Mac.command`** · **Windows:** **`Restore-Windows.bat`**.
+
+Drag the backup folder in when it asks. It shows exactly what it would do and changes nothing
+until you type `restore` to confirm, saves your current database into `data/backups/` first,
+and refuses to run while the app is on (stop it first). It puts the database back and renames
+every image in the backup to the content-hash name the database expects. Afterwards, reconnect
+each account under Channels — the tokens deliberately did not come along.
+
 **Manual (for developers):** these steps skip the launcher, so nothing is set up for you.
 1. Copy `.env.example` → `.env` and fill in your own Meta app + per-channel credentials.
 2. `python3 migrate.py` to build/update the local database.

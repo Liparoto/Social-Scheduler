@@ -12,7 +12,7 @@ import pytest
 from openpyxl import load_workbook
 
 from worker.config import Config
-from worker.export.__main__ import main, open_readonly, run_export
+from worker.export.__main__ import DB_COPY_NAME, copy_database, main, open_readonly, run_export
 
 NOW = datetime(2026, 7, 24, 19, 30, tzinfo=timezone.utc)
 
@@ -60,15 +60,31 @@ def test_export_writes_no_token_into_any_file(config, conn, make_publication, tm
 
     out_dir, _ = run_export(config, out_root=tmp_path / "out", now=NOW)
 
-    forbidden = (b"tok-123", b"access_token")
+    # The token VALUE must not appear anywhere, in any file, ever. No exceptions.
+    # The column NAME is a separate matter, handled below.
+    secret_value = b"tok-123"
+    column_name = b"access_token"
 
-    def _assert_clean(blob: bytes, where: str) -> None:
-        for needle in forbidden:
+    def _assert_clean(blob: bytes, where: str, needles) -> None:
+        for needle in needles:
             assert needle not in blob, f"token leaked into {where}"
 
     for path in out_dir.rglob("*"):
         if not path.is_file():
             continue
+        # The database copy is the one file that legitimately contains the STRING
+        # "access_token": its schema declares the column, in the CREATE TABLE text
+        # SQLite stores in sqlite_master. That is a column name, not a credential, and
+        # it cannot be removed without shipping a different schema than the one the app
+        # reads — which would defeat the copy's only purpose, being restorable.
+        #
+        # For every OTHER file the column name staying forbidden is the point: those are
+        # built by naming what to emit, so "access_token" appearing in the spreadsheet or
+        # the JSON means a credential column reached the allow-list.
+        #
+        # The value check below is unconditional, and the copy gets a stronger assertion
+        # than a byte scan afterwards.
+        needles = (secret_value,) if path.name == DB_COPY_NAME else (secret_value, column_name)
         # openpyxl DEFLATE-compresses every member of an .xlsx (it's a ZIP archive),
         # so a raw byte scan of the file never sees a token that IS present in a
         # cell — it only sees compressed bytes. Scan each member's decompressed
@@ -76,9 +92,67 @@ def test_export_writes_no_token_into_any_file(config, conn, make_publication, tm
         if zipfile.is_zipfile(path):
             with zipfile.ZipFile(path) as archive:
                 for member in archive.namelist():
-                    _assert_clean(archive.read(member), f"{path.name}!{member}")
+                    _assert_clean(archive.read(member), f"{path.name}!{member}", needles)
         else:
-            _assert_clean(path.read_bytes(), path.name)
+            _assert_clean(path.read_bytes(), path.name, needles)
+
+
+def test_the_database_copy_is_scrubbed_of_every_credential(
+    config, conn, make_publication, tmp_path
+):
+    """The byte scan proves the token text is gone; this proves the COLUMN is empty.
+
+    A byte scan can be satisfied by accident — compression, or a value that happens not to
+    appear literally. Reading the column back through SQLite cannot.
+    """
+    make_publication(with_token=True)
+    _seed_assets(config, conn)
+    conn.close()
+
+    out_dir, _ = run_export(config, out_root=tmp_path / "out", now=NOW)
+
+    copy = sqlite3.connect(str(out_dir / DB_COPY_NAME))
+    try:
+        # Present and readable — this is a real, restorable database, not a stripped one.
+        assert copy.execute("SELECT COUNT(*) FROM channels").fetchone()[0] > 0
+        for column in ("access_token", "token_expires_at"):
+            values = [
+                row[0]
+                for row in copy.execute(f"SELECT {column} FROM channels")
+                if row[0] not in (None, "")
+            ]
+            assert values == [], f"{column} survived into the exported copy"
+    finally:
+        copy.close()
+
+
+def test_the_scrub_finds_credential_columns_by_shape_not_by_name(config, conn, tmp_path):
+    """Adding a new credential column must not silently start leaking.
+
+    The allow-list that protects the rest of the export is held to this same structural
+    rule. A copy of the whole database cannot choose what it reads, so it has to recognise a
+    credential by the shape of its name and empty it by default.
+    """
+    conn.execute("ALTER TABLE channels ADD COLUMN refresh_secret TEXT")
+    conn.execute(
+        "INSERT INTO channels (platform, account_name, refresh_secret)"
+        " VALUES ('instagram', 'future', 'super-secret-value')"
+    )
+    conn.commit()
+    conn.close()
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True)
+    dest = copy_database(config.database_path, out_dir)
+
+    assert b"super-secret-value" not in dest.read_bytes()
+    copy = sqlite3.connect(str(dest))
+    try:
+        assert copy.execute(
+            "SELECT COUNT(*) FROM channels WHERE refresh_secret IS NOT NULL"
+        ).fetchone()[0] == 0
+    finally:
+        copy.close()
 
 
 def test_main_reports_a_corrupt_database_instead_of_crashing(config, tmp_path, monkeypatch, capsys):
@@ -234,3 +308,47 @@ def test_export_transaction_is_open_during_collection(
     run_export(config, out_root=tmp_path / "out", now=NOW)
 
     assert seen_in_transaction["value"] is True
+
+
+def test_the_database_copy_captures_rows_still_sitting_in_the_wal(config, conn, tmp_path):
+    """Why the backup API, and not `cp`.
+
+    In WAL mode a committed row can live entirely in the -wal sidecar, with the main .db
+    file not yet containing it. Copying the file alone would produce a backup that silently
+    lacks recent work — and, worse, can catch a torn page mid-checkpoint. The backup API
+    reads through the engine, so it sees the committed state including the WAL.
+    """
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("INSERT INTO tags (name) VALUES ('only-in-the-wal')")
+    conn.commit()
+    # Deliberately NOT checkpointed and NOT closed: the row is committed, and this is
+    # exactly the state the live install is in whenever the worker is running.
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True)
+    dest = copy_database(config.database_path, out_dir)
+
+    copy = sqlite3.connect(str(dest))
+    try:
+        names = [r[0] for r in copy.execute("SELECT name FROM tags")]
+        assert "only-in-the-wal" in names
+    finally:
+        copy.close()
+    conn.close()
+
+
+def test_the_export_still_writes_the_copy_when_images_are_missing(
+    config, conn, make_publication, tmp_path
+):
+    """The copy is written FIRST, so the long tail of things that can fail cannot cost it.
+
+    No files are seeded here, so every image copy fails — which is the realistic partial
+    failure (a file deleted from the asset store behind the app's back).
+    """
+    make_publication()
+    conn.close()
+
+    out_dir, copy_result = run_export(config, out_root=tmp_path / "out", now=NOW)
+
+    assert copy_result.missing_asset_ids, "precondition: images really did fail to copy"
+    assert (out_dir / DB_COPY_NAME).is_file(), "a partial export still restores"

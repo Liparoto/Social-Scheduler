@@ -17,6 +17,60 @@ from worker.export.write import CopyResult, copy_images, write_json, write_readm
 
 DEFAULT_OUT_ROOT = Path.home() / "Documents" / "SocialScheduler Exports"
 
+# The restorable copy of the whole install. Named exactly as the live file is, so a person
+# who never reads a word of documentation can still see what it is.
+DB_COPY_NAME = "socialscheduler.db"
+
+# Any column whose name contains one of these is treated as a credential and emptied from
+# the exported copy. The same rule the channels allow-list is held to (see
+# test_channel_allow_list_rejects_any_secret_shaped_column_name) — structural rather than a
+# list of known names, so a credential column added years from now is scrubbed by default
+# instead of being leaked until somebody remembers to update a list.
+SECRET_SHAPED = ("token", "secret", "password", "key", "credential")
+
+
+def _scrub_secrets(conn: sqlite3.Connection) -> list[str]:
+    """Empty every credential-shaped column in an exported copy. Returns what it cleared.
+
+    The rest of the export keeps secrets out by NAMING WHAT IT EMITS (collect.py's
+    allow-list). A database copy cannot work that way — it is the whole file, every table,
+    every column, including `channels.access_token`. Left alone it would put live access
+    tokens into a folder the README tells people to drag into Google Drive, which is exactly
+    what the allow-list exists to prevent.
+
+    So the copy is scrubbed, and the promise the README already makes stays true: restoring
+    brings back your content and reconnects nothing. You sign the accounts back in.
+
+    VACUUM at the end is not tidiness, it is the point. UPDATE only unlinks the old text;
+    the bytes stay in the file's free pages, where a raw byte scan still finds them. VACUUM
+    rebuilds the file so they are genuinely gone. secure_delete overwrites them on the way.
+    """
+    conn.execute("PRAGMA secure_delete = ON;")
+    cleared: list[str] = []
+    tables = [
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+    ]
+    for table in tables:
+        for _cid, name, _type, notnull, _default, _pk in conn.execute(
+            f"PRAGMA table_info({table})"
+        ):
+            if not any(s in name.lower() for s in SECRET_SHAPED):
+                continue
+            # NOT NULL columns cannot be nulled. Empty string is the honest stand-in: the
+            # value is gone, and the row still satisfies its own constraint. No credential
+            # column is NOT NULL today; this is here so adding one cannot break the export
+            # into leaving the secret behind.
+            blank = "''" if notnull else "NULL"
+            conn.execute(f"UPDATE {table} SET {name} = {blank} WHERE {name} IS NOT NULL")
+            cleared.append(f"{table}.{name}")
+    conn.commit()
+    # Cannot run inside a transaction, hence the commit above.
+    conn.execute("VACUUM")
+    return cleared
+
 
 def open_readonly(database_path: Path) -> sqlite3.Connection:
     """A connection SQLite itself will not let us write through.
@@ -29,6 +83,43 @@ def open_readonly(database_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only = ON;")
     return conn
+
+
+def copy_database(database_path: Path, out_dir: Path) -> Path:
+    """Write a restorable copy of the database into the export folder.
+
+    Everything else in this folder is a READABLE record — a spreadsheet, JSON, and images
+    under human names. None of it can rebuild the install: the schedule, targets, cooldowns,
+    tags, periods and metrics history live in relationships a spreadsheet flattens away, and
+    the exported images are renamed, so their content-hash filenames no longer match what
+    the database refers to. This file is the one artifact a restore actually needs.
+
+    Uses SQLite's own online backup API, never a file copy. The database runs in WAL mode,
+    where recent commits live in the -wal sidecar rather than the main file — `cp` can
+    therefore catch a torn page and silently produce an unopenable copy, and it would miss
+    every change still sitting in the WAL. backup() reads through the engine, so it emits a
+    single consistent snapshot with the WAL already folded in, and it is safe to run while
+    the worker is mid-publish.
+
+    The source is opened read-only (mode=ro) so this cannot touch the live install even in
+    principle — the same guarantee open_readonly() gives the rest of the export.
+
+    The copy is then SCRUBBED of credentials before anyone can see it — see _scrub_secrets.
+    A database copy is the one part of this export that cannot keep secrets out by choosing
+    what to read, because it copies everything.
+    """
+    dest = out_dir / DB_COPY_NAME
+    src = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+            _scrub_secrets(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return dest
 
 
 def _unique_dir(out_root: Path, stamp: str) -> Path:
@@ -47,6 +138,18 @@ def run_export(
     """Produce one export folder. Returns its path and the image-copy summary."""
     out_dir = _unique_dir(out_root, now.strftime("%Y-%m-%d-%H%M"))
     out_dir.mkdir(parents=True)
+
+    # FIRST, before any of the readable output. This is the artifact a restore needs, and
+    # the rest of the export is a long tail of things that can fail on their own (a missing
+    # image file, an openpyxl edge case). Writing it first means even a half-finished export
+    # folder still holds a complete, restorable copy of the install.
+    #
+    # It is its own snapshot, taken microseconds before the read transaction below rather
+    # than inside it — the backup API needs its own connection. If the worker commits a
+    # publish in between, the .db copy and the spreadsheet can differ by that one row. That
+    # is the right way round: the .db is the authority for restoring, the spreadsheet is a
+    # readable record, and neither is internally inconsistent.
+    copy_database(config.database_path, out_dir)
 
     conn = open_readonly(config.database_path)
     try:
@@ -108,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"Exported to: {out_dir}")
+    print(f"  {DB_COPY_NAME} written (this is what a restore uses)")
     print(f"  {copy_result.copied} image file(s) copied")
     if copy_result.missing_asset_ids:
         # Visible, never silent — but not a failure: a partial backup still helps.

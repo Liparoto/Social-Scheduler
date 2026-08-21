@@ -16,10 +16,9 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Make the backup restorable — export a `socialscheduler.db` copy + `Restore-Mac.command` | P1 | `~1h` | Easy | The export records your data but cannot restore it; the whole install is one SQLite file on one Mac. |
-| 2 | Bulk retarget abandons the whole batch on the first over-limit post | P2 | `~1h` | Easy | Blocks folding a new account into existing content on any mixed selection; nothing is written and the error names one post. |
-| 3 | Media → post links dead-end on reused media (`MIN(post_id)`) | P2 | `~half day` | Medium | Posts using a reused asset are unreachable from `/media`; design + plan already written. |
-| 4 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | Bulk retarget abandons the whole batch on the first over-limit post | P2 | `~1h` | Easy | Blocks folding a new account into existing content on any mixed selection; nothing is written and the error names one post. |
+| 2 | Media → post links dead-end on reused media (`MIN(post_id)`) | P2 | `~half day` | Medium | Posts using a reused asset are unreachable from `/media`; design + plan already written. |
+| 3 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
 missing row) and `/media`'s blindness to Reels covers. Both were `<30m` Easy rows above.
@@ -485,13 +484,33 @@ without touching the database directly.
       thing already exists on disk. Replaced by the item below.
 - [-] **SCRAPPED 2026-08-21 (owner-approved) — `--since` / `--channel` export filters.** Solving
       a scale problem this install does not have: 139 posts, and a full export runs in seconds.
-- [ ] **REPLACEMENT (P1) — make the backup restorable.** Today's export folder holds posts,
-      images and stats in a readable form, but nothing that can be *restored*: the whole install
-      lives in one SQLite file on one Mac, and the export does not include it. Have `worker.export`
-      also write a `socialscheduler.db` copy using SQLite's own `.backup` (safe against a live
-      WAL-mode database — a plain file copy is NOT, it can catch a torn page), plus a
-      `Restore-Mac.command` that puts it back. ~1h, and a strictly better restore than the
-      re-importer would have been.
+- [x] **REPLACEMENT — make the backup restorable. SHIPPED 2026-08-21.** The export folder held
+      posts, images and stats in readable form but nothing that could be *restored*.
+      `worker.export` now writes a `socialscheduler.db` copy via SQLite's own `.backup`, and
+      `worker/restore.py` + `Restore-Mac.command` / `Restore-Windows.bat` put a backup back.
+      **The copy is scrubbed of credentials, and that was not in the original plan.** The
+      export's existing "no token in any file" test failed the moment the copy was added — a
+      whole-database copy cannot keep secrets out by choosing what it reads, the way collect.py's
+      allow-list does, so it would have put live access tokens into a folder the README tells
+      people to drag into Google Drive. `_scrub_secrets` empties every credential-shaped column
+      (the same structural rule the allow-list is held to) and VACUUMs, because UPDATE alone
+      leaves the old bytes in free pages where a byte scan still finds them. Restoring therefore
+      brings back content and no credentials — which is exactly what the README already promised.
+      **Restore specifics:** dry-run by default (`--apply` to write); refuses while the worker
+      holds its lock, and HOLDS that lock throughout so one cannot start mid-restore; saves the
+      current database into `data/backups/` first; validates the backup's database is openable
+      before touching the live one; rejects an unknown `format_version` rather than guessing;
+      removes stale `-wal`/`-shm` sidecars, which is how a restore otherwise corrupts an install;
+      writes images BEFORE the database, so an interruption leaves the old database pointing at a
+      store that only gained files. Images are renamed back from their readable export names via
+      `export.json`, so the backup does not grow (owner's call, 2026-08-21).
+      **Verified:** 12 restore tests + 5 new export tests (841 worker tests green), and a real
+      round trip against a copy of the live install — 3 real posts exported, install destroyed,
+      restored: `integrity_check` ok, `foreign_key_check` clean, all 7 files back under their
+      content-hash names, every `storage_path`/`publish_path` resolving on disk, 0 tokens, and
+      the real 181-character live token appearing in 0 files anywhere in the backup. That run
+      also found a shape the unit fixtures missed — `publish_path` lives under `pub/`, so the
+      restore must create directories; now pinned by its own test.
 
 ## Phase 6 — Extend adapters  `[~]` — IG, Threads, Discord, Telegram live; FB written but unverified
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
