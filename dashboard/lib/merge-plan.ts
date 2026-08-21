@@ -1,11 +1,15 @@
 // Pure decision layer for merging several draft posts into one carousel. Every guard from
-// spec §5 lives here and nowhere else, and this file imports nothing but ./platforms — no
-// database, no server-only, no Node built-ins — so the whole guard chain can be exhaustively
-// unit-tested without ever touching SQLite. The caller (a route handler running inside a DB
-// transaction) is responsible for loading MergeCandidate[] and turning an { ok: true } result
-// into actual writes; this module never mutates anything.
+// spec §5 lives here and nowhere else, and this file imports nothing but ./platforms and
+// ./caption-limits — no database, no server-only, no Node built-ins — so the whole guard
+// chain can be exhaustively unit-tested without ever touching SQLite. The caller (a route
+// handler running inside a DB transaction) is responsible for loading MergeCandidate[] and
+// turning an { ok: true } result into actual writes; this module never mutates anything.
+//
+// (caption-limits.ts is safe to import here for the same reason: it is pure logic over
+// caller-supplied channels, with no DB access and no server-only guard.)
 
-import { PLATFORMS, type Platform } from "./platforms";
+import { PLATFORMS, type ChannelLikeForCompat, type Platform } from "./platforms";
+import { captionLimitError } from "./caption-limits";
 
 export interface MergeCandidate {
   post_id: number;
@@ -19,6 +23,24 @@ export interface MergeCandidate {
 export interface MergeRequest {
   post_ids: number[]; // selection order; [0] is the survivor
   asset_order: number[]; // final slide order
+}
+
+/**
+ * What the merge is about to WRITE, so guard 8 can measure it before it is written.
+ *
+ * Required, not optional, and deliberately so: spec §5 always listed this guard, and the
+ * reason it shipped without one is that planMerge was simply never handed the caption. An
+ * optional argument would let the next caller re-open the same hole by forgetting it.
+ */
+export interface MergeCaptionCheck {
+  /** The caption the merge will set on the survivor. null/""/whitespace = CLEAR it. */
+  caption: string | null;
+  /**
+   * Every channel the MERGED post will target — the union across all selected posts, not
+   * just the survivor's own. mergePostsIntoCarousel unions post_targets onto the survivor,
+   * so a channel arriving from a sibling is exactly as binding as one already there.
+   */
+  channels: ChannelLikeForCompat[];
 }
 
 export type MergeProblem = { code: string; message: string; status: 400 | 404 | 409 };
@@ -35,6 +57,7 @@ export function planMerge(
   candidates: MergeCandidate[],
   req: MergeRequest,
   platforms: Platform[],
+  captionCheck: MergeCaptionCheck,
 ): MergeResult {
   // Guard 1: a merge is meaningless below two posts — catch it before any lookup work.
   if (req.post_ids.length < 2) {
@@ -123,6 +146,37 @@ export function planMerge(
       `Instagram allows at most 10 photos in a carousel; you selected ${req.asset_order.length}.`,
       400,
     );
+  }
+
+  // Guard 8 (spec §5, last row): the caption the merge is about to write must fit every
+  // platform the merged post will target.
+  //
+  // This is the guard the merge shipped without, and the gap was not theoretical. Targets
+  // are UNIONED onto the survivor, so a post targeting only Instagram — which enforces no
+  // caption limit here — can acquire a Threads channel (500) from a sibling and keep its
+  // 1,500-character caption. Nothing about the caption changed; the audience did. Without
+  // this check nothing warns, the publication is created and scheduled, and it dies at the
+  // worker. That is precisely the "failed publishes must be visibly failed, never silent"
+  // rule being satisfied too late to be useful.
+  //
+  // Measured against the post type the merge PRODUCES, never the type the survivor had:
+  // the limit is per-post-type (Telegram is 4096 for text but 1024 once media is attached),
+  // and changing the post type is the entire point of merging.
+  //
+  // A cleared caption is skipped rather than measured. null/""/whitespace all mean CLEAR
+  // (see mergePostsIntoCarousel's caption contract), and an absent caption has no length to
+  // exceed — measuring it would reject a merge for text it is deleting.
+  const body = (captionCheck.caption ?? "").trim();
+  if (body) {
+    const mergedPostType =
+      req.asset_order.length === 0 ? "text" : req.asset_order.length > 1 ? "carousel" : "single";
+    // No variants: the merge REPLACES the survivor's caption_variants with this single body,
+    // so this text is what every platform publishes. Passing it as the fallback with an empty
+    // variant list models that exactly.
+    const captionError = captionLimitError(captionCheck.channels, [], body, mergedPostType);
+    if (captionError) {
+      return problem("caption_too_long", captionError, 400);
+    }
   }
 
   // The survivor is the first SELECTED post, not the first slide in the final order — the

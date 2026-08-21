@@ -1319,8 +1319,34 @@ function loadUnmergeCandidate(
 }
 
 /**
- * The distinct platforms the merged post could end up going to — planMerge caps the carousel
- * at the STRICTEST of these (Instagram 10, Threads 20).
+ * Every channel the merged post could end up going to — the UNION across all merged posts,
+ * because mergePostsIntoCarousel unions their post_targets onto the survivor. Two callers
+ * need it: the carousel size cap (via mergeTargetPlatforms) and planMerge's guard 8, which
+ * measures the caption against each of these platforms' limits.
+ *
+ * Empty is a real answer here, unlike for the cap below: targets are optional, so a merge of
+ * freshly composed drafts legitimately targets nothing yet. No channels means no caption limit
+ * applies — and note that is not a hole, because the conservative Instagram fallback the cap
+ * uses would say the same thing: Instagram enforces no caption limit in platforms.ts.
+ */
+function mergeTargetChannels(
+  db: ReturnType<typeof getDb>,
+  postIds: number[]
+): ChannelLikeForCompat[] {
+  if (postIds.length === 0) return [];
+  const placeholders = postIds.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT DISTINCT c.id, c.platform, c.account_name
+         FROM post_targets pt JOIN channels c ON c.id = pt.channel_id
+        WHERE pt.post_id IN (${placeholders})`
+    )
+    .all(...postIds) as ChannelLikeForCompat[];
+}
+
+/**
+ * The distinct platforms those channels belong to — planMerge caps the carousel at the
+ * STRICTEST of these (Instagram 10, Threads 20).
  *
  * Never return an empty list. planMerge computes the cap with `Math.min(...platforms.map(...))`,
  * and `Math.min()` of an empty array is **Infinity** — an empty list does not mean "no cap
@@ -1335,17 +1361,8 @@ function loadUnmergeCandidate(
  * draft can be pointed at any channel later, so it has to satisfy the tightest limit, not the
  * loosest.
  */
-function mergeTargetPlatforms(db: ReturnType<typeof getDb>, postIds: number[]): Platform[] {
-  if (postIds.length === 0) return ["instagram"];
-  const placeholders = postIds.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT c.platform
-         FROM post_targets pt JOIN channels c ON c.id = pt.channel_id
-        WHERE pt.post_id IN (${placeholders})`
-    )
-    .all(...postIds) as { platform: string }[];
-  const platforms = rows.map((r) => r.platform).filter(isPlatform);
+function mergeTargetPlatforms(channels: ChannelLikeForCompat[]): Platform[] {
+  const platforms = [...new Set(channels.map((c) => c.platform))].filter(isPlatform);
   return platforms.length > 0 ? platforms : ["instagram"];
 }
 
@@ -1380,10 +1397,15 @@ export function mergePostsIntoCarousel(
       .map((id) => loadMergeCandidate(db, id))
       .filter((c): c is MergeCandidate => c !== undefined);
 
+    // One read, two uses: the size cap needs the platforms, guard 8 needs the channels
+    // themselves (a caption limit is per platform, but captionLimitError names the account).
+    // This is the union across EVERY merged post, which is what post_targets becomes below.
+    const targetChannels = mergeTargetChannels(db, merged);
     const plan = planMerge(
       candidates,
       { post_ids: postIds, asset_order: assetOrder },
-      mergeTargetPlatforms(db, merged)
+      mergeTargetPlatforms(targetChannels),
+      { caption, channels: targetChannels }
     );
     // Rejected: return before a single write happens. (The transaction commits empty.)
     if (!plan.ok) return { ok: false, problem: plan.problem };

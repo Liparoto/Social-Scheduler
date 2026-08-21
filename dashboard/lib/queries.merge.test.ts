@@ -263,3 +263,83 @@ test("one strict target channel caps the whole merge", async () => {
   if (res.ok) return;
   assert.equal(res.problem.code, "carousel_too_large");
 });
+
+// ---- Guard 8: the caption is measured against the UNION of target channels -------------
+// The pure-function tests live in merge-plan.test.ts. These exist because the bug was never
+// in the guard's logic — it was that the caller never handed it the caption or the channels.
+// Only a real DB can prove mergePostsIntoCarousel passes the union it is about to write.
+
+test("a caption legal for the survivor alone is rejected once a sibling's stricter channel joins", async () => {
+  const { q, db, mkAsset, mkDraft } = await setup();
+  const ch = (platform: string, name: string) => Number(db.prepare(
+    "INSERT INTO channels (platform, account_name) VALUES (?, ?)"
+  ).run(platform, name).lastInsertRowid);
+
+  // The exact shape of the owner's install: one Instagram channel, one Threads channel.
+  const insta = ch("instagram", "ig-guard8");
+  const threads = ch("threads", "th-guard8");
+  const ids = [mkAsset(1), mkAsset(2)];
+  const posts = ids.map((a) => mkDraft([a]));
+  q.setPostTargets(posts[0], [{ channel_id: insta, surface: "feed" }]);
+  q.setPostTargets(posts[1], [{ channel_id: threads, surface: "feed" }]);
+
+  // 1,500 characters is legal on Instagram (no enforced limit) and always was — the survivor
+  // is the Instagram post. The merge unions the Threads channel onto it, and Threads caps at
+  // 500. Before guard 8 this returned ok and died at the worker hours later.
+  const res = q.mergePostsIntoCarousel(posts, ids, "x".repeat(1500));
+  assert.equal(res.ok, false, "the unioned Threads target makes the survivor's caption illegal");
+  if (res.ok) return;
+  assert.equal(res.problem.status, 400);
+  assert.match(res.problem.message, /Threads \(1500\/500\)/);
+
+  // "Having written nothing" is the other half of the contract — a rejected merge must not
+  // half-apply. Both posts must still exist with their own slide.
+  assert.notEqual(q.getPost(posts[0]), undefined, "survivor still exists");
+  assert.notEqual(q.getPost(posts[1]), undefined, "the other post was NOT deleted");
+  for (const [i, p] of posts.entries()) {
+    const rows = db.prepare("SELECT asset_id FROM post_assets WHERE post_id = ?").all(p);
+    assert.deepEqual(rows, [{ asset_id: ids[i] }], "slides untouched");
+  }
+});
+
+test("the same merge succeeds once the caption fits the strictest target", async () => {
+  const { q, db, mkAsset, mkDraft } = await setup();
+  const ch = (platform: string, name: string) => Number(db.prepare(
+    "INSERT INTO channels (platform, account_name) VALUES (?, ?)"
+  ).run(platform, name).lastInsertRowid);
+
+  const insta = ch("instagram", "ig-guard8-ok");
+  const threads = ch("threads", "th-guard8-ok");
+  const ids = [mkAsset(1), mkAsset(2)];
+  const posts = ids.map((a) => mkDraft([a]));
+  q.setPostTargets(posts[0], [{ channel_id: insta, surface: "feed" }]);
+  q.setPostTargets(posts[1], [{ channel_id: threads, surface: "feed" }]);
+
+  const res = q.mergePostsIntoCarousel(posts, ids, "x".repeat(499));
+  assert.equal(res.ok, true, "499 fits Threads' 500");
+  if (!res.ok) return;
+  assert.equal(q.getPost(res.post_id)?.post_type, "carousel");
+  // And the union really did happen — which is what made the rejection above correct.
+  const chans = db.prepare(
+    "SELECT channel_id FROM post_targets WHERE post_id = ? ORDER BY channel_id"
+  ).all(res.post_id);
+  assert.deepEqual(chans, [{ channel_id: insta }, { channel_id: threads }]);
+});
+
+test("clearing the caption is never blocked by the limit guard", async () => {
+  const { q, db, mkAsset, mkDraft } = await setup();
+  const threads = Number(db.prepare(
+    "INSERT INTO channels (platform, account_name) VALUES ('threads', ?)"
+  ).run("th-guard8-clear").lastInsertRowid);
+
+  const ids = [mkAsset(1), mkAsset(2)];
+  const posts = ids.map((a) => mkDraft([a]));
+  for (const p of posts) q.setPostTargets(p, [{ channel_id: threads, surface: "feed" }]);
+
+  // null means CLEAR (see the caption contract). There is no text to be over a limit, so a
+  // guard that measured it anyway would block the "No caption" option outright.
+  const res = q.mergePostsIntoCarousel(posts, ids, null);
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.equal(q.getPost(res.post_id)?.caption, null);
+});
