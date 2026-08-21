@@ -184,3 +184,105 @@ test("an asset in a post AND serving as a cover reports both", async () => {
   assert.equal(byId.get(cover)?.post_count, 1);
   assert.equal(byId.get(cover)?.cover_use_count, 1);
 });
+
+// ---- Every post an asset belongs to, not an arbitrary one ----------------------------
+// listAssetsWithUsage used to return MIN(pa.post_id): the LOWEST-numbered post using the
+// asset, picked by id with no relation to relevance, while every other post collapsed into
+// the plain text "+N more" that was not a link. For an asset reused across posts — the
+// normal case for evergreen recycling — most of its posts could not be reached at all.
+
+test("an asset in several posts reports every one of them", async () => {
+  const { q, mkAsset, mkDraft } = await setup();
+  const shared = mkAsset(1);
+  const first = mkDraft([shared]);
+  const second = mkDraft([shared]);
+  const third = mkDraft([shared]);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  const row = byId.get(shared);
+
+  assert.equal(row?.post_count, 3);
+  assert.deepEqual(
+    row?.posts.map((p) => p.post_id),
+    [first, second, third],
+    "all three, in creation order — MIN() returned only the first"
+  );
+});
+
+test("each linked post carries what it takes to recognise it", async () => {
+  const { q, db, mkAsset } = await setup();
+  const asset = mkAsset(2);
+  const postId = q.createDraftPost({
+    caption: "Spring sale — last chance\nsecond line that must not appear",
+    first_comment: "",
+    asset_ids: [asset],
+  });
+  db.prepare("UPDATE posts SET status = 'scheduled' WHERE id = ?").run(postId);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  const [linked] = byId.get(asset)!.posts;
+
+  assert.equal(linked.post_id, postId);
+  assert.equal(linked.status, "scheduled");
+  // The full caption travels; taking the first line is the RENDERER's job, so the query
+  // stays useful to any other caller.
+  assert.match(linked.caption ?? "", /^Spring sale/);
+});
+
+test("an unused asset has no linked posts", async () => {
+  const { q, mkAsset } = await setup();
+  const unused = mkAsset(3);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  assert.equal(byId.get(unused)?.post_count, 0);
+  assert.deepEqual(byId.get(unused)?.posts, []);
+});
+
+test("one asset's posts never leak onto another asset", async () => {
+  const { q, mkAsset, mkDraft } = await setup();
+  const a = mkAsset(4);
+  const b = mkAsset(5);
+  const postA = mkDraft([a]);
+  const postB = mkDraft([b]);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  assert.deepEqual(byId.get(a)?.posts.map((p) => p.post_id), [postA]);
+  assert.deepEqual(byId.get(b)?.posts.map((p) => p.post_id), [postB]);
+});
+
+test("a carousel counts once per post, not once per slide", async () => {
+  // post_count comes from a GROUP BY over post_assets; the linked-post list is assembled
+  // from the same rows. A carousel puts several slides on ONE post, and each asset belongs
+  // to it exactly once, so neither number may double up.
+  const { q, mkAsset, mkDraft } = await setup();
+  const one = mkAsset(6);
+  const two = mkAsset(7);
+  const carousel = mkDraft([one, two]);
+
+  const byId = new Map(q.listAssetsWithUsage().map((r) => [r.id, r]));
+  for (const id of [one, two]) {
+    assert.equal(byId.get(id)?.post_count, 1);
+    assert.deepEqual(byId.get(id)?.posts.map((p) => p.post_id), [carousel]);
+  }
+});
+
+test("linking every post does not cost a query per asset", async () => {
+  // The whole asset store is read at once on /media. A per-asset lookup would be an N+1
+  // that only shows up as the store grows — 167 assets on the owner's install today.
+  const { q, db, mkAsset, mkDraft } = await setup();
+  for (let i = 20; i < 32; i++) mkDraft([mkAsset(i)]);
+
+  let statements = 0;
+  const original = db.prepare.bind(db);
+  (db as unknown as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+    statements += 1;
+    return original(sql);
+  }) as typeof db.prepare;
+  try {
+    const rows = q.listAssetsWithUsage();
+    assert.ok(rows.length >= 12, "precondition: there are plenty of assets to fan out over");
+  } finally {
+    (db as unknown as { prepare: typeof db.prepare }).prepare = original;
+  }
+  assert.ok(statements <= 2, `expected a batched read, got ${statements} prepared statements`);
+});

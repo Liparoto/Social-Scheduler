@@ -504,8 +504,25 @@ export interface AssetWithUsage {
    * refuses it anyway, because the foreign key vetoes. /media must treat this as usage.
    */
   cover_use_count: number;
-  first_post_id: number | null;
-  first_post_status: string | null;
+  /**
+   * EVERY post this asset is a slide in, in creation order — not one representative post.
+   *
+   * This replaced `first_post_id`/`first_post_status`, which were `MIN(pa.post_id)`: the
+   * lowest-numbered post using the asset, picked by id with no relation to relevance, while
+   * every other post collapsed into plain text on the page. An asset reused across posts —
+   * the normal case for evergreen recycling — had most of its posts unreachable.
+   *
+   * Carries the whole caption, not a shortened label: trimming it to a line is the
+   * renderer's decision, and keeping it whole leaves the query useful to other callers.
+   */
+  posts: AssetPostRef[];
+}
+
+/** One post an asset appears in, with enough to recognise it without opening it. */
+export interface AssetPostRef {
+  post_id: number;
+  caption: string | null;
+  status: string;
 }
 
 /**
@@ -527,23 +544,44 @@ export interface AssetWithUsage {
  * post_count. Not an aggregate over the join, so it needs no GROUP BY entry of its own.
  */
 export function listAssetsWithUsage(): AssetWithUsage[] {
-  return getDb()
+  const db = getDb();
+  const rows = db
     .prepare(
-      `SELECT u.*, p.status AS first_post_status
-         FROM (
-           SELECT a.*,
-                  COUNT(pa.post_id) AS post_count,
-                  MIN(pa.post_id)   AS first_post_id,
-                  (SELECT COUNT(*) FROM assets cov WHERE cov.cover_asset_id = a.id)
-                    AS cover_use_count
-             FROM assets a
-             LEFT JOIN post_assets pa ON pa.asset_id = a.id
-            GROUP BY a.id
-         ) u
-         LEFT JOIN posts p ON p.id = u.first_post_id
-        ORDER BY u.created_at DESC, u.id DESC`
+      `SELECT a.*,
+              COUNT(pa.post_id) AS post_count,
+              (SELECT COUNT(*) FROM assets cov WHERE cov.cover_asset_id = a.id)
+                AS cover_use_count
+         FROM assets a
+         LEFT JOIN post_assets pa ON pa.asset_id = a.id
+        GROUP BY a.id
+        ORDER BY a.created_at DESC, a.id DESC`
     )
-    .all() as AssetWithUsage[];
+    .all() as (Omit<AssetWithUsage, "posts"> & { posts?: never })[];
+
+  // ONE more query for the whole store, not one per asset. /media renders every asset on the
+  // page, so a per-asset lookup is an N+1 that stays invisible until the store grows.
+  //
+  // Deliberately a second statement rather than a join onto the query above: joining a
+  // one-to-many table into that GROUP BY is what would multiply the rows and corrupt
+  // post_count, the same trap cover_use_count avoids by being a scalar subquery.
+  const links = db
+    .prepare(
+      `SELECT pa.asset_id, p.id AS post_id, p.caption, p.status
+         FROM post_assets pa
+         JOIN posts p ON p.id = pa.post_id
+        ORDER BY pa.asset_id, p.id`
+    )
+    .all() as ({ asset_id: number } & AssetPostRef)[];
+
+  const byAsset = new Map<number, AssetPostRef[]>();
+  for (const link of links) {
+    const list = byAsset.get(link.asset_id);
+    const ref = { post_id: link.post_id, caption: link.caption, status: link.status };
+    if (list) list.push(ref);
+    else byAsset.set(link.asset_id, [ref]);
+  }
+
+  return rows.map((row) => ({ ...row, posts: byAsset.get(row.id) ?? [] })) as AssetWithUsage[];
 }
 
 /**

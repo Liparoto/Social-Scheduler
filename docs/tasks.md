@@ -16,11 +16,13 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Media → post links dead-end on reused media (`MIN(post_id)`) | P2 | `~half day` | Medium | Posts using a reused asset are unreachable from `/media`; design + plan already written. |
-| 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
-missing row) and `/media`'s blindness to Reels covers. Both were `<30m` Easy rows above.
+missing row), `/media`'s blindness to Reels covers, a restorable backup (`socialscheduler.db` in
+every export + `Restore-Mac.command`/`Restore-Windows.bat`), bulk retarget no longer abandoning a
+batch, and media → post links reaching every post. One P2 remains, and it is a brainstorm rather
+than a task.
 
 **Scrapped 2026-08-21 (owner-approved) — do not re-propose without re-litigating:**
 approval-workflow UI · re-import from `export.json` · `--since`/`--channel` export filters ·
@@ -1302,8 +1304,30 @@ that the worker remains authoritative in each target channel's timezone.
         in `quick-edit-modal.tsx`'s header so it doesn't have to be re-derived.
       - After saving, refresh the card in place — a modal that forces a full reload defeats the
         point. Pairs naturally with the bulk-edit item: same fields, one post vs. many.
-- [ ] **Media page → the post, properly** (owner-requested 2026-08-02). A link *does* already
-      exist (`media-manager.tsx` renders "In post #N" → `/library/[id]`), so the gap is that
+- [x] **Media page → the post, properly — SHIPPED 2026-08-21** (owner-requested 2026-08-02).
+      Design `specs/2026-08-02-media-post-links-design.md`, plan `plans/2026-08-02-media-post-links.md`.
+      `listAssetsWithUsage()` returns `posts: AssetPostRef[]` — every post an asset is a slide in,
+      in creation order — replacing `first_post_id`/`first_post_status`. It is a SECOND batched
+      query, not a join onto the main one: joining a one-to-many table into that `GROUP BY` would
+      multiply the rows and corrupt `post_count`, the same trap `cover_use_count` avoids by being
+      a scalar subquery. One extra statement for the whole store, pinned by a test that fails if
+      the read ever becomes per-asset.
+      Each post renders as its own link labelled by the caption's **first line** (`postLabel`,
+      built on `truncateChars` — `slice` would cut inside a surrogate pair and take the page's
+      hydration down with it, which is a live hazard here since captions are mostly emoji). Two
+      show inline, the rest behind a real `+N more` button, expanded per card. The full caption
+      rides along in `title`.
+      **Verified in a real browser** (isolated copy on 3940 against a scratch DB, since the live
+      install has no reused assets yet and the owner's dev server owns the directory): an asset
+      seeded into 5 real posts showed "In 5 posts:", 2 links, then `+3 more` — clicking it
+      revealed all 5, including an emoji caption truncated cleanly with no mojibake; a link
+      navigated to the right `/library/2`; console clean, no hydration errors. **Regression
+      checks from the plan:** a genuinely unused asset still reads "Unused" with a working Delete
+      button, and the header summary still counts it (`1 unused (500 KB)`). Live DB untouched —
+      167 assets / 167 `post_assets` before and after, `foreign_key_check` clean.
+      *(Original problem statement kept below for the record.)*
+- [-] **Superseded by the entry above — original 2026-08-02 problem statement.** A link *does*
+      already exist (`media-manager.tsx` renders "In post #N" → `/library/[id]`), so the gap is that
       it's too weak to be useful, not that it's absent:
       - **Reused media dead-ends.** `listAssetsWithUsage` returns `MIN(pa.post_id)` as
         `first_post_id` — the **lowest-numbered** post, chosen arbitrarily, not the most
