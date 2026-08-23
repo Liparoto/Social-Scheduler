@@ -20,7 +20,12 @@ export const TIKTOK_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/";
  * tools. Asking for a scope the app does not hold fails the entire authorisation rather
  * than quietly dropping it, so listing it "just in case" would break connecting outright.
  */
-export const TIKTOK_SCOPES = ["user.info.basic", "video.upload", "video.list"] as const;
+export const TIKTOK_SCOPES = [
+  "user.info.basic",   // identity + avatar
+  "video.upload",      // deliver to the creator's inbox
+  "video.list",        // per-post metrics
+  "user.info.stats",   // follower/following/likes/video counts for Insights
+] as const;
 
 function base64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

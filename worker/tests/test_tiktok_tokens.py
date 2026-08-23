@@ -162,3 +162,68 @@ def test_a_non_tiktok_channel_is_returned_untouched(conn, tiktok_config):
 
     assert client.calls == 0
     assert out["access_token"] == "tok-123"
+
+
+# ---- The cycle-level refresh pass -------------------------------------------------------
+# Exists so the read-only jobs (watcher, account stats, avatars) see a live token. They run
+# on long throttles while a TikTok token lives 24 hours, so without this they would find an
+# expired token essentially every time they ran.
+
+
+def test_refresh_due_tokens_refreshes_an_expiring_channel(conn, tiktok_config):
+    from worker.tiktok_tokens import refresh_due_tokens
+
+    ch = _tiktok_channel(conn, expires_in_hours=0.2)
+    client = FakeTikTok()
+
+    count = refresh_due_tokens(conn, tiktok_config, client, NOW)
+
+    assert count == 1
+    assert db.get_channel(conn, ch["id"])["access_token"] == "act.NEWTOKEN"
+
+
+def test_refresh_due_tokens_leaves_healthy_channels_alone(conn, tiktok_config):
+    from worker.tiktok_tokens import refresh_due_tokens
+
+    _tiktok_channel(conn, expires_in_hours=12)
+    client = FakeTikTok()
+
+    assert refresh_due_tokens(conn, tiktok_config, client, NOW) == 0
+    assert client.calls == 0
+
+
+def test_one_dead_channel_does_not_stop_the_others(conn, tiktok_config):
+    """A revoked channel is terminal for itself only. Raising here would abort the whole
+    cycle's token pass and silently starve every other TikTok channel."""
+    from worker.tiktok_tokens import refresh_due_tokens
+
+    dead = _tiktok_channel(conn, expires_in_hours=0.1, refresh_token=None)
+    alive = _tiktok_channel(conn, expires_in_hours=0.1)
+
+    count = refresh_due_tokens(conn, tiktok_config, FakeTikTok(), NOW)
+
+    assert count == 1
+    assert db.get_channel(conn, dead["id"])["access_token"] == "act.OLDTOKEN"
+    assert db.get_channel(conn, alive["id"])["access_token"] == "act.NEWTOKEN"
+
+
+def test_a_transient_failure_is_swallowed_not_raised(conn, tiktok_config):
+    from worker.tiktok_tokens import refresh_due_tokens
+
+    _tiktok_channel(conn, expires_in_hours=0.1)
+    client = FakeTikTok(error=TikTokAPIError("request failed: timeout"))
+
+    # Must not raise: publishing refreshes on its own path anyway.
+    assert refresh_due_tokens(conn, tiktok_config, client, NOW) == 0
+
+
+def test_inactive_channels_are_skipped(conn, tiktok_config):
+    from worker.tiktok_tokens import refresh_due_tokens
+
+    ch = _tiktok_channel(conn, expires_in_hours=0.1)
+    conn.execute("UPDATE channels SET is_active = 0 WHERE id = ?", (ch["id"],))
+    conn.commit()
+    client = FakeTikTok()
+
+    assert refresh_due_tokens(conn, tiktok_config, client, NOW) == 0
+    assert client.calls == 0

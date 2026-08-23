@@ -1,0 +1,13 @@
+-- 0026_tiktok_account_stats.sql
+-- One column for a number that is unlike every other number in this table.
+--
+-- account_metrics stores DAILY values: `likes` on an Instagram row means "likes that day".
+-- TikTok's account API reports `likes_count`, which is the LIFETIME total across every
+-- video the account has ever posted — a number that only ever goes up. Putting it in
+-- `likes` would make a chart that reads as one thing show another, and would silently
+-- corrupt any comparison across platforms. Same error as writing 0 where a platform has
+-- no metric at all.
+--
+-- Kept out of WRITABLE_COLUMNS' daily-value family by living under its own name, so a
+-- reader of either the schema or a chart can tell which kind of number they are looking at.
+ALTER TABLE account_metrics ADD COLUMN lifetime_likes INTEGER;

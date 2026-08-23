@@ -27,6 +27,9 @@ export interface DayRow {
   replies: number | null;
   website_clicks: number | null;
   follows_gained: number | null;
+  /** TikTok's LIFETIME like total across every video, not likes-that-day. Its own column
+   *  precisely so it is never mistaken for `likes` — see migration 0026. */
+  lifetime_likes: number | null;
 }
 
 export type MetricKey = keyof Omit<DayRow, "day">;
@@ -198,7 +201,7 @@ const EMPTY_DAY = (day: string): DayRow => ({
   followers_count: null, follows_count: null, media_count: null, reach: null,
   views: null, profile_views: null, accounts_engaged: null, total_interactions: null,
   likes: null, comments: null, saves: null, shares: null, replies: null,
-  website_clicks: null, follows_gained: null,
+  website_clicks: null, follows_gained: null, lifetime_likes: null,
 });
 
 export interface PostRow {

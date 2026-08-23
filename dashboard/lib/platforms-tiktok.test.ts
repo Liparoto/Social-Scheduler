@@ -98,9 +98,18 @@ test("an image post to every other platform is still allowed", () => {
 // for a refresh. The flag would be set and never cleared.
 
 test("platforms with no readable avatar do not claim to have one", () => {
-  for (const p of ["discord", "telegram", "tiktok"]) {
+  // Discord posts through a webhook and Telegram through a bot — neither exposes a
+  // per-channel profile photo this worker can read.
+  for (const p of ["discord", "telegram"]) {
     assert.equal(supportsAvatar(p), false, `${p} should report no avatar support`);
   }
+});
+
+test("tiktok has an avatar after all", () => {
+  // This asserted false when TikTok's fetcher was deliberately unwired. Probing the live
+  // API showed /v2/user/info/ returns avatar_large_url under user.info.basic — no extra
+  // scope, no reconnect — so it is wired and the expectation moved with it.
+  assert.equal(supportsAvatar("tiktok"), true);
 });
 
 test("the Meta platforms still have avatars", () => {

@@ -131,7 +131,7 @@ export const PLATFORMS = [
     // writes the caption in the TikTok app. Nothing to enforce, rather than a limit we
     // happen not to know.
     captionChars: {},
-    supportsAvatar: false,
+    supportsAvatar: true,
     supportsMetrics: true,
   },
 ] as const;

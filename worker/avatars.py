@@ -46,6 +46,18 @@ def _threads_url(client, channel) -> str | None:
     )
 
 
+def _tiktok_url(client, channel):
+    """TikTok's avatar comes from the same /v2/user/info/ call preflight uses, under
+    user.info.basic — no extra scope, and confirmed live 2026-08-23.
+
+    The access token this reads is kept current by tiktok_tokens.refresh_due_tokens(),
+    which runs earlier in the cycle. Without that, this job would find an expired token
+    almost every time: it runs about weekly and a TikTok token lives 24 hours.
+    """
+    info = client.get_user_info(channel["access_token"], fields=("avatar_large_url",))
+    return info.get("avatar_large_url")
+
+
 _URL_FETCHERS = {
     "instagram": _instagram_url,
     "facebook": _facebook_url,
@@ -57,10 +69,7 @@ _URL_FETCHERS = {
     # getChat -> getFile -> download; it is out of scope deliberately, not by oversight.
     "discord": None,
     "telegram": None,
-    # /v2/user/info/ CAN return avatar_url, so this is genuinely reachable — left unwired
-    # deliberately to keep the first version's scope to publishing, in the same way
-    # Telegram's getChat -> getFile path is.
-    "tiktok": None,
+    "tiktok": _tiktok_url,
 }
 
 assert set(_URL_FETCHERS) == set(SUPPORTED_PLATFORMS), (

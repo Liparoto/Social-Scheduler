@@ -205,6 +205,13 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
         dry_run=dry_run, sleep_fn=sleep_fn,
     )
 
+    # Keep TikTok access tokens alive BEFORE the read-only jobs below use them. They run
+    # on long throttles (avatars ~weekly, account stats daily) while a TikTok token lives
+    # 24 hours, so without this they would find an expired token essentially every time.
+    from .tiktok_tokens import refresh_due_tokens
+
+    refresh_due_tokens(conn, config, client, now, logger=logger, client_for=client_for)
+
     # Refresh metrics for already-published posts (throttled per publication).
     from .metrics import run_metrics
 

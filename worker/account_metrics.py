@@ -70,6 +70,9 @@ WRITABLE_COLUMNS = (
     "followers_count", "follows_count", "media_count", "reach", "impressions", "views",
     "profile_views", "accounts_engaged", "total_interactions", "likes", "comments",
     "saves", "shares", "replies", "website_clicks", "follows_gained",
+    # TikTok's lifetime like total. Deliberately NOT folded into `likes`, which means
+    # "likes that day" everywhere else — see migration 0026.
+    "lifetime_likes",
 )
 
 
@@ -278,6 +281,50 @@ def sync_threads_account(conn, config, client, channel, now, budget, logger=None
     return {"days": 1}
 
 
+# The four numbers TikTok exposes about an account, and the only four. Probed live
+# 2026-08-23: user.info.basic gets open_id/display_name/avatar; everything below needs
+# user.info.stats, and anything else (reach, views, profile views, engagement,
+# demographics) does not exist in this API at all — it lives only in TikTok's in-app
+# analytics. So this platform's Insights page is genuinely thinner, not unfinished.
+TIKTOK_STATS_FIELDS = ("follower_count", "following_count", "likes_count", "video_count")
+
+# Their names -> our columns. likes_count is absent on purpose: it is a LIFETIME total and
+# is mapped separately below, because `likes` here means "likes that day".
+_TIKTOK_COLUMNS = {
+    "follower_count": "followers_count",
+    "following_count": "follows_count",
+    "video_count": "media_count",
+}
+
+
+def sync_tiktok_account(conn, config, client, channel, now, budget, logger=None) -> dict:
+    """Sample TikTok's account counters into today's row.
+
+    TikTok has no account-level time series of any kind — only these point-in-time
+    totals — so the history is BUILT by sampling one row per day. Nothing can backfill it:
+    the series starts the day this install first runs, exactly like Threads.
+
+    Every metric TikTok does not report is left absent rather than written as 0. A zero in
+    `reach` would be a claim that the account reached nobody, which is a different thing
+    from TikTok having no such concept.
+    """
+    if budget.exhausted(client):
+        return {"days": 0}
+    budget.spend()
+    stats = client.get_user_info(channel["access_token"], fields=TIKTOK_STATS_FIELDS)
+
+    values = {
+        column: stats[name]
+        for name, column in _TIKTOK_COLUMNS.items()
+        if stats.get(name) is not None
+    }
+    if stats.get("likes_count") is not None:
+        values["lifetime_likes"] = stats["likes_count"]
+
+    upsert_day(conn, channel["id"], day_of(now), values, stats, now.isoformat())
+    return {"days": 1}
+
+
 def sync_demographics(conn, config, client, channel, now, budget, logger=None) -> dict:
     """Audience breakdowns. One call per (audience, breakdown) pair — twelve on Instagram,
     which is why this runs daily rather than every cycle.
@@ -351,10 +398,9 @@ _ACCOUNT_SYNCS = {
     "facebook": None,   # phase 5
     "discord": None,
     "telegram": None,
-    # Account-level series need the user.info.stats scopes this install does not request —
-    # it asks only for what publishing and per-post metrics require. Deliberately out of
-    # scope, not forgotten.
-    "tiktok": None,
+    # Four counters, sampled daily — TikTok publishes no series of its own. Needs the
+    # user.info.stats scope, which is requested at connect time.
+    "tiktok": sync_tiktok_account,
 }
 
 assert set(_ACCOUNT_SYNCS) == set(SUPPORTED_PLATFORMS), (

@@ -102,3 +102,46 @@ def refresh_channel_token(conn, config, client, channel, now, logger=None):
         # The channel id, never the token.
         logger.info("[tiktok] refreshed the access token for channel %s", channel["id"])
     return db.get_channel(conn, channel["id"])
+
+
+def refresh_due_tokens(conn, config, client, now, logger=None, client_for=None) -> int:
+    """Refresh every TikTok channel whose access token is close to expiring.
+
+    Runs once near the top of the worker cycle so that every read-only job afterwards —
+    the delivery watcher, account stats, avatars — sees a live token without each of them
+    having to know how TikTok's expiry works.
+
+    It exists because those jobs run on long throttles. The avatar job runs about weekly
+    and the account sync daily, while a TikTok access token lives 24 hours: without this,
+    both would find an expired token essentially every time they ran, and TikTok would be
+    the one platform whose read-only jobs never worked.
+
+    Never raises. A channel that cannot be refreshed is logged and skipped — publishing
+    refreshes again on its own path, and one dead channel must not stop the others.
+    """
+    rows = conn.execute(
+        "SELECT id FROM channels WHERE platform = 'tiktok' AND is_active = 1 "
+        "AND access_token IS NOT NULL AND access_token != ''"
+    ).fetchall()
+
+    refreshed = 0
+    for row in rows:
+        channel = db.get_channel(conn, row["id"])
+        before = channel["access_token"]
+        try:
+            pub_client = client_for("tiktok") if client_for else client
+            channel = refresh_channel_token(conn, config, pub_client, channel, now,
+                                            logger=logger)
+        except TikTokAuthRevoked as exc:
+            # Terminal for this channel: only a human reconnecting fixes it. Logged at
+            # warning so it is visible without stopping the cycle.
+            if logger:
+                logger.warning("[tiktok] channel %s needs reconnecting: %s", row["id"], exc)
+            continue
+        except Exception as exc:  # noqa: BLE001 — transient; publishing retries anyway
+            if logger:
+                logger.warning("[tiktok] channel %s token refresh failed: %s", row["id"], exc)
+            continue
+        if channel["access_token"] != before:
+            refreshed += 1
+    return refreshed

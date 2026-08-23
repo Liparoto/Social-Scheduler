@@ -74,9 +74,25 @@ test("the requested scopes cover delivery and metrics but never direct posting",
       scopes: TIKTOK_SCOPES,
     }),
   ).searchParams.get("scope");
-  assert.equal(scope, "user.info.basic,video.upload,video.list");
+  assert.equal(scope, "user.info.basic,video.upload,video.list,user.info.stats");
   // video.publish is the direct-post scope. It cannot be granted without TikTok's app
   // audit, and asking for a scope the app does not hold fails the whole authorisation
   // rather than degrading to the scopes it does hold.
   assert.doesNotMatch(scope ?? "", /video\.publish/);
+});
+
+test("the requested scopes now include account stats", () => {
+  // Account-level Insights needs user.info.stats. Adding it means an existing connection
+  // must be RE-granted — which is why upsertOAuthChannel exists.
+  assert.ok(TIKTOK_SCOPES.includes("user.info.stats"));
+  assert.ok(TIKTOK_SCOPES.includes("user.info.basic"));
+  assert.ok(TIKTOK_SCOPES.includes("video.upload"));
+  assert.ok(TIKTOK_SCOPES.includes("video.list"));
+});
+
+test("still never asks for the audit-gated direct-post scope", () => {
+  // Cast to widen: TIKTOK_SCOPES is `as const`, so .includes() rejects any string
+  // outside the union at compile time — which is useful everywhere except here,
+  // where the whole point is to assert an outsider is absent.
+  assert.equal((TIKTOK_SCOPES as readonly string[]).includes("video.publish"), false);
 });

@@ -20,7 +20,11 @@ export const dynamic = "force-dynamic";
 export default async function ChannelsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tiktok_connected?: string; tiktok_error?: string }>;
+  searchParams: Promise<{
+    tiktok_connected?: string;
+    tiktok_reconnected?: string;
+    tiktok_error?: string;
+  }>;
 }) {
   // The TikTok OAuth callback redirects here with an outcome. Without showing it, a failed
   // connection looks identical to a successful one that simply has not appeared yet.
@@ -58,10 +62,20 @@ export default async function ChannelsPage({
       <div className="px-8 py-6 space-y-6">
         {params.tiktok_connected ? (
           <div className="rounded-card border border-border bg-surface-muted p-4 text-sm text-ink-soft">
-            <span className="font-medium text-ink">TikTok connected.</span> Run{" "}
-            <code>python -m worker.preflight</code> to confirm it, then schedule a video.
-            Remember: TikTok delivers the video to your inbox — you write the caption and
-            publish in the app.
+            {params.tiktok_reconnected === "1" ? (
+              <>
+                <span className="font-medium text-ink">TikTok reconnected.</span> The
+                existing channel was refreshed with new credentials — its queue, history
+                and name are untouched.
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-ink">TikTok connected.</span> Run{" "}
+                <code>python -m worker.preflight</code> to confirm it, then schedule a
+                video. Remember: TikTok delivers the video to your inbox — you write the
+                caption and publish in the app.
+              </>
+            )}
           </div>
         ) : null}
         {params.tiktok_error ? (

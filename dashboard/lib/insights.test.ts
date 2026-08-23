@@ -12,7 +12,7 @@ const day = (d: string, values: Partial<DayRow> = {}): DayRow => ({
   followers_count: null, follows_count: null, media_count: null, reach: null,
   views: null, profile_views: null, accounts_engaged: null, total_interactions: null,
   likes: null, comments: null, saves: null, shares: null, replies: null,
-  website_clicks: null, follows_gained: null,
+  website_clicks: null, follows_gained: null, lifetime_likes: null,
   ...values,
 });
 
@@ -241,4 +241,34 @@ test("a missing value renders as an em dash, never as zero", () => {
   assert.equal(compact(null), "—");
   assert.equal(exact(null), "—");
   assert.equal(exact(0), "0");
+});
+
+// TikTok's counters are LEVELS, not flows. Summing daily snapshots of a lifetime total
+// would add the same cumulative number to itself once per day and produce a figure that
+// means nothing — this pins that the distinction actually works.
+
+test("a level metric reads the standing total, not the sum of the window", () => {
+  const rows = [
+    day("2026-08-01", { followers_count: 400, lifetime_likes: 9000 }),
+    day("2026-08-02", { followers_count: 410, lifetime_likes: 9100 }),
+    day("2026-08-03", { followers_count: 412, lifetime_likes: 9310 }),
+  ];
+  const [followers, likes] = buildKpis(
+    rows,
+    [
+      { key: "followers_count", label: "Followers", kind: "level" },
+      { key: "lifetime_likes", label: "Total likes", kind: "level" },
+    ],
+    3,
+  );
+  assert.equal(followers.value, 412, "a level takes the latest reading");
+  assert.equal(likes.value, 9310);
+  // The sum would be 1222 and 27410 — both meaningless.
+  assert.notEqual(followers.value, 1222);
+});
+
+test("lifetime likes never collide with the daily likes column", () => {
+  const row = day("2026-08-03", { lifetime_likes: 9310 });
+  assert.equal(row.likes, null, "daily likes stays empty for a platform that reports none");
+  assert.equal(row.lifetime_likes, 9310);
 });

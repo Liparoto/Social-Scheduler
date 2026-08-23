@@ -88,3 +88,36 @@ def test_registry_covers_every_supported_platform():
     from worker.clients import SUPPORTED_PLATFORMS
 
     assert set(_URL_FETCHERS) == set(SUPPORTED_PLATFORMS)
+
+
+def test_tiktok_avatar_comes_from_user_info():
+    """user.info.basic returns avatar_large_url — no extra scope needed (probed live
+    2026-08-23). The token it uses is kept current by tiktok_tokens.refresh_due_tokens."""
+    from worker.avatars import _URL_FETCHERS, _tiktok_url
+
+    assert _URL_FETCHERS["tiktok"] is _tiktok_url
+
+    class FakeTikTok:
+        def __init__(self):
+            self.asked = None
+
+        def get_user_info(self, token, fields=()):
+            self.asked = tuple(fields)
+            return {"avatar_large_url": "https://p16.tiktokcdn.com/avatar.jpeg"}
+
+    client = FakeTikTok()
+    url = _tiktok_url(client, {"access_token": "act.T"})
+    assert url == "https://p16.tiktokcdn.com/avatar.jpeg"
+    assert "avatar_large_url" in client.asked
+
+
+def test_tiktok_account_with_no_avatar_returns_none_not_an_error():
+    """An account with no photo is a normal state, recorded as 'nothing to fetch' rather
+    than a failure — same as the Meta silhouette case."""
+    from worker.avatars import _tiktok_url
+
+    class NoPhoto:
+        def get_user_info(self, token, fields=()):
+            return {}
+
+    assert _tiktok_url(NoPhoto(), {"access_token": "act.T"}) is None

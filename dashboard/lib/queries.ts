@@ -116,6 +116,44 @@ export function createChannel(input: CreateChannelInput): number {
   return Number(info.lastInsertRowid);
 }
 
+/**
+ * Create a channel for an OAuth-connected account, or refresh the one that already exists.
+ *
+ * Reconnecting is not an edge case: TikTok's refresh token expires after 365 days, so
+ * every install WILL come back through this path, and re-granting a scope (as adding
+ * account stats requires) sends you through it too. An unconditional insert would answer
+ * that with a second channel pointing at the same account, splitting the queue and the
+ * metrics history across two rows with no way to merge them.
+ *
+ * Matched on (platform, remote_account_id) — TikTok's open_id, which is stable for an
+ * account across authorizations. The account NAME is deliberately not overwritten: the
+ * owner may have renamed the channel, and a reconnect should not silently undo that.
+ */
+export function upsertOAuthChannel(input: CreateChannelInput): {
+  id: number;
+  created: boolean;
+} {
+  const existing = input.remote_account_id
+    ? (getDb()
+        .prepare("SELECT id FROM channels WHERE platform = ? AND remote_account_id = ?")
+        .get(input.platform, input.remote_account_id) as { id: number } | undefined)
+    : undefined;
+
+  if (existing) {
+    updateChannel(existing.id, {
+      access_token: input.access_token ?? null,
+      token_expires_at: input.token_expires_at ?? null,
+      refresh_token: input.refresh_token ?? null,
+      refresh_token_expires_at: input.refresh_token_expires_at ?? null,
+      // Reactivate: reconnecting a channel someone had switched off plainly means they
+      // want it back.
+      is_active: 1,
+    });
+    return { id: existing.id, created: false };
+  }
+  return { id: createChannel(input), created: true };
+}
+
 export function updateChannel(
   id: number,
   fields: Partial<{
@@ -127,6 +165,11 @@ export function updateChannel(
     remote_account_id: string | null;
     linked_page_id: string | null;
     access_token: string | null;
+    // OAuth-managed credentials. Needed so RECONNECTING a channel refreshes it in place
+    // instead of creating a duplicate — see upsertOAuthChannel below.
+    token_expires_at: string | null;
+    refresh_token: string | null;
+    refresh_token_expires_at: string | null;
     requires_approval: number;
     is_active: number;
     autofill_enabled: number;

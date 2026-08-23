@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createChannel } from "@/lib/queries";
+import { upsertOAuthChannel } from "@/lib/queries";
 import { config, tiktokCredentials } from "@/lib/config";
 
 export const runtime = "nodejs";
@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
 
     const now = Date.now();
     const iso = (seconds: number) => new Date(now + seconds * 1000).toISOString();
-    const id = createChannel({
+    const { id, created } = upsertOAuthChannel({
       platform: "tiktok",
       account_name: displayName,
       timezone: config.defaultTimezone,
@@ -124,7 +124,12 @@ export async function GET(req: NextRequest) {
       refresh_token: tokens.refresh_token,
       refresh_token_expires_at: iso(Number(tokens.refresh_expires_in ?? 31536000)),
     });
-    return back(req, { tiktok_connected: String(id) });
+    return back(req, {
+      tiktok_connected: String(id),
+      // Reconnecting is routine — the refresh token expires yearly — so the banner should
+      // say which happened rather than implying a new channel every time.
+      tiktok_reconnected: created ? "0" : "1",
+    });
   } catch {
     // Deliberately no error detail: a fetch failure's message can carry the request, and
     // the request body holds the client secret and the code.

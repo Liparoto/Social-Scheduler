@@ -28,19 +28,53 @@ export const dynamic = "force-dynamic";
 // Platforms with an account-insights endpoint. Discord and Telegram have none at all,
 // and Facebook Pages arrive with their own adapter later — stating that on the card is
 // better than an empty card that reads as a bug.
-const HAS_ACCOUNT_INSIGHTS = new Set(["instagram", "threads"]);
+const HAS_ACCOUNT_INSIGHTS = new Set(["instagram", "threads", "tiktok"]);
 
-const CARD_METRICS: Record<string, { key: MetricKey; label: string }[]> = {
+/**
+ * What each platform's card shows, in that platform's own terms.
+ *
+ * `kind` matters and is not decoration. A "flow" metric is summed across the window
+ * (reach this month); a "level" is a standing total read at the end of it (followers
+ * today). TikTok exposes ONLY levels — it publishes no per-day series of any kind, so
+ * summing its counters would add up repeated snapshots of the same cumulative number and
+ * produce a figure that means nothing.
+ *
+ * `sparkKey` is the one series worth drawing. Instagram and Threads have engagement to
+ * plot; TikTok has followers and literally nothing else.
+ */
+const CARD_METRICS: Record<
+  string,
+  { key: MetricKey; label: string; kind: "flow" | "level" }[]
+> = {
   instagram: [
-    { key: "reach", label: "Reach" },
-    { key: "views", label: "Views" },
-    { key: "accounts_engaged", label: "Engaged" },
+    { key: "reach", label: "Reach", kind: "flow" },
+    { key: "views", label: "Views", kind: "flow" },
+    { key: "accounts_engaged", label: "Engaged", kind: "flow" },
   ],
   threads: [
-    { key: "views", label: "Views" },
-    { key: "likes", label: "Likes" },
-    { key: "replies", label: "Replies" },
+    { key: "views", label: "Views", kind: "flow" },
+    { key: "likes", label: "Likes", kind: "flow" },
+    { key: "replies", label: "Replies", kind: "flow" },
   ],
+  // TikTok's entire account-level API: four counters, no series, no reach, no views, no
+  // engagement. Followers are shown separately as the headline, so the card carries the
+  // other three. "Total likes" is lifetime and only ever rises — labelled so it cannot be
+  // read as likes-this-month.
+  tiktok: [
+    { key: "media_count", label: "Videos", kind: "level" },
+    { key: "lifetime_likes", label: "Total likes", kind: "level" },
+    { key: "follows_count", label: "Following", kind: "level" },
+  ],
+};
+
+const SPARK_KEY: Record<string, MetricKey> = { tiktok: "followers_count" };
+
+// Instagram and Threads report followers GAINED per day. TikTok reports only a running
+// follower total, so its growth is the change in that level across the window — the same
+// number, arrived at differently. Using follows_gained for TikTok would render a
+// permanently blank "New" figure that reads as broken rather than absent.
+const FOLLOWER_DELTA: Record<string, { key: MetricKey; kind: "flow" | "level" }> = {
+  tiktok: { key: "followers_count", kind: "level" },
 };
 
 function sinceLabel(iso: string | null): string {
@@ -82,20 +116,21 @@ export default function InsightsPage() {
                 const days = getAccountDays(channel.id);
                 const counts = getChannelCounts(channel.id);
                 const metrics = CARD_METRICS[channel.platform] ?? CARD_METRICS.instagram;
-                const kpis = buildKpis(
-                  days,
-                  metrics.map((m) => ({ ...m, kind: "flow" as const })),
-                  30,
-                );
+                const kpis = buildKpis(days, metrics, 30);
                 const followers = latestMetric(days, "followers_count");
+                const deltaSpec = FOLLOWER_DELTA[channel.platform] ?? {
+                  key: "follows_gained" as MetricKey,
+                  kind: "flow" as const,
+                };
                 const followerDelta = buildKpis(
                   days,
-                  [{ key: "follows_gained", label: "New", kind: "flow" }],
+                  [{ ...deltaSpec, label: "New" }],
                   30,
                 )[0];
+                const sparkKey = SPARK_KEY[channel.platform];
                 const spark = densify(windowRows(days, 30), 30).map((d) => ({
                   day: d.day,
-                  value: d.reach ?? d.views,
+                  value: sparkKey ? d[sparkKey] : (d.reach ?? d.views),
                 }));
 
                 return (

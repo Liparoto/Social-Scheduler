@@ -53,8 +53,7 @@ export function getInsightsChannel(id: number): InsightsChannel | null {
 const DAY_FIELDS = `
   day, followers_count, follows_count, media_count, reach, views, profile_views,
   accounts_engaged, total_interactions, likes, comments, saves, shares, replies,
-  website_clicks, follows_gained
-`;
+  website_clicks, follows_gained, lifetime_likes`;
 
 /** Daily account series, oldest first. `days` bounds how far back to read. */
 export function getAccountDays(channelId: number, days = 400): DayRow[] {
