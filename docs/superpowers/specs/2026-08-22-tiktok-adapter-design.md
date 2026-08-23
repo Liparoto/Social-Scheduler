@@ -156,7 +156,10 @@ the TikTok app (Decision 9).
 
 ### Decision 7 — A watcher learns whether it went live; metrics follow for free
 
-After delivery, a slow-cadence loop re-polls `status/fetch` for that `publish_id`. TikTok returns
+After delivery, a loop re-polls `status/fetch` for that `publish_id` — every **15 minutes
+for the first 6 hours** (most posts get published soon after the notification), then
+**hourly**. `delivery_checked_at` gates the interval, so a restart never re-polls a row it
+just checked. TikTok returns
 `publicaly_available_post_id` **only once the post is public and through moderation** — so the
 id's arrival *is* the proof it went live. On arrival: `delivery_state='published'` and
 `remote_post_id` is set. The watcher gives up after 7 days → `gave_up`.
