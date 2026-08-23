@@ -1,7 +1,7 @@
 import { getBppPool } from "@/lib/insights-queries";
 import { getChannels, listChannelGroups, getGroupMembers, getBandCounts } from "@/lib/queries";
 import { config } from "@/lib/config";
-import { accountIdLabel, usesAccountId } from "@/lib/platforms";
+import { accountIdLabel, supportsAvatar, usesAccountId } from "@/lib/platforms";
 import { PageHeader, ChannelChip, ChannelAvatar, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
@@ -109,7 +109,12 @@ export default async function ChannelsPage({
                       {c.business_label ? (
                         <p className="mt-1.5 text-xs text-muted">{c.business_label}</p>
                       ) : null}
-                      {usesAccountId(c.platform) ? (
+                      {/* usesAccountId was standing in for "has a profile photo", which
+                          was true until TikTok: it has an account id AND no avatar this
+                          worker reads. Offering the button there sets a flag the avatar
+                          job excludes in SQL, so it is never acted on and never cleared —
+                          it would read "Requested" forever. */}
+                      {usesAccountId(c.platform) && supportsAvatar(c.platform) ? (
                         <ChannelAvatarRefresh
                           channelId={c.id}
                           avatarError={c.avatar_error}

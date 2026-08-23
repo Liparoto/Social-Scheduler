@@ -41,6 +41,7 @@ export const PLATFORMS = [
     supportsStory: true,
     maxCarousel: 10,
     captionChars: {},
+    supportsAvatar: true,
     supportsMetrics: true,
   },
   {
@@ -56,6 +57,7 @@ export const PLATFORMS = [
     supportsStory: false,
     maxCarousel: 10,
     captionChars: {},
+    supportsAvatar: true,
     supportsMetrics: true,
   },
   {
@@ -71,6 +73,7 @@ export const PLATFORMS = [
     supportsStory: false,
     maxCarousel: 20,
     captionChars: { text: 500, single: 500, carousel: 500 },
+    supportsAvatar: true,
     supportsMetrics: true,
   },
   {
@@ -88,6 +91,7 @@ export const PLATFORMS = [
     maxCarousel: 10,
     captionChars: { text: 2000, single: 2000, carousel: 2000 },
     // A webhook has no insights/analytics API at all — there is nothing to ever fetch.
+    supportsAvatar: false,
     supportsMetrics: false,
   },
   {
@@ -104,6 +108,7 @@ export const PLATFORMS = [
     maxCarousel: 10,
     captionChars: { text: 4096, single: 1024, carousel: 1024 },
     // The Bot API exposes no metrics/insights endpoint at all.
+    supportsAvatar: false,
     supportsMetrics: false,
   },
   {
@@ -126,6 +131,7 @@ export const PLATFORMS = [
     // writes the caption in the TikTok app. Nothing to enforce, rather than a limit we
     // happen not to know.
     captionChars: {},
+    supportsAvatar: false,
     supportsMetrics: true,
   },
 ] as const;
@@ -179,6 +185,19 @@ export function supportsVideo(value: string): boolean {
 // supportsVideo above, deliberately. Nearly every platform takes images, so the risky
 // mistake here is hiding image posting from one that supports it; offering an image post
 // to one that refuses it merely earns a clear error from the worker.
+// Mirrors worker/avatars.py's _URL_FETCHERS: a platform whose entry there is None has no
+// account photo this worker can read. It matters beyond decoration — channels_needing_
+// avatars() excludes those platforms in SQL, and the exclusion sits OUTSIDE the
+// "avatar_refresh_requested = 1" branch, so a refresh requested for one of them is never
+// picked up AND never cleared. The button would stick on "Requested" forever, so it must
+// not be offered at all.
+//
+// Default TRUE for an unrecognised platform, matching supportsMetrics: worst case an
+// always-empty button, rather than hiding a capability a platform actually has.
+export function supportsAvatar(value: string): boolean {
+  return BY_VALUE.get(value)?.supportsAvatar ?? true;
+}
+
 export function supportsImages(value: string): boolean {
   return BY_VALUE.get(value)?.supportsImages ?? true;
 }

@@ -7,6 +7,7 @@ import {
   isPlatform,
   platformBadge,
   platformLabel,
+  supportsAvatar,
   supportsImages,
   supportsMetrics,
   supportsText,
@@ -90,4 +91,24 @@ test("an image post to every other platform is still allowed", () => {
       `${p.value} started refusing image posts`,
     );
   }
+});
+
+// Came out of a live connect: the TikTok card offered "Refresh photo", and the worker's
+// avatar query excludes platforms with no fetcher — including rows that explicitly asked
+// for a refresh. The flag would be set and never cleared.
+
+test("platforms with no readable avatar do not claim to have one", () => {
+  for (const p of ["discord", "telegram", "tiktok"]) {
+    assert.equal(supportsAvatar(p), false, `${p} should report no avatar support`);
+  }
+});
+
+test("the Meta platforms still have avatars", () => {
+  for (const p of ["instagram", "facebook", "threads"]) {
+    assert.equal(supportsAvatar(p), true);
+  }
+});
+
+test("an unknown platform is assumed to have an avatar", () => {
+  assert.equal(supportsAvatar("myspace"), true);
 });
