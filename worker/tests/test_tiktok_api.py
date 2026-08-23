@@ -126,3 +126,113 @@ def test_a_network_failure_never_leaks_the_request_via_the_exception_chain():
     # `from None`, not `from exc`: the original exception's own str() must not survive
     # into a traceback via __cause__, where it could carry the request back out.
     assert exc.value.__cause__ is None
+
+
+# ---- Inbox upload ---------------------------------------------------------------------
+from worker.tiktok_api import MAX_CHUNK_BYTES, MIN_CHUNK_BYTES, plan_chunks  # noqa: E402
+
+MB = 1024 * 1024
+
+
+def test_small_file_is_one_chunk_even_below_the_5mb_minimum():
+    # A whole file under 5 MB is a legal single chunk — the minimum governs the chunks of
+    # a SPLIT upload, not a file that fits in one.
+    assert plan_chunks(2 * MB) == (2 * MB, 1)
+
+
+def test_file_at_the_single_chunk_ceiling_is_still_one_chunk():
+    size, count = plan_chunks(MAX_CHUNK_BYTES)
+    assert count == 1 and size == MAX_CHUNK_BYTES
+
+
+def test_large_file_splits_into_legal_chunks():
+    total = 200 * MB
+    size, count = plan_chunks(total)
+    assert MIN_CHUNK_BYTES <= size <= MAX_CHUNK_BYTES
+    assert count >= 2
+    last = total - size * (count - 1)
+    assert last >= MIN_CHUNK_BYTES, f"final chunk of {last} bytes is below TikTok's minimum"
+    assert last <= 128 * MB, "final chunk exceeds TikTok's 128 MB ceiling"
+
+
+@pytest.mark.parametrize("total", [65 * MB, 70 * MB, 130 * MB, 200 * MB, 999 * MB])
+def test_the_planned_count_matches_the_chunks_actually_sent(total, tmp_path):
+    """TikTok is told total_chunk_count up front and rejects an upload that sends a
+    different number, so the plan and the loop must agree for every size — including the
+    awkward ones where the division leaves a remainder."""
+    size, count = plan_chunks(total)
+    sent, remaining = 0, total
+    chunks = 0
+    while remaining > 0:
+        this = size if remaining - size >= size else remaining
+        sent += this
+        remaining -= this
+        chunks += 1
+    assert chunks == count, f"planned {count} chunks, loop would send {chunks}"
+    assert sent == total
+
+
+def test_init_inbox_video_sends_the_chunk_plan_and_no_caption():
+    session = FakeSession(FakeResponse({
+        "data": {"publish_id": "pub-1", "upload_url": "https://upload.example/1"},
+        "error": {"code": "ok"},
+    }))
+    client = TikTokClient(session=session)
+    out = client.init_inbox_video("act.TOKEN", video_size=10 * MB, chunk_size=10 * MB,
+                                  total_chunk_count=1)
+    assert out["publish_id"] == "pub-1"
+    _, url, kwargs = session.calls[0]
+    assert url.endswith("/v2/post/publish/inbox/video/init/")
+    source = kwargs["json"]["source_info"]
+    assert source["source"] == "FILE_UPLOAD"
+    assert source["video_size"] == 10 * MB
+    # There is no post_info. The inbox endpoint accepts no caption at all — the creator
+    # writes it in the TikTok app. Sending one is not possible, not merely skipped.
+    assert "post_info" not in kwargs["json"]
+
+
+def test_upload_video_file_sends_every_chunk_with_an_inclusive_content_range(tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x" * (12 * MB))
+    session = FakeSession(FakeResponse({}, status=201))
+    client = TikTokClient(session=session)
+    client.upload_video_file("https://upload.example/1", video, chunk_size=6 * MB)
+    ranges = [kw["headers"]["Content-Range"] for _, _, kw in session.calls]
+    # `end` is INCLUSIVE per RFC 7233 — an off-by-one here is rejected by TikTok.
+    assert ranges == [
+        f"bytes 0-{6 * MB - 1}/{12 * MB}",
+        f"bytes {6 * MB}-{12 * MB - 1}/{12 * MB}",
+    ]
+
+
+def test_a_failed_chunk_never_names_the_signed_upload_url():
+    session = FakeSession(FakeResponse(None, status=403, text="forbidden"))
+    client = TikTokClient(session=session)
+    with pytest.raises(TikTokAPIError) as exc:
+        client.upload_chunk("https://upload.example/SIGNED-SECRET", b"x", start=0, end=0, total=1)
+    # The upload URL is itself a credential — a signed URL anyone can PUT to.
+    assert "SIGNED-SECRET" not in str(exc.value)
+
+
+def test_fetch_publish_status_returns_status_and_post_id():
+    session = FakeSession(FakeResponse({
+        "data": {"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": ["7123"]},
+        "error": {"code": "ok"},
+    }))
+    client = TikTokClient(session=session)
+    out = client.fetch_publish_status("act.TOKEN", "pub-1")
+    assert out["status"] == "PUBLISH_COMPLETE"
+    # TikTok's own misspelling. Do not "fix" it.
+    assert out["publicaly_available_post_id"] == ["7123"]
+
+
+def test_query_videos_filters_by_id():
+    session = FakeSession(FakeResponse({
+        "data": {"videos": [{"id": "7123", "like_count": 5, "view_count": 100}]},
+        "error": {"code": "ok"},
+    }))
+    client = TikTokClient(session=session)
+    videos = client.query_videos("act.TOKEN", ["7123"], ["id", "like_count", "view_count"])
+    assert videos[0]["view_count"] == 100
+    _, _, kwargs = session.calls[0]
+    assert kwargs["json"]["filters"]["video_ids"] == ["7123"]
