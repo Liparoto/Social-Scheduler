@@ -210,6 +210,15 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
 
     run_metrics(conn, config, client, now, logger=logger, client_for=client_for)
 
+    # Learn whether delivered TikTok videos were ever actually published, and pick up the
+    # public post id that admits them to the metrics loop above. Read-only against TikTok,
+    # so like avatars it runs in dry-run mode too. Placed AFTER run_metrics so a post id
+    # recorded here is acted on by the next cycle rather than the same one — metrics are
+    # never so urgent that they justify reasoning about ordering within a cycle.
+    from .tiktok_watcher import run_tiktok_watcher
+
+    run_tiktok_watcher(conn, config, client, now, logger=logger, client_for=client_for)
+
     # Refresh channel avatars (throttled per channel, ~weekly). Read-only against the
     # platform, so it runs in dry-run mode too — it publishes nothing.
     from .avatars import run_avatars

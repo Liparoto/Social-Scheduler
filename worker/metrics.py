@@ -73,6 +73,13 @@ COLUMN_MAP = {
     "views": "impressions",
     "replies": "comments",
     "reposts": "shares",
+    # TikTok video query. Its names are all *_count and collide with nothing above.
+    # view_count -> impressions matches the choice already made for Threads' "views":
+    # a view is not reach, and there is no reach column TikTok could honestly fill.
+    "view_count": "impressions",
+    "like_count": "likes",
+    "comment_count": "comments",
+    "share_count": "shares",
 }
 
 
@@ -291,6 +298,38 @@ def _fetch_threads(client, remote_post_id: str, token: str, config, logger, pub_
     return client.get_threads_insights(remote_post_id, token, metrics)
 
 
+# The fields TikTok actually returns for a video (verified live 2026-08-23 against
+# publication 68). `title` and `share_url` come back too and are deliberately not
+# requested: this function's job is metrics, and storing the caption the creator typed in
+# the app is a separate feature with its own column.
+TIKTOK_VIDEO_FIELDS = ("id", "view_count", "like_count", "comment_count", "share_count")
+
+
+def _fetch_tiktok(client, remote_post_id: str, token: str, config, logger, pub_id,
+                  surface: str = "feed") -> dict:
+    # logger/pub_id accepted and unused, and surface ignored — TikTok has no Stories
+    # surface here. The signature must match what run_metrics calls fetchers with, or the
+    # dispatch raises TypeError at the first real fetch.
+    """One Display API query by video id.
+
+    Returns ONLY the four metrics TikTok reports. Reach and saves are absent rather than
+    zero: TikTok has neither concept, and a zero would read as a measured value — the
+    same mistake the Threads metrics line made. The dashboard's per-platform vocabulary
+    is the other half of this rule.
+    """
+    videos = client.query_videos(token, [remote_post_id], TIKTOK_VIDEO_FIELDS)
+    if not videos:
+        # Never record an all-null snapshot. An empty result means the video is gone,
+        # private again, or still moderating — all of which are "ask later", not "zero".
+        raise RuntimeError(f"tiktok returned no video for id {remote_post_id}")
+    video = videos[0]
+    return {
+        key: video[key]
+        for key in ("view_count", "like_count", "comment_count", "share_count")
+        if key in video
+    }
+
+
 _FETCHERS = {
     "instagram": _fetch_instagram,
     "facebook": _fetch_facebook,
@@ -300,12 +339,10 @@ _FETCHERS = {
     # would mean someone forgot to register it.
     "discord": None,
     "telegram": None,
-    # TikTok DOES have a metrics API (video.query, scope video.list), but a video is only
-    # queryable once it has a public post id — which this worker only learns after the
-    # creator publishes it from their inbox. Wired up in its own step, once that path is
-    # confirmed to work at all; until then this None keeps the due-query from selecting
-    # TikTok rows every cycle only to skip them.
-    "tiktok": None,
+    # Confirmed live 2026-08-23: once the watcher records a public post id,
+    # /v2/video/query/ returns that video's counts. Rows without one are invisible to the
+    # due-query anyway (it requires remote_post_id), so no extra gating is needed here.
+    "tiktok": _fetch_tiktok,
 }
 
 assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (

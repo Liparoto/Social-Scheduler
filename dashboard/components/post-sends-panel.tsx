@@ -81,6 +81,15 @@ function metricLine(send: PostPublicationRow): MetricLine {
       // when it actually came back.
       always(send.reach, "reach");
       break;
+    case "tiktok":
+      // TikTok's own set: views, likes, comments, shares. It has NO reach and NO saves —
+      // omitted entirely rather than shown as an empty slot, the same call already made
+      // for Threads. view_count lands in the impressions column (see metrics.COLUMN_MAP).
+      always(send.impressions, "views");
+      always(send.likes, "likes");
+      nonZero(send.comments, "comments");
+      nonZero(send.shares, "shares");
+      break;
     default:
       return { kind: "unknown" };
   }

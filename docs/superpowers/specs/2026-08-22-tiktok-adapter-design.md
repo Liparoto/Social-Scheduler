@@ -251,12 +251,32 @@ needs no audit, so a second clone gains nothing from the first's app.
 
 ## Risks — probe before building
 
-- **R1 (load-bearing).** Does an **inbox** `publish_id` ever reach `PUBLISH_COMPLETE` with a
-  `publicaly_available_post_id` after the creator publishes in-app? The status docs list both
-  states for uploads, but this is inference, not a documented guarantee. **Probe it with one real
-  upload before building the watcher (Decision 7).** If it does not hold, the fallback is matching
-  the video via `/v2/video/list/` on `create_time` proximity — fuzzy, and worth its own decision
-  rather than an assumption; failing that, TikTok ships with no metrics, like Discord/Telegram.
+- **R1 — ANSWERED 2026-08-23, on the owner's own account. It holds, and it taught us the
+  design was slightly wrong.**
+
+  Publication 68 was delivered (`v_inbox_file~v2.7677323304827652126`), published from the
+  TikTok app, and then probed:
+
+  | | before publishing | after publishing |
+  |---|---|---|
+  | `status` | `SEND_TO_USER_INBOX` | `PUBLISH_COMPLETE` |
+  | `publicaly_available_post_id` | absent | `7677325675732176159` |
+
+  `/v2/video/query/` then returned that video with `view_count`, `like_count`,
+  `comment_count`, `share_count`, plus `title`, `share_url`, `duration` and `create_time`.
+
+  **Two things this settled beyond R1 itself.** A sandbox app's inbox uploads are NOT pinned
+  to private — TikTok only returns the post id for a video that is public AND through
+  moderation, so its presence proves the video went out publicly. And the token refresh
+  path works against the live API, not just its unit tests.
+
+  **The correction to Decision 7.** That decision promoted a send to `published` when the
+  post id arrived. That conflates two different facts: `PUBLISH_COMPLETE` means the creator
+  published it, and is immediate and visibility-independent; the post id is a METRICS key,
+  gated on public visibility plus moderation, and may never come for a video kept private.
+  The watcher therefore promotes on `PUBLISH_COMPLETE` and records the post id separately —
+  so a creator who publishes to Friends Only still sees "Live on TikTok" rather than being
+  stuck reading "in your inbox" forever with no way to ever leave that state.
 - **R2.** Video duration cannot be validated before upload: the endpoint exposing
   `max_video_post_duration_sec` needs `video.publish`. An over-long video therefore fails at
   TikTok's processing step and surfaces through the status poll. Acceptable and honest, but it

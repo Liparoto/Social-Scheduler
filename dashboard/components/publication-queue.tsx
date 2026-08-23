@@ -547,6 +547,16 @@ export function PublicationQueue({
                           <span title="Saves">⤓ {p.m_saves ?? "—"}</span>
                           <span title="Likes">♥ {p.m_likes ?? "—"}</span>
                         </p>
+                      ) : p.channel_platform === "tiktok" ? (
+                        // TikTok has no reach and no saves — omitted rather than shown
+                        // empty, same as Threads above. view_count lands in the
+                        // impressions column (worker/metrics.py COLUMN_MAP).
+                        <p className="data mt-1 flex gap-2.5 text-[11px] text-ink-soft">
+                          <span title="Views">👁 {p.m_impressions ?? "—"}</span>
+                          <span title="Likes">♥ {p.m_likes ?? "—"}</span>
+                          <span title="Comments">💬 {p.m_comments ?? "—"}</span>
+                          <span title="Shares">↪ {p.m_shares ?? "—"}</span>
+                        </p>
                       ) : (
                         // An unrecognised platform should look wrong, not quietly inherit
                         // Instagram's metric set — matches lib/platforms.ts's fallback style.

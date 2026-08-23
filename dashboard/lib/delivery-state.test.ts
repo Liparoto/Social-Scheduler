@@ -76,3 +76,17 @@ test("a published or ordinary send IS measurable", () => {
   assert.equal(isAwaitingPublication(null), false);
   assert.equal(isAwaitingPublication(undefined), false);
 });
+
+// TikTok's metric vocabulary. The Threads bug this project already fixed was one
+// platform's words standing in for another's — TikTok has no reach and no saves.
+
+test("tiktok is a platform the metric renderers know about", async () => {
+  const src = await import("node:fs").then((fs) =>
+    fs.readFileSync("components/post-sends-panel.tsx", "utf8"),
+  );
+  assert.match(src, /case "tiktok":/, "post-sends-panel has no tiktok branch");
+  const tiktokBranch = src.slice(src.indexOf('case "tiktok":'), src.indexOf("default:"));
+  assert.doesNotMatch(tiktokBranch, /"reach"/, "tiktok must not claim reach");
+  assert.doesNotMatch(tiktokBranch, /"saves"/, "tiktok must not claim saves");
+  assert.match(tiktokBranch, /"views"/);
+});
