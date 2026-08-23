@@ -213,9 +213,10 @@ boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: i
   `account_metrics.py` did not follow it. Two related controls were also hidden where the
   worker's query could never honour them (`Refresh metrics` on an unpublished send, `Refresh
   photo` on a platform with no avatar).
-- **`docs/getting-started.md` and an expanded `docs/meta-setup.md`** (commit `18697a4`).
-  **NOT authored by this session** — recorded here because it is real work that exists and was
-  absent from this file. Confirm who wrote it before treating it as reviewed.
+- **`docs/getting-started.md` and an expanded `docs/meta-setup.md`** (commit `18697a4`) — a
+  first-install walkthrough and the Meta token dance in one command. Written by a different
+  session; **owner confirmed 2026-08-23 that they are good.** Recorded here only because the
+  work existed and this file did not know about it.
 
 ---
 
