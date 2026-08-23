@@ -4,7 +4,12 @@ import { Fragment, startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PublicationRow } from "@/lib/queries";
 import type { Period, PublicationStatus, Platform, Tag } from "@/lib/types";
-import { PLATFORMS, deliveryLabel, supportsMetrics } from "@/lib/platforms";
+import {
+  PLATFORMS,
+  deliveryLabel,
+  isAwaitingPublication,
+  supportsMetrics,
+} from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
@@ -452,7 +457,17 @@ export function PublicationQueue({
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-1.5">
                       <StatusBadge
-                        status={blocked.has(p.id) ? "blocked" : p.status}
+                        status={
+                          blocked.has(p.id)
+                            ? "blocked"
+                            : // A TikTok video waiting in the creator's inbox, or one we
+                              // never saw go live, is not posted. The line underneath says
+                              // so in words, but a green "Posted" pill is what gets read at
+                              // a glance, so the badge itself has to stop claiming it.
+                              p.status === "posted" && isAwaitingPublication(p.delivery_state)
+                              ? "delivered"
+                              : p.status
+                        }
                         dryRun={p.is_dry_run === 1}
                       />
                       {/* Answers "why is this old post going out again?" at the point the
@@ -544,7 +559,7 @@ export function PublicationQueue({
                       // Nothing is pending for a send still sitting in a TikTok inbox, or
                       // one we never saw go live: there is no published post to measure.
                       // "metrics pending…" there would promise numbers that cannot come.
-                      (p.delivery_state === null || p.delivery_state === "published") ? (
+                      !isAwaitingPublication(p.delivery_state) ? (
                       <p className="data mt-1 text-[10px] text-faint">metrics pending…</p>
                     ) : null}
                     {p.last_error ? (
@@ -597,6 +612,7 @@ export function PublicationQueue({
                       nextRetryAt={p.next_retry_at}
                       channelTimezone={p.channel_timezone}
                       platform={p.channel_platform}
+                      deliveryState={p.delivery_state}
                     />
                   </td>
                 </tr>

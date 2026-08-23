@@ -253,6 +253,20 @@ export function deliveryLabel(row: DeliveryLike): string | null {
   }
 }
 
+/**
+ * True when a send was handed over but never published, so there is nothing on the
+ * platform to link to, measure, or call "posted".
+ *
+ * One function rather than repeated `=== "inbox" || === "gave_up"` checks, because four
+ * different places depend on it and they must not drift: the queue badge and the post
+ * page's badge (neither may say "Posted"), the "Refresh metrics" button (which must not
+ * offer a fetch that requestMetricsRefresh will refuse for want of a remote_post_id), and
+ * the metrics wording.
+ */
+export function isAwaitingPublication(deliveryState: string | null | undefined): boolean {
+  return deliveryState === "inbox" || deliveryState === "gave_up";
+}
+
 // ---- Post-type / channel compatibility -------------------------------------------
 // The single place that decides "can this post_type go to this channel" client- and
 // server-side. 'text' (caption, no media) is gated on supportsText, 'reel' is gated on

@@ -7,7 +7,11 @@ import type { Channel } from "@/lib/types";
 import { ChannelAvatar, ChannelChip, StatusBadge } from "@/components/ui";
 import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
 import { sendTime, formatLateness } from "@/lib/send-time";
-import { deliveryLabel, incompatibleChannelsForPostType } from "@/lib/platforms";
+import {
+  deliveryLabel,
+  incompatibleChannelsForPostType,
+  isAwaitingPublication,
+} from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
@@ -272,7 +276,17 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <StatusBadge status={send.status} dryRun={send.is_dry_run === 1} />
+          {/* Same rule as the queue's badge: a video waiting in a TikTok inbox has not
+              been published, and a green "Posted" pill is what gets read at a glance —
+              the line beside it would be arguing with the badge. */}
+          <StatusBadge
+            status={
+              send.status === "posted" && isAwaitingPublication(send.delivery_state)
+                ? "delivered"
+                : send.status
+            }
+            dryRun={send.is_dry_run === 1}
+          />
           {send.is_held === 1 ? (
             <span
               className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium"

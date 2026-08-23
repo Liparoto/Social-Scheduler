@@ -16,9 +16,50 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | TikTok: probe R1, then the watcher + metrics | P1 | `half-day` after the probe | Medium | Blocked on a real delivery from the owner's own TikTok app. See "TikTok adapter" below — the code is written and merged up to the handoff; only the two pieces that depend on an unverified assumption are held back. |
+| 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
-**Nothing else is open.** The one task on this table is a brainstorm, not work.
+---
+
+### TikTok adapter — shipped 2026-08-23 up to the handoff, deliberately not past it
+
+**What it does.** TikTok is a channel like any other: compose a video, tick TikTok alongside
+Instagram, and at the scheduled time the worker uploads it to the creator's TikTok inbox.
+You tap the notification, write the caption, publish. Auto-fill treats it normally.
+
+**Three things it does NOT do, and why — all TikTok's design, none of them a gap to fix:**
+- **The caption does not travel.** The inbox upload endpoint has no caption field at all.
+  The composer says so beside the caption box and offers a copy button.
+- **No photos.** TikTok accepts photos only via `PULL_FROM_URL` from a DNS-verified domain;
+  this install serves assets from an ephemeral trycloudflare URL it does not own. Buying a
+  domain is what unblocks this, not code.
+- **No direct posting.** That needs the `video.publish` scope, which needs TikTok's app
+  audit, which requires a public website with a privacy policy and terms and explicitly
+  excludes private-use tools. Building the compliance UI it would need was cut for exactly
+  this reason — it only pays off behind a gate this install cannot pass.
+
+**The audit is per APP, not per person.** A second install registers its own TikTok app and
+needs no audit for inbox delivery. Credentials are never shared between clones.
+
+**What is held back and why.** The delivery watcher (does a delivered video ever go live?)
+and TikTok post metrics both rest on one unverified assumption, recorded as **R1** in the
+spec: that an inbox `publish_id` eventually reports `PUBLISH_COMPLETE` with a
+`publicaly_available_post_id` once the creator publishes it in the app. TikTok's status
+docs make that likely; they do not guarantee it. One real delivery answers it. Building on
+it first would risk a week's work on a coin flip — so `delivery_state` already records
+`inbox`/`published`/`gave_up`, and only the code that *fills in* `published` is waiting.
+
+**Found by looking at a real browser, not by the tests:** the queue rendered a green
+**Posted** pill next to the honest "In your TikTok inbox" line — the exact claim the design
+forbids — and offered a **Refresh metrics** button for a video nobody had published — a control
+whose only possible outcome was an error, since `requestMetricsRefresh` already refuses a
+send with no `remote_post_id`. The badge appeared on BOTH the queue and the post page, and
+fixing only the first would have left them contradicting each other. All fixed;
+`isAwaitingPublication()` is now the one place that decides.
+
+**Docs:** `docs/tiktok-setup.md` (setup, and what will trip you up),
+`docs/superpowers/specs/2026-08-22-tiktok-adapter-design.md` (why it is shaped this way),
+`docs/superpowers/plans/2026-08-23-tiktok-adapter.md` (the build, including the R1 checkpoint).
 
 **Shipped 2026-08-21, straight out of this audit:** the merge caption-length guard (spec §5's
 missing row), `/media`'s blindness to Reels covers, a restorable backup (`socialscheduler.db` in

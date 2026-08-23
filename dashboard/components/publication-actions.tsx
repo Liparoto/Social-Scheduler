@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { PublicationStatus } from "@/lib/types";
-import { supportsMetrics } from "@/lib/platforms";
+import { isAwaitingPublication, supportsMetrics } from "@/lib/platforms";
 import { splitInTz } from "@/lib/time";
 
 // Is the given date/time (interpreted in timeZone) already in the past?
@@ -21,6 +21,7 @@ export function PublicationActions({
   id,
   status,
   isDryRun = false,
+  deliveryState = null,
   workerOnline = true,
   isHeld = false,
   scheduledAt = null,
@@ -39,6 +40,12 @@ export function PublicationActions({
   nextRetryAt?: string | null;
   channelTimezone?: string;
   platform?: string;
+  /**
+   * For a platform that delivers rather than publishes (TikTok), what happened after the
+   * handoff. 'inbox' and 'gave_up' mean there is no published post to measure — see the
+   * metrics gate below.
+   */
+  deliveryState?: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -321,7 +328,18 @@ export function PublicationActions({
     );
   }
 
-  if (status === "posted" && !isDryRun && (!platform || supportsMetrics(platform))) {
+  // A delivered-but-unpublished send has no post id, so there is nothing to fetch.
+  // requestMetricsRefresh already refuses it server-side (it requires a real
+  // remote_post_id, precisely so a queued flag is never stuck) — which means the button
+  // was not dangerous, just useless: a control whose only possible outcome is an error.
+  const nothingToMeasure = isAwaitingPublication(deliveryState);
+
+  if (
+    status === "posted" &&
+    !isDryRun &&
+    !nothingToMeasure &&
+    (!platform || supportsMetrics(platform))
+  ) {
     return (
       <div className="flex flex-col items-end gap-1">
         <button

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deliveryLabel } from "./platforms";
+import { deliveryLabel, isAwaitingPublication } from "./platforms";
 
 // A TikTok send that is sitting in the creator's inbox is NOT posted, and the queue must
 // never say it is. This is the same class of bug as the Threads metrics one: a value
@@ -58,4 +58,21 @@ test("an unrecognised delivery state looks wrong rather than reading as publishe
   });
   assert.match(label ?? "", /unknown/i);
   assert.match(label ?? "", /sideways/);
+});
+
+// These two came out of looking at a real browser, not out of the unit tests: the row read
+// "Posted" in green with the honest line underneath it, and offered a Refresh metrics
+// button for a video nobody had published.
+
+test("a send waiting to be published is not treated as measurable", () => {
+  assert.equal(isAwaitingPublication("inbox"), true);
+  // Also true for gave_up: we never saw it go live, so there is no post id to fetch.
+  assert.equal(isAwaitingPublication("gave_up"), true);
+});
+
+test("a published or ordinary send IS measurable", () => {
+  assert.equal(isAwaitingPublication("published"), false);
+  // null = every platform that publishes on command. Nothing about them changes.
+  assert.equal(isAwaitingPublication(null), false);
+  assert.equal(isAwaitingPublication(undefined), false);
 });

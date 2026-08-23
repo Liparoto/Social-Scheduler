@@ -174,6 +174,11 @@ export function ChannelForm({
               TikTok connects through your browser — there is no token to paste. Its access
               token only lasts 24 hours, so the worker refreshes it for you.
             </p>
+            {/* A real <a>, not next/link, and the rule is disabled deliberately: this
+                target is an API route that answers with a 302 to tiktok.com. Link tries a
+                client-side navigation, which has no page to render and cannot follow a
+                redirect off-site — the whole point here is a full browser navigation. */}
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a
               href="/api/channels/tiktok/authorize"
               className="inline-block rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink"

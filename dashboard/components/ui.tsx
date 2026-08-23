@@ -13,7 +13,11 @@ import { platformBadge } from "@/lib/platforms";
  * healthy indefinitely. The third badge is what makes "not moving" visible without
  * crying wolf.
  */
-export type BadgeState = PublicationStatus | "blocked";
+// "delivered" is not a publications.status — it is what a send LOOKS like when the
+// platform takes the post but does not publish it (TikTok hands the video to the
+// creator's inbox). The row's status really is 'posted', because the worker's job really
+// did succeed; the badge must not repeat that as a claim about the platform.
+export type BadgeState = PublicationStatus | "blocked" | "delivered";
 
 const STATUS_META: Record<BadgeState, { label: string; varName: string }> = {
   scheduled: { label: "Scheduled", varName: "--color-status-scheduled" },
@@ -21,6 +25,9 @@ const STATUS_META: Record<BadgeState, { label: string; varName: string }> = {
   pending_approval: { label: "Needs approval", varName: "--color-status-draft" },
   publishing: { label: "Publishing", varName: "--color-status-publishing" },
   posted: { label: "Posted", varName: "--color-status-posted" },
+  // Deliberately NOT the green "posted" colour: a video waiting in someone's inbox has
+  // not been published, and green is the one signal people read without reading.
+  delivered: { label: "Delivered", varName: "--color-status-blocked" },
   failed: { label: "Failed", varName: "--color-status-failed" },
   canceled: { label: "Canceled", varName: "--color-status-draft" },
 };
