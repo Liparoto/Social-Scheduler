@@ -19,16 +19,19 @@ from .config import Config
 from .discord_api import DiscordClient
 from .graph_api import GraphClient
 from .telegram_api import TelegramClient
+from .tiktok_api import TikTokClient
 
 FACEBOOK_BASE = "https://graph.facebook.com"
 THREADS_BASE = "https://graph.threads.net"
 DISCORD_BASE = "https://discord.com/api/v10"
 TELEGRAM_BASE = "https://api.telegram.org"
+TIKTOK_BASE = "https://open.tiktokapis.com"
 
 # Every platform this worker has an adapter for. Adding one here without also adding it to
 # clients._BASE_URLS, publisher._PUBLISHERS, publisher._QUOTA_GATED, preflight._CHECKS and
 # metrics._FETCHERS fails test_platform_dispatch.py — which is the point.
-SUPPORTED_PLATFORMS = ("instagram", "facebook", "threads", "discord", "telegram")
+SUPPORTED_PLATFORMS = ("instagram", "facebook", "threads", "discord", "telegram",
+                       "tiktok")
 
 
 class UnknownPlatform(Exception):
@@ -44,6 +47,7 @@ _BASE_URLS: dict[str, Callable[[Config], str]] = {
     "threads": lambda _config: THREADS_BASE,
     "discord": lambda _config: DISCORD_BASE,
     "telegram": lambda _config: TELEGRAM_BASE,
+    "tiktok": lambda _config: TIKTOK_BASE,
 }
 
 assert set(_BASE_URLS) == set(SUPPORTED_PLATFORMS), (
@@ -64,6 +68,10 @@ _API_VERSIONS: dict[str, Callable[[Config], str]] = {
     # Telegram has no API versioning at all. Empty string documents that fact rather than
     # pretending a version exists.
     "telegram": lambda _config: "",
+    # TikTok versions by path segment (/v2/...), which the client builds into each path
+    # rather than into its base URL. Recorded here so the registry never has to
+    # special-case a platform, same as Discord above.
+    "tiktok": lambda _config: "v2",
 }
 
 assert set(_API_VERSIONS) == set(SUPPORTED_PLATFORMS), (
@@ -100,6 +108,12 @@ class PlatformCaps:
     # False when the credential alone identifies the destination, so there is no separate
     # account id to store or ask for (Discord's webhook URL is both address and secret).
     uses_account_id: bool = True
+    # True when the platform can publish still images at all. Every platform but TikTok
+    # can, which is why this defaults True — a new platform keeps today's behaviour unless
+    # it explicitly opts out. TikTok's photo endpoint accepts only PULL_FROM_URL from a
+    # DNS-verified domain, and this install serves assets from an ephemeral trycloudflare
+    # URL it does not own, so photos are unreachable rather than merely unbuilt.
+    supports_images: bool = True
     # True when this platform constrains aspect ratio, so it should be sent the
     # Instagram-conformed derivative (assets.publish_path) rather than the untouched
     # original. Defaults True so every platform keeps today's behaviour unless it
@@ -143,6 +157,19 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
         caption_chars={"text": 4096, "single": 1024, "carousel": 1024},
         uploads_media_bytes=True, uses_account_id=True, needs_conformed_media=False,
     ),
+    # TikTok: video only (see supports_images above). Uploads bytes itself via chunked
+    # FILE_UPLOAD, so like Discord/Telegram it needs neither a public URL nor cloudflared.
+    # caption_chars is EMPTY because the inbox endpoint has no caption field at all — the
+    # creator writes one in the TikTok app — so there is no limit to enforce rather than a
+    # limit we happen not to know. max_carousel=0 for the same reason: there is no
+    # multi-image format here to cap. needs_conformed_media=False both because TikTok has
+    # its own aspect rules and because its app review guidelines forbid altering the
+    # creator's content.
+    "tiktok": PlatformCaps(
+        supports_text=False, max_carousel=0, caption_chars={},
+        uploads_media_bytes=True, supports_video=True, supports_images=False,
+        uses_account_id=True, needs_conformed_media=False,
+    ),
 }
 
 assert set(PLATFORM_CAPS) == set(SUPPORTED_PLATFORMS), (
@@ -182,6 +209,7 @@ _CLIENT_FACTORIES: dict[str, Callable[[str, str], object]] = {
     "threads": lambda version, base: GraphClient(version, base_url=base),
     "discord": lambda _version, base: DiscordClient(base_url=base),
     "telegram": lambda _version, base: TelegramClient(base_url=base),
+    "tiktok": lambda _version, base: TikTokClient(base_url=base),
 }
 
 assert set(_CLIENT_FACTORIES) == set(SUPPORTED_PLATFORMS), (

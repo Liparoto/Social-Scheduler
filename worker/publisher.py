@@ -245,6 +245,11 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             raise _NonRetryable(
                 f"a reel needs a video asset, got media_kind='{assets[0]['media_kind']}'"
             )
+    # Video-only platforms. Caught here rather than left to the adapter for the same
+    # reason as the reel and carousel rules below: an unpublishable combination that gets
+    # scheduled first dies terminally later, long after the composer could have said so.
+    if post_type in ("single", "carousel") and not caps.supports_images:
+        raise _NonRetryable(f"{platform} cannot publish image posts — it is video only")
     if post_type == "carousel" and not (MIN_CAROUSEL <= len(assets) <= caps.max_carousel):
         raise _NonRetryable(
             f"carousel needs {MIN_CAROUSEL}-{caps.max_carousel} assets, has {len(assets)}"
@@ -717,6 +722,60 @@ def _publish_telegram(client, plan, token, config, sleep_fn) -> str:
     return str(message_id) if message_id is not None else "posted"
 
 
+def _tiktok_status(client, publish_id, token) -> str:
+    """Map TikTok's status vocabulary onto the poll loop's FINISHED/ERROR/other.
+
+    SEND_TO_USER_INBOX is this platform's FINISHED: the video is on the creator's phone,
+    which is as far as this worker can take it. FAILED raises with TikTok's own reason
+    because that string is the only explanation the owner will ever get for a video that
+    silently did not arrive.
+    """
+    data = client.fetch_publish_status(token, publish_id)
+    status = data.get("status")
+    if status == "SEND_TO_USER_INBOX":
+        return "FINISHED"
+    if status == "FAILED":
+        raise RuntimeError(
+            f"tiktok upload failed: {data.get('fail_reason', 'no reason given')}"
+        )
+    return status or "PROCESSING_UPLOAD"
+
+
+def _publish_tiktok(client, plan, token, config, sleep_fn) -> str:
+    """Deliver the video to the creator's TikTok inbox and return the publish_id.
+
+    This does NOT publish. TikTok's inbox endpoint takes the file and nothing else — no
+    caption, no privacy level — and the creator finishes the post inside the TikTok app.
+    The returned id is an upload-session id, not a post id, which is why
+    _DELIVERS_TO_INBOX routes it to remote_container_id and leaves remote_post_id NULL.
+
+    Direct posting, which WOULD carry the caption, needs the video.publish scope and the
+    app audit this install cannot obtain — see docs/superpowers/specs/2026-08-22.
+    """
+    from .tiktok_api import plan_chunks
+
+    post_type = plan["post_type"]
+    if post_type != "reel":
+        raise _NonRetryable(
+            f"tiktok adapter has no publish path for post_type '{post_type}' — video only"
+        )
+    path = plan["asset_paths"][0]
+    if path is None:
+        raise _NonRetryable("tiktok needs the video file on disk; none resolved")
+    size = Path(path).stat().st_size
+    chunk_size, count = plan_chunks(size)
+    session = client.init_inbox_video(token, size, chunk_size, count)
+    publish_id = session["publish_id"]
+    client.upload_video_file(session["upload_url"], path, chunk_size=chunk_size)
+    # Confirm TikTok actually accepted it rather than assuming the PUTs landed. Reuses the
+    # publisher's own poll loop against TikTok's status call, the same seam Threads uses.
+    _poll_until_finished(
+        client, publish_id, token, config, sleep_fn,
+        status_fn=lambda pid, tok: _tiktok_status(client, pid, tok),
+    )
+    return publish_id
+
+
 # Commenters take the three facts they need (account, message, published media id)
 # rather than a plan: a retry has no plan to build — the assets may since have been
 # deleted, and re-resolving them to post a text comment would be pure risk.
@@ -762,6 +821,7 @@ _PUBLISHERS = {
     "threads": _publish_threads,
     "discord": _publish_discord,
     "telegram": _publish_telegram,
+    "tiktok": _publish_tiktok,
 }
 
 # Whether each platform exposes a runtime publish quota to read before posting. An
@@ -778,12 +838,19 @@ _PUBLISHERS = {
 #                 gated like Instagram.
 #   * discord   — a webhook has no publish quota endpoint at all.
 #   * telegram  — the Bot API exposes no publish quota endpoint at all.
+#   * tiktok    — no runtime quota endpoint exists. TikTok documents roughly 15 posts per
+#                 day per creator, but the only endpoint reporting creator limits
+#                 (creator_info/query) requires the video.publish scope, which needs the
+#                 app audit this install cannot obtain. Its spam_risk_too_many_posts error
+#                 is handled as a retryable failure instead — the quota signal arriving as
+#                 an error rather than as a number.
 _QUOTA_GATED = {
     "instagram": True,
     "facebook": False,
     "threads": True,
     "discord": False,
     "telegram": False,
+    "tiktok": False,
 }
 
 # The quota-reading call differs per gated platform (Instagram and Threads expose the same
@@ -805,12 +872,33 @@ _QUOTA_READERS = {
 #   * discord   — a webhook posts messages, not comments. A follow-up message would be a
 #                 different feature with different semantics, not this one.
 #   * telegram  — same: a second message to the channel is not a comment on the first.
+#   * tiktok    — the creator completes the post themselves, so there is no moment at which
+#                 this worker holds a published video to comment on. Not a gap: there is
+#                 nothing here to comment on.
 _COMMENTERS = {
     "instagram": _comment_instagram,
     "facebook": _comment_facebook,
     "threads": _comment_threads,
     "discord": None,
     "telegram": None,
+    "tiktok": None,
+}
+
+# Whether a platform's publish call DELIVERS rather than PUBLISHES. Declared for every
+# platform, same reasoning as _QUOTA_GATED: False must mean "this platform really does
+# publish on command", never "we forgot to think about it".
+#
+# When True, the completion write stores the returned id as remote_container_id, leaves
+# remote_post_id NULL, and sets delivery_state='inbox'. Leaving remote_post_id NULL is
+# load-bearing rather than tidy: the metrics due-query requires it, so a video nobody has
+# published yet is invisible to metrics without metrics needing to know TikTok exists.
+_DELIVERS_TO_INBOX = {
+    "instagram": False,
+    "facebook": False,
+    "threads": False,
+    "discord": False,
+    "telegram": False,
+    "tiktok": True,
 }
 
 assert set(_PUBLISHERS) == set(SUPPORTED_PLATFORMS), (
@@ -821,6 +909,9 @@ assert set(_COMMENTERS) == set(SUPPORTED_PLATFORMS), (
 )
 assert set(_QUOTA_GATED) == set(SUPPORTED_PLATFORMS), (
     "publisher._QUOTA_GATED and clients.SUPPORTED_PLATFORMS disagree"
+)
+assert set(_DELIVERS_TO_INBOX) == set(SUPPORTED_PLATFORMS), (
+    "publisher._DELIVERS_TO_INBOX and clients.SUPPORTED_PLATFORMS disagree"
 )
 assert set(_QUOTA_READERS) == {p for p, gated in _QUOTA_GATED.items() if gated}, (
     "publisher._QUOTA_READERS must have exactly the platforms _QUOTA_GATED marks True"
@@ -1060,11 +1151,23 @@ def publish_one(
         log(f"publish failed: {exc}")
         return _mark_failure(conn, pub, config, now, f"publish: {exc}", terminal=False)
 
-    db.update_publication(
-        conn, pub["id"],
-        status="posted", remote_post_id=media_id, published_at=_iso(now),
-        last_error=None, next_retry_at=None, updated_at=_iso(now),
-    )
+    if _DELIVERS_TO_INBOX[plan["platform"]]:
+        # Delivered, not published. remote_post_id stays NULL ON PURPOSE: the metrics
+        # due-query requires it, so this row stays invisible to metrics until the watcher
+        # learns the real post id — or until it gives up. Writing the publish_id there
+        # instead would hand metrics an upload-session id to chase forever.
+        db.update_publication(
+            conn, pub["id"],
+            status="posted", remote_container_id=media_id, delivery_state="inbox",
+            published_at=_iso(now), last_error=None, next_retry_at=None,
+            updated_at=_iso(now),
+        )
+    else:
+        db.update_publication(
+            conn, pub["id"],
+            status="posted", remote_post_id=media_id, published_at=_iso(now),
+            last_error=None, next_retry_at=None, updated_at=_iso(now),
+        )
     # 5. First comment — AFTER the row says 'posted', and deliberately outside every
     #    failure path above. The media is live and cannot be unpublished, so a comment
     #    failure is recorded on its own columns and changes nothing else.
@@ -1076,5 +1179,9 @@ def publish_one(
     )
     if post["content_kind"] == "one_time":
         _maybe_retire_one_time(conn, post["id"], now)
-    log(f"published -> {media_id}")
+    log(
+        f"delivered to inbox -> {media_id}"
+        if _DELIVERS_TO_INBOX[plan["platform"]]
+        else f"published -> {media_id}"
+    )
     return PublishOutcome("posted", media_id, plan)

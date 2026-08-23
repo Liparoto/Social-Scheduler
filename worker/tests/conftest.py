@@ -370,6 +370,68 @@ class FakeTelegramClient:
         return (0, 0, 0)
 
 
+class FakeTikTokClient:
+    """Same method surface as TikTokClient; records calls, no network.
+
+    `status_sequence` drives fetch_publish_status so a test can make delivery take several
+    polls, the way a real upload does. The default is a single SEND_TO_USER_INBOX — this
+    platform's equivalent of Instagram's FINISHED.
+    """
+
+    def __init__(self, fail_on=None, status_sequence=None, user_info=None, videos=None,
+                 tokens=None):
+        self.calls = []
+        self.fail_on = set(fail_on or [])
+        self.status_sequence = list(status_sequence or [{"status": "SEND_TO_USER_INBOX"}])
+        self.user_info = user_info if user_info is not None else {
+            "open_id": "open-1", "display_name": "Test TikTok",
+        }
+        self.videos = videos if videos is not None else []
+        self.tokens = tokens if tokens is not None else {
+            "access_token": "act.REFRESHED", "expires_in": 86400,
+            "refresh_token": "rft.ROTATED", "refresh_expires_in": 31536000,
+        }
+        self._n = 0
+
+    def init_inbox_video(self, access_token, video_size, chunk_size, total_chunk_count):
+        self.calls.append(("tt_init", video_size, chunk_size, total_chunk_count))
+        if "tt_init" in self.fail_on:
+            raise RuntimeError("tiktok init boom")
+        self._n += 1
+        return {"publish_id": f"pub-{self._n}", "upload_url": "https://upload.test/x"}
+
+    def upload_video_file(self, upload_url, path, *, chunk_size):
+        self.calls.append(("tt_upload", str(path), chunk_size))
+        if "tt_upload" in self.fail_on:
+            raise RuntimeError("tiktok upload boom")
+
+    def fetch_publish_status(self, access_token, publish_id):
+        self.calls.append(("tt_status", publish_id))
+        if "tt_status" in self.fail_on:
+            raise RuntimeError("tiktok status boom")
+        if len(self.status_sequence) > 1:
+            return self.status_sequence.pop(0)
+        return self.status_sequence[0]
+
+    def get_user_info(self, access_token, fields=("open_id", "display_name")):
+        self.calls.append(("tt_user_info", tuple(fields)))
+        if "tt_user_info" in self.fail_on:
+            raise RuntimeError("tiktok user info boom")
+        return dict(self.user_info)
+
+    def query_videos(self, access_token, video_ids, fields):
+        self.calls.append(("tt_query", list(video_ids), list(fields)))
+        if "tt_query" in self.fail_on:
+            raise RuntimeError("tiktok query boom")
+        return list(self.videos)
+
+    def refresh_access_token(self, client_key, client_secret, refresh_token):
+        self.calls.append(("tt_refresh", refresh_token))
+        if "tt_refresh" in self.fail_on:
+            raise RuntimeError("tiktok refresh boom")
+        return dict(self.tokens)
+
+
 @pytest.fixture
 def fake_client():
     return FakeGraphClient()
@@ -383,6 +445,11 @@ def fake_discord_client():
 @pytest.fixture
 def fake_telegram_client():
     return FakeTelegramClient()
+
+
+@pytest.fixture
+def fake_tiktok_client():
+    return FakeTikTokClient()
 
 
 @pytest.fixture
@@ -403,6 +470,8 @@ def make_publication(conn):
                 remote_account_id = "THREADS1"
             elif platform == "telegram":
                 remote_account_id = "@testchannel"
+            elif platform == "tiktok":
+                remote_account_id = "open-1"
             else:
                 remote_account_id = "178414"
         if platform == "facebook":
@@ -413,6 +482,8 @@ def make_publication(conn):
             account_name = "Test Discord"
         elif platform == "telegram":
             account_name = "Test Telegram"
+        elif platform == "tiktok":
+            account_name = "Test TikTok"
         else:
             account_name = "Test IG"
         if not with_token:
@@ -422,11 +493,24 @@ def make_publication(conn):
             access_token = "https://discord.com/api/webhooks/12345/faketoken"
         else:
             access_token = "tok-123"
-        cur = conn.execute(
-            """INSERT INTO channels (platform, account_name, remote_account_id, access_token)
-               VALUES (?, ?, ?, ?)""",
-            (platform, account_name, remote_account_id, access_token),
-        )
+        if platform == "tiktok":
+            base_now = now or datetime.now(timezone.utc)
+            cur = conn.execute(
+                """INSERT INTO channels (platform, account_name, remote_account_id,
+                                        access_token, token_expires_at, refresh_token,
+                                        refresh_token_expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (platform, account_name, remote_account_id, access_token,
+                 (base_now + timedelta(hours=20)).isoformat(), "rft.SEED",
+                 (base_now + timedelta(days=364)).isoformat()),
+            )
+        else:
+            cur = conn.execute(
+                """INSERT INTO channels (platform, account_name, remote_account_id,
+                                        access_token)
+                   VALUES (?, ?, ?, ?)""",
+                (platform, account_name, remote_account_id, access_token),
+            )
         channel_id = cur.lastrowid
         cur = conn.execute(
             "INSERT INTO posts (caption, first_comment, post_type) "

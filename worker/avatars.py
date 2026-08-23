@@ -57,6 +57,10 @@ _URL_FETCHERS = {
     # getChat -> getFile -> download; it is out of scope deliberately, not by oversight.
     "discord": None,
     "telegram": None,
+    # /v2/user/info/ CAN return avatar_url, so this is genuinely reachable — left unwired
+    # deliberately to keep the first version's scope to publishing, in the same way
+    # Telegram's getChat -> getFile path is.
+    "tiktok": None,
 }
 
 assert set(_URL_FETCHERS) == set(SUPPORTED_PLATFORMS), (

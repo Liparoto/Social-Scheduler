@@ -132,6 +132,9 @@ _ADAPTERS = {
     "facebook": None,   # Page feed sync lands in phase 5
     "discord": None,
     "telegram": None,
+    # Mirroring the account's own video list would need paged video.list calls; the first
+    # version of this adapter covers publishing and the metrics that hang off it.
+    "tiktok": None,
 }
 
 assert set(_ADAPTERS) == set(SUPPORTED_PLATFORMS), (

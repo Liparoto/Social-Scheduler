@@ -351,6 +351,10 @@ _ACCOUNT_SYNCS = {
     "facebook": None,   # phase 5
     "discord": None,
     "telegram": None,
+    # Account-level series need the user.info.stats scopes this install does not request —
+    # it asks only for what publishing and per-post metrics require. Deliberately out of
+    # scope, not forgotten.
+    "tiktok": None,
 }
 
 assert set(_ACCOUNT_SYNCS) == set(SUPPORTED_PLATFORMS), (

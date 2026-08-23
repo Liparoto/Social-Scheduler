@@ -86,6 +86,23 @@ def _check_telegram(client, ch, name, print_fn) -> None:
     )
 
 
+def _check_tiktok(client, ch, name, print_fn) -> None:
+    """A read-only /v2/user/info/ call: proves the access token works and names the
+    account without posting anything.
+
+    It also reports how long the REFRESH token has left. That is the 365-day cliff, and
+    this line is the only warning the owner gets before a channel simply stops working —
+    TikTok is the one platform here whose credential expires on its own.
+    """
+    user = client.get_user_info(ch["access_token"], fields=("open_id", "display_name"))
+    display = user.get("display_name") or ch["account_name"]
+    expiry = ch["refresh_token_expires_at"] or "unknown"
+    print_fn(
+        f"  ✓ {name}: token OK — account reachable ({display}; "
+        f"no publish quota to read; reconnect before {expiry})"
+    )
+
+
 # One check per platform. A bare `else` here is how a Facebook Page got preflighted
 # against Instagram's quota endpoint; an unknown platform must be reported, not guessed.
 _CHECKS = {
@@ -94,6 +111,7 @@ _CHECKS = {
     "threads": _check_threads,
     "discord": _check_discord,
     "telegram": _check_telegram,
+    "tiktok": _check_tiktok,
 }
 
 

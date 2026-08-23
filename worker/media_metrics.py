@@ -156,6 +156,9 @@ _FETCHERS = {
     "facebook": None,   # phase 5
     "discord": None,
     "telegram": None,
+    # No remote_media mirror exists for TikTok (media_sync has no adapter for it), so
+    # there is nothing here to attach per-media metrics to.
+    "tiktok": None,
 }
 
 assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (

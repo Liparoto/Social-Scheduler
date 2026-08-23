@@ -300,6 +300,12 @@ _FETCHERS = {
     # would mean someone forgot to register it.
     "discord": None,
     "telegram": None,
+    # TikTok DOES have a metrics API (video.query, scope video.list), but a video is only
+    # queryable once it has a public post id — which this worker only learns after the
+    # creator publishes it from their inbox. Wired up in its own step, once that path is
+    # confirmed to work at all; until then this None keeps the due-query from selecting
+    # TikTok rows every cycle only to skip them.
+    "tiktok": None,
 }
 
 assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (
