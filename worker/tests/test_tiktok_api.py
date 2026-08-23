@@ -236,3 +236,33 @@ def test_query_videos_filters_by_id():
     assert videos[0]["view_count"] == 100
     _, _, kwargs = session.calls[0]
     assert kwargs["json"]["filters"]["video_ids"] == ["7123"]
+
+
+def test_oauth_style_flat_error_is_reported_not_crashed_on():
+    """The token endpoint reports failure OAuth2-style — `error` is a STRING with
+    error_description beside it — while every other v2 endpoint nests {code, message}.
+    Treating the string as an object raises AttributeError instead of TikTokAPIError,
+    which would turn a refusable token refresh into a crash mid-publish."""
+    session = FakeSession(FakeResponse({
+        "error": "invalid_request",
+        "error_description": "Redirect_uri is not matched with the uri when requesting code.",
+        "log_id": "20260823185437010113",
+    }))
+    client = TikTokClient(session=session)
+    with pytest.raises(TikTokAPIError) as exc:
+        client.refresh_access_token("key", "secret", "rft.OLDVALUE")
+    assert "invalid_request" in str(exc.value)
+    # The description is the only actionable part; losing it leaves nothing to act on.
+    assert "Redirect_uri is not matched" in str(exc.value)
+
+
+def test_flat_error_is_still_classified_as_revoked_where_it_should_be():
+    """tiktok_tokens matches revoked-vs-transient on TikTok's code appearing in the
+    message, so the flat shape has to put it there too."""
+    from worker.tiktok_tokens import _REVOKED_CODES
+
+    session = FakeSession(FakeResponse({"error": "invalid_grant", "error_description": "gone"}))
+    client = TikTokClient(session=session)
+    with pytest.raises(TikTokAPIError) as exc:
+        client.refresh_access_token("key", "secret", "rft.OLDVALUE")
+    assert any(code in str(exc.value) for code in _REVOKED_CODES)

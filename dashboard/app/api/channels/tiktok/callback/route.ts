@@ -69,13 +69,31 @@ export async function GET(req: NextRequest) {
       }),
     });
     const tokens = await tokenRes.json();
-    // TikTok answers a refusal with HTTP 200 and an error object, so the body is the
-    // success signal — checking the status alone would store an empty token.
-    if (tokens?.error?.code && tokens.error.code !== "ok") {
-      return back(req, { tiktok_error: `TikTok refused the sign-in (${tokens.error.code}).` });
+    // The body is the success signal — TikTok answers a refusal with HTTP 200 — but THIS
+    // endpoint reports failure in OAuth2 style, flat: {error: "invalid_request",
+    // error_description: "...", log_id: "..."}. Every other v2 endpoint nests
+    // {error: {code, message}}. Reading .error.code here finds undefined on a string and
+    // silently discards the one thing worth showing, which is exactly what happened.
+    const flatError = typeof tokens?.error === "string" ? tokens.error : null;
+    const nestedError =
+      tokens?.error && typeof tokens.error === "object" && tokens.error.code !== "ok"
+        ? tokens.error.code
+        : null;
+    const failure = flatError ?? nestedError;
+    if (failure) {
+      // error_description is TikTok's own prose about what was wrong ("Redirect_uri is
+      // not matched…"), and carries no credential — showing it is the difference between
+      // a fixable message and a shrug.
+      const detail = tokens?.error_description ?? tokens?.error?.message ?? "";
+      return back(req, {
+        tiktok_error: `TikTok refused the sign-in: ${failure}${detail ? ` — ${detail}` : ""}`,
+      });
     }
     if (!tokens?.access_token || !tokens?.refresh_token) {
-      return back(req, { tiktok_error: "TikTok returned no tokens. Try Connect again." });
+      return back(req, {
+        tiktok_error:
+          "TikTok accepted the sign-in but returned no tokens. Try Connect again.",
+      });
     }
 
     // Name the channel after the account, so the Channels page shows who it posts as

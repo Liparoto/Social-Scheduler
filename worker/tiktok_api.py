@@ -88,15 +88,33 @@ class TikTokClient:
             raise TikTokAPIError(
                 f"{what} -> {resp.status_code}: non-JSON response: {redact(resp.text)[:200]}"
             ) from None
-        error = body.get("error") or {}
-        # "ok" is TikTok's success code. An absent error object is treated as success too:
-        # some Display responses omit it entirely.
-        code = error.get("code", "ok")
+        # TikTok reports failure in TWO different shapes, and assuming either one is a
+        # bug waiting to happen:
+        #
+        #   * most v2 endpoints:  {"error": {"code": "...", "message": "...", "log_id": ...}}
+        #   * /v2/oauth/token/:   {"error": "invalid_request",
+        #                          "error_description": "...", "log_id": "..."}  (OAuth2 style)
+        #
+        # The second is a plain STRING. Calling .get() on it raises AttributeError, which
+        # turns a refusable token refresh into a crash mid-publish and defeats the
+        # revoked-vs-transient classification in tiktok_tokens (it matches on TikTok's
+        # code appearing in this message).
+        error = body.get("error")
+        if isinstance(error, str):
+            code = error
+            message = body.get("error_description", "")
+            log_id = body.get("log_id")
+        else:
+            error = error or {}
+            # "ok" is TikTok's success code. An absent error object is success too: some
+            # Display responses omit it entirely.
+            code = error.get("code", "ok")
+            message = error.get("message", resp.text)
+            log_id = error.get("log_id")
         if code != "ok" or not resp.ok:
             raise TikTokAPIError(
                 f"{what} -> {resp.status_code}: {code}: "
-                f"{redact(str(error.get('message', resp.text)))[:300]} "
-                f"(log_id={error.get('log_id')})"
+                f"{redact(str(message))[:300]} (log_id={log_id})"
             )
         return body
 
