@@ -28,8 +28,10 @@ function back(req: NextRequest, params: Record<string, string>) {
  * browser anything to post.
  */
 export async function GET(req: NextRequest) {
-  const clientKey = process.env.TIKTOK_CLIENT_KEY ?? "";
-  const clientSecret = process.env.TIKTOK_CLIENT_SECRET ?? "";
+  // config, not process.env — see lib/config.ts: the .env lives at the repo root, so
+  // process.env never carries these however often the server restarts.
+  const clientKey = config.tiktokClientKey;
+  const clientSecret = config.tiktokClientSecret;
   if (!clientKey || !clientSecret) {
     return back(req, { tiktok_error: "TIKTOK_CLIENT_KEY/SECRET are not set in .env." });
   }

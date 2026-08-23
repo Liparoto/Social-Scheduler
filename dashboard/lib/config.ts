@@ -71,6 +71,15 @@ export const config = {
   assetStorageDir: resolveRepoPath(get("ASSET_STORAGE_DIR", "data/assets")),
   publicAssetBaseUrl: get("PUBLIC_ASSET_BASE_URL", ""),
   defaultTimezone: get("DEFAULT_TIMEZONE", "UTC"),
+  // TikTok OAuth app credentials. These MUST come through get() rather than
+  // process.env: Next auto-loads only dashboard/.env, and this install's .env lives at
+  // the repo root so the Python worker can share it. Reading process.env directly leaves
+  // them undefined no matter how many times the server is restarted.
+  //
+  // Server-only, and this module is marked "server-only" — the client secret must never
+  // reach the browser.
+  tiktokClientKey: get("TIKTOK_CLIENT_KEY", ""),
+  tiktokClientSecret: get("TIKTOK_CLIENT_SECRET", ""),
   videoConverter: resolveVideoConverter(),
   videoConvertTimeoutMs:
     (Number.isFinite(videoConvertTimeoutSec) && videoConvertTimeoutSec > 0
