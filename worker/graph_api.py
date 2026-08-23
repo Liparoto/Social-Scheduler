@@ -418,6 +418,43 @@ class GraphClient:
         items = data.get("data") or []
         return items, (data.get("paging") or {}).get("next")
 
+    PAGE_POST_FIELDS = (
+        "id,message,created_time,permalink_url,full_picture,status_type"
+    )
+
+    def get_page_posts(
+        self,
+        page_id: str,
+        token: str,
+        *,
+        limit: int = 25,
+        fields: str | None = None,
+        next_url: str | None = None,
+    ) -> tuple[list[dict], str | None]:
+        """One page of the Page's OWN posts, newest first. Returns (items, next_page_url).
+
+        `published_posts` rather than `feed` or `posts`: all three were probed live on
+        2026-08-23 and returned the same rows for this Page, but feed can also carry posts
+        made BY OTHER PEOPLE on the Page. Mirroring those would put content the owner
+        never wrote into their own library.
+
+        Paging is deep — the probe walked back to 2022 — so this is a genuine history
+        backfill rather than a recent-window sync.
+        """
+        if next_url:
+            data = self._get_url(next_url)
+        else:
+            data = self._get(
+                f"{page_id}/published_posts",
+                {
+                    "fields": fields or self.PAGE_POST_FIELDS,
+                    "limit": limit,
+                    "access_token": token,
+                },
+            )
+        items = data.get("data") or []
+        return items, (data.get("paging") or {}).get("next")
+
     def get_account_profile(self, account_id: str, token: str, fields: str) -> dict:
         """Snapshot fields off the account node itself (followers_count, media_count...).
 

@@ -351,7 +351,10 @@ def test_a_reappearing_post_is_unflagged(conn, config):
 # -- the run_media_sync driver -------------------------------------------------------
 
 def test_platforms_without_a_media_list_are_skipped_not_guessed(conn, config):
-    for platform in ("discord", "telegram", "facebook"):
+    # Facebook was in this list until it got a real adapter (2026-08-23) — a Page has a
+    # published_posts edge and pages back years. Discord and Telegram genuinely have no
+    # media list: one is a webhook, the other a bot API.
+    for platform in ("discord", "telegram"):
         _channel(conn, platform)
     called = []
 

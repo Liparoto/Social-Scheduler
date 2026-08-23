@@ -123,6 +123,48 @@ def _list_threads(client, channel, page_size, next_url):
     )
 
 
+# Facebook's status_type -> the media_type vocabulary this table already uses for
+# Instagram. Probed live 2026-08-23: this Page's history is entirely 'added_photos'.
+# An UNRECOGNISED status_type maps to None rather than being guessed at — the same call
+# _map_threads makes for media_product_type. Guessing IMAGE for a link share or a live
+# video would put a wrong shape in the library and nothing would ever contradict it.
+_FB_MEDIA_TYPES = {
+    "added_photos": "IMAGE",
+    "added_video": "VIDEO",
+    "shared_story": "LINK",
+    "mobile_status_update": "TEXT",
+    "created_note": "TEXT",
+}
+
+
+def _list_facebook(client, channel, page_size, next_url):
+    return client.get_page_posts(
+        channel["remote_account_id"], channel["access_token"],
+        limit=page_size, next_url=next_url,
+    )
+
+
+def _map_facebook(item: dict) -> dict:
+    """A Page post as a mirror row.
+
+    Facebook names almost everything differently from Instagram: `message` not `caption`,
+    `created_time` not `timestamp`, `permalink_url` not `permalink`, and a `status_type`
+    describing the ACTION taken rather than the media's shape.
+    """
+    return {
+        "remote_post_id": item.get("id"),
+        "media_type": _FB_MEDIA_TYPES.get(item.get("status_type")),
+        # No product-surface concept on a Page the way Instagram has FEED/REELS/STORY.
+        "media_product_type": None,
+        "permalink": item.get("permalink_url"),
+        "caption": item.get("message"),
+        # full_picture is Meta's own resized preview of whatever the post carries, which
+        # is exactly what a thumbnail column wants.
+        "thumbnail_url": item.get("full_picture"),
+        "published_at": parse_meta_timestamp(item.get("created_time")),
+    }
+
+
 # The fields TikTok returns for a listed video. All verified present on a live account
 # (2026-08-23) rather than taken from the docs.
 TIKTOK_MEDIA_FIELDS = (
@@ -180,7 +222,7 @@ def _map_tiktok(item: dict) -> dict:
 _ADAPTERS = {
     "instagram": (_list_instagram, _map_instagram),
     "threads": (_list_threads, _map_threads),
-    "facebook": None,   # Page feed sync lands in phase 5
+    "facebook": (_list_facebook, _map_facebook),
     "discord": None,
     "telegram": None,
     "tiktok": (_list_tiktok, _map_tiktok),
@@ -420,6 +462,7 @@ def run_media_sync(conn, config, client=None, now=None, logger=None, client_for=
         due = _is_due(channel, now, config)
         if not due:
             continue
+        client_obj = None
         try:
             client_obj = pick_client(channel["platform"])
             sync_channel_media(conn, config, client_obj, channel, now, budget, logger=logger)
@@ -435,7 +478,12 @@ def run_media_sync(conn, config, client=None, now=None, logger=None, client_for=
             conn.commit()
             if logger:
                 logger.info("[media_sync ch %s] failed: %s", channel["id"], message)
-        if budget.exhausted(pick_client(channel["platform"])):
+        # Asks the client we already built, rather than building another one OUTSIDE the
+        # guard above. pick_client can itself raise (UnknownPlatform, when a channel's
+        # platform is missing from the client registries), and doing that here killed the
+        # whole sync — defeating the per-channel except a few lines up. A channel whose
+        # client never built also spent no calls, so there is nothing to stop early for.
+        if client_obj is not None and budget.exhausted(client_obj):
             if logger:
                 logger.info("[media_sync] stopping early — %s", budget.stopped_reason)
             break

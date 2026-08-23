@@ -123,7 +123,15 @@ def run_thumbnails(conn, config, client=None, now=None, logger=None,
         due = media_needing_thumbnails(conn, channel["id"], max(budget.remaining, 0))
         if not due:
             continue
-        http = pick_client(channel["platform"])
+        try:
+            http = pick_client(channel["platform"])
+        except Exception as exc:  # noqa: BLE001 — one bad channel must not stop the rest
+            # UnknownPlatform when a channel's platform is missing from the client
+            # registries. A thumbnail is decoration; losing every OTHER channel's
+            # thumbnails over one misconfigured row is not a trade worth making.
+            if logger:
+                logger.debug("[thumbnails ch %s] no client: %s", channel["id"], exc)
+            continue
         if http is None:
             continue
 

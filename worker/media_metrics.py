@@ -150,6 +150,28 @@ def _fetch_threads(client, media, channel, config):
     return client.get_threads_insights(media["remote_post_id"], channel["access_token"], metrics)
 
 
+def _fetch_facebook(client, media, channel, config):
+    """Counts for one mirrored Page post.
+
+    Same split metrics._fetch_facebook uses: the edge summaries (reactions, comments,
+    shares) are stable and required, while the insights call is the fragile one — Meta
+    keeps retiring Page metric names, and a live probe on 2026-08-23 found several
+    already gone. A failure there costs reach only, so it is caught and the counts we did
+    get are kept.
+    """
+    summary = client.get_page_post_summary(media["remote_post_id"], channel["access_token"])
+    metrics = [m.strip() for m in config.fb_post_insight_metrics.split(",") if m.strip()]
+    insights: dict = {}
+    if metrics:
+        try:
+            insights = client.get_page_post_insights(
+                media["remote_post_id"], channel["access_token"], metrics
+            )
+        except Exception:  # noqa: BLE001 — best-effort by design, same as metrics.py
+            insights = {}
+    return {**summary, **insights}
+
+
 def _fetch_tiktok(client, media, channel, config):
     """Counts for one mirrored TikTok video.
 
@@ -176,7 +198,7 @@ def _fetch_tiktok(client, media, channel, config):
 _FETCHERS = {
     "instagram": _fetch_instagram,
     "threads": _fetch_threads,
-    "facebook": None,   # phase 5
+    "facebook": _fetch_facebook,
     "discord": None,
     "telegram": None,
     # Reachable now that media_sync mirrors TikTok's back catalogue.
@@ -260,8 +282,12 @@ def run_media_metrics(conn, config, client=None, now=None, logger=None,
             continue
         if not channel["access_token"]:
             continue
-        client_obj = pick_client(channel["platform"])
+        client_obj = None
         try:
+            # Inside the guard: pick_client can raise UnknownPlatform when a channel's
+            # platform is missing from the client registries, and doing that above the
+            # try killed the whole pass — defeating the per-channel except below.
+            client_obj = pick_client(channel["platform"])
             result = sync_channel_media_metrics(
                 conn, config, client_obj, channel, now, budget, logger=logger
             )
@@ -270,7 +296,9 @@ def run_media_metrics(conn, config, client=None, now=None, logger=None,
             conn.rollback()
             if logger:
                 logger.info("[media_metrics ch %s] failed: %s", channel["id"], redact(str(exc)))
-        if budget.exhausted(client_obj):
+        # A channel whose client never built spent no calls, so there is nothing to stop
+        # early for — and asking the budget with None would raise here instead.
+        if client_obj is not None and budget.exhausted(client_obj):
             if logger:
                 logger.info("[media_metrics] stopping early — %s", budget.stopped_reason)
             break
