@@ -12,6 +12,7 @@ import { EmojiPicker } from "@/components/emoji-picker";
 import type { Asset, Period, PeriodMode, PostTarget, Tag } from "@/lib/types";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { CaptionVariantsEditor, type CaptionVariantDraft } from "@/components/caption-variants-editor";
+import { TikTokCaptionNotice } from "@/components/tiktok-caption-notice";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
 import { FramingButton } from "@/components/framing-button";
@@ -553,6 +554,9 @@ export function Composer({
         {/* Caption + first comment */}
         <section className="rounded-card border border-border bg-surface p-5 space-y-4">
           <CaptionVariantsEditor value={variants} onChange={setVariants} postType={postType} />
+          {/* TikTok takes the video and nothing else — say so beside the caption box
+              rather than letting the phone deliver the surprise. */}
+          <TikTokCaptionNotice channels={selectedChannels} caption={caption} />
           {worstCaptionCheck ? (
             <p
               className={`text-xs ${

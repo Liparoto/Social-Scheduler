@@ -185,6 +185,15 @@ export interface Publication {
   first_comment_retry_requested: number;
   is_dry_run: number;
   is_held: number;
+  /**
+   * What happened AFTER the worker handed the post over, for platforms that deliver
+   * rather than publish. NULL for every platform that publishes on command. TikTok's
+   * three states are 'inbox' (waiting on the creator), 'published' (confirmed live) and
+   * 'gave_up' (delivered, never confirmed). Read it through deliveryLabel(), never raw.
+   */
+  delivery_state: string | null;
+  /** When the delivery watcher last asked TikTok about this send. */
+  delivery_checked_at: string | null;
   /** Which destination this send is for — 'story' rows target ONE slide via asset_id. */
   surface: Surface;
   /** NULL for a feed send (all assets, in order); the single slide for a story send. */
@@ -221,6 +230,12 @@ export interface PostPublicationRow {
   is_held: number;
   is_dry_run: number;
   remote_post_id: string | null;
+  /**
+   * What happened after the handoff, for a platform that delivers rather than publishes.
+   * NULL everywhere but TikTok. status='posted' means the WORKER succeeded; this says
+   * whether TikTok ever published it. Render via deliveryLabel().
+   */
+  delivery_state: string | null;
   /** Which destination this send is for. 'story' rows also carry an asset_id (one slide). */
   surface: Surface;
   /**

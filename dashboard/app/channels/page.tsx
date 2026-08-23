@@ -16,7 +16,14 @@ import { tzAbbrev } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default function ChannelsPage() {
+export default async function ChannelsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tiktok_connected?: string; tiktok_error?: string }>;
+}) {
+  // The TikTok OAuth callback redirects here with an outcome. Without showing it, a failed
+  // connection looks identical to a successful one that simply has not appeared yet.
+  const params = await searchParams;
   const channels = getChannels();
   const groups = listChannelGroups().map((g) => ({
     id: g.id,
@@ -48,6 +55,19 @@ export default function ChannelsPage() {
       />
 
       <div className="px-8 py-6 space-y-6">
+        {params.tiktok_connected ? (
+          <div className="rounded-card border border-border bg-surface-muted p-4 text-sm text-ink-soft">
+            <span className="font-medium text-ink">TikTok connected.</span> Run{" "}
+            <code>python -m worker.preflight</code> to confirm it, then schedule a video.
+            Remember: TikTok delivers the video to your inbox — you write the caption and
+            publish in the app.
+          </div>
+        ) : null}
+        {params.tiktok_error ? (
+          <div className="rounded-card border border-status-failed bg-surface-muted p-4 text-sm text-status-failed">
+            {params.tiktok_error}
+          </div>
+        ) : null}
         <ChannelForm
           defaultTimezone={config.defaultTimezone}
           nextChannelId={channels.reduce((max, c) => Math.max(max, c.id), 0) + 1}
@@ -55,9 +75,9 @@ export default function ChannelsPage() {
 
         {channels.length === 0 ? (
           <EmptyState title="No channels configured">
-            Add your first account above — Instagram, Facebook, Threads, Discord, or
-            Telegram. Most need an account id and a long-lived access token; Discord
-            just needs a webhook URL.
+            Add your first account above — Instagram, Facebook, Threads, Discord,
+            Telegram, or TikTok. Most need an account id and a long-lived access token;
+            Discord just needs a webhook URL, and TikTok connects through your browser.
           </EmptyState>
         ) : (
           <>

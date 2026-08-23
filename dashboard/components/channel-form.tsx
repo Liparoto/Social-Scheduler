@@ -46,6 +46,10 @@ export function ChannelForm({
     color_hue: null as number | null,
   });
 
+  // TikTok's channel row is created by the OAuth callback, not by this form's Save — it
+  // is the only platform whose credential cannot be typed in at all.
+  const isTikTok = form.platform === "tiktok";
+
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
   }
@@ -136,7 +140,7 @@ export function ChannelForm({
             className={field}
           />
         </div>
-        {usesAccountId(form.platform) ? (
+        {isTikTok ? null : usesAccountId(form.platform) ? (
           <div>
             <label className={label}>
               {accountIdLabel(form.platform)}
@@ -160,7 +164,29 @@ export function ChannelForm({
             />
           </div>
         ) : null}
-        <div className="sm:col-span-2">
+        {/* TikTok is the only platform whose credential is never typed in. Its access
+            token lives 24 hours, so anything pasted here would be dead by tomorrow —
+            the account is connected through OAuth instead, and the worker refreshes it.
+            Leaving the token box on screen would invite exactly the wrong thing. */}
+        {isTikTok ? (
+          <div className="sm:col-span-2 rounded-lg border border-border bg-surface-muted p-4">
+            <p className="mb-3 text-sm text-ink-soft">
+              TikTok connects through your browser — there is no token to paste. Its access
+              token only lasts 24 hours, so the worker refreshes it for you.
+            </p>
+            <a
+              href="/api/channels/tiktok/authorize"
+              className="inline-block rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-on-brand hover:bg-brand-ink"
+            >
+              Connect TikTok account
+            </a>
+            <p className="mt-3 text-xs text-muted">
+              You&rsquo;ll approve it on TikTok and come straight back here. Set up your own
+              TikTok app first — see <code>docs/tiktok-setup.md</code>.
+            </p>
+          </div>
+        ) : null}
+        <div className={isTikTok ? "hidden" : "sm:col-span-2"}>
           <label className={label}>
             {usesAccountId(form.platform) ? "Access token" : "Webhook URL"}
           </label>
@@ -198,7 +224,7 @@ export function ChannelForm({
 
       {error ? <p className="mt-3 text-sm text-status-failed">{error}</p> : null}
 
-      <div className="mt-4 flex justify-end">
+      <div className={`mt-4 flex justify-end ${isTikTok ? "hidden" : ""}`}>
         <button
           onClick={submit}
           disabled={pending || !tzValid}

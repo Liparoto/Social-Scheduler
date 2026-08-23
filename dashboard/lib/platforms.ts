@@ -18,6 +18,8 @@
 // supportsStory mirrors publisher._validate's story rule: Instagram is the only platform
 // with a Stories surface, so it is the only one that offers the Story chip. A Story is a
 // DESTINATION, not a post type — see docs/design-instagram-stories.md.
+// supportsImages mirrors PlatformCaps.supports_images: TikTok is the only platform that
+// cannot publish a still image, and the worker's _validate is the real gate.
 // supportsVideo mirrors the worker's actual publish paths — worker/publisher.py's
 // _publish_instagram is the authority (it has a 'reel' branch; _publish_facebook,
 // _publish_threads, _publish_discord, _publish_telegram do not, and fall through to
@@ -35,6 +37,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: false,
     supportsVideo: true,
+    supportsImages: true,
     supportsStory: true,
     maxCarousel: 10,
     captionChars: {},
@@ -49,6 +52,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: false,
     supportsVideo: false,
+    supportsImages: true,
     supportsStory: false,
     maxCarousel: 10,
     captionChars: {},
@@ -63,6 +67,7 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: true,
     supportsVideo: false,
+    supportsImages: true,
     supportsStory: false,
     maxCarousel: 20,
     captionChars: { text: 500, single: 500, carousel: 500 },
@@ -78,6 +83,7 @@ export const PLATFORMS = [
     usesAccountId: false,
     supportsText: true,
     supportsVideo: false,
+    supportsImages: true,
     supportsStory: false,
     maxCarousel: 10,
     captionChars: { text: 2000, single: 2000, carousel: 2000 },
@@ -93,11 +99,34 @@ export const PLATFORMS = [
     usesAccountId: true,
     supportsText: true,
     supportsVideo: false,
+    supportsImages: true,
     supportsStory: false,
     maxCarousel: 10,
     captionChars: { text: 4096, single: 1024, carousel: 1024 },
     // The Bot API exposes no metrics/insights endpoint at all.
     supportsMetrics: false,
+  },
+  {
+    value: "tiktok",
+    label: "TikTok",
+    badge: "TT",
+    accountIdLabel: "TikTok open id",
+    usesLinkedPage: false,
+    usesAccountId: true,
+    supportsText: false,
+    supportsVideo: true,
+    // The only platform here that cannot take a still image. TikTok's photo endpoint
+    // accepts PULL_FROM_URL only, from a DNS-verified domain — and this install serves
+    // assets from an ephemeral trycloudflare URL it does not own.
+    supportsImages: false,
+    supportsStory: false,
+    // No multi-image format to cap, hence 0 rather than a number that implies one exists.
+    maxCarousel: 0,
+    // Empty because the inbox upload endpoint has NO caption field at all — the creator
+    // writes the caption in the TikTok app. Nothing to enforce, rather than a limit we
+    // happen not to know.
+    captionChars: {},
+    supportsMetrics: true,
   },
 ] as const;
 
@@ -146,6 +175,14 @@ export function supportsVideo(value: string): boolean {
   return BY_VALUE.get(value)?.supportsVideo ?? false;
 }
 
+// Default TRUE for an unrecognised platform — and note this is the OPPOSITE direction to
+// supportsVideo above, deliberately. Nearly every platform takes images, so the risky
+// mistake here is hiding image posting from one that supports it; offering an image post
+// to one that refuses it merely earns a clear error from the worker.
+export function supportsImages(value: string): boolean {
+  return BY_VALUE.get(value)?.supportsImages ?? true;
+}
+
 // Default FALSE for an unrecognised platform — the safe direction here: worst case the
 // Story chip is hidden for a platform that could take one, rather than offering a
 // destination the worker would refuse terminally.
@@ -174,6 +211,46 @@ export function captionLimit(platform: string, postType: string): number | null 
 // permissive.
 export function maxCarousel(value: string): number {
   return BY_VALUE.get(value)?.maxCarousel ?? 10;
+}
+
+// ---- Delivery state ---------------------------------------------------------------
+// TikTok is the only platform here that DELIVERS rather than publishes: the worker hands
+// the video to the creator's TikTok inbox and the creator finishes the post in the app.
+// publications.status stays 'posted' — the worker's job did succeed — and what happened
+// afterwards lives in publications.delivery_state.
+//
+// This is the single place that turns that column into words, so the queue, the post page
+// and anything added later cannot describe the same row differently.
+export interface DeliveryLike {
+  platform: string;
+  status: string;
+  delivery_state: string | null;
+}
+
+/**
+ * Extra wording for a send whose platform does not publish on command, or null when there
+ * is nothing more to say than the status already says.
+ *
+ * Returns null for any send that did not reach 'posted'. That case matters: delivery_state
+ * is only meaningful once the worker succeeded, and a failed row must keep saying failed
+ * rather than borrowing a label left over from an earlier attempt.
+ */
+export function deliveryLabel(row: DeliveryLike): string | null {
+  if (row.status !== "posted" || !row.delivery_state) return null;
+  switch (row.delivery_state) {
+    case "inbox":
+      return "In your TikTok inbox — open TikTok to publish";
+    case "published":
+      return "Live on TikTok";
+    case "gave_up":
+      // Deliberately neither "failed" nor "live": the video was delivered and we never saw
+      // it go public. Claiming either would be a guess.
+      return "Delivered — publication unconfirmed";
+    default:
+      // An unrecognised state must look wrong on screen rather than quietly read as
+      // published — the same reasoning as platformLabel's conspicuous fallback.
+      return `Unknown delivery state: ${row.delivery_state}`;
+  }
 }
 
 // ---- Post-type / channel compatibility -------------------------------------------
@@ -211,7 +288,7 @@ export function describeChannel(c: ChannelLikeForCompat): string {
 // selected channel) instead of Math.min (the strictest), which let a route accept a
 // carousel guaranteed to fail on at least one of its own targets. This widened version
 // is the one place that knows both rules, so every route enforces them identically.
-export type PostCompatReason = "text" | "carousel" | "video";
+export type PostCompatReason = "text" | "carousel" | "video" | "images";
 
 export interface PostCompatIssue<T extends ChannelLikeForCompat = ChannelLikeForCompat> {
   channel: T;
@@ -236,6 +313,15 @@ export function incompatibleChannelsForPost<T extends ChannelLikeForCompat>(
     if (postType === "reel") {
       if (!supportsVideo(c.platform)) out.push({ channel: c, reason: "video" });
       continue;
+    }
+    // Video-only platforms are caught BEFORE the carousel size rule below, or TikTok
+    // would report "allows at most 0 images per carousel" — technically true and
+    // completely unhelpful.
+    if (postType === "single" || postType === "carousel") {
+      if (!supportsImages(c.platform)) {
+        out.push({ channel: c, reason: "images" });
+        continue;
+      }
     }
     if (postType === "carousel" && assetCount > maxCarousel(c.platform)) {
       out.push({ channel: c, reason: "carousel" });
@@ -262,6 +348,8 @@ export function incompatiblePostError<T extends ChannelLikeForCompat>(
         ? `${describeChannel(issue.channel)} can't publish a text post.`
         : issue.reason === "video"
           ? `${describeChannel(issue.channel)} can't publish a video/Reel.`
+          : issue.reason === "images"
+            ? `${describeChannel(issue.channel)} publishes video only — it can't take an image post.`
           : `${describeChannel(issue.channel)} allows at most ${maxCarousel(
               issue.channel.platform
             )} images per carousel (this post has ${assetCount}).`

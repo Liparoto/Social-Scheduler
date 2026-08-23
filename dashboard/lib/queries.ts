@@ -79,6 +79,11 @@ export interface CreateChannelInput {
   remote_account_id?: string;
   linked_page_id?: string;
   access_token?: string;
+  /** TikTok only: its access token expires in 24h and is refreshed by the worker, so the
+   *  expiry and the refresh pair are stored at connect time rather than left null. */
+  token_expires_at?: string | null;
+  refresh_token?: string | null;
+  refresh_token_expires_at?: string | null;
   requires_approval?: boolean;
   color_hue?: number | null;
 }
@@ -88,9 +93,11 @@ export function createChannel(input: CreateChannelInput): number {
     .prepare(
       `INSERT INTO channels
         (platform, account_name, business_label, timezone, remote_account_id,
-         linked_page_id, access_token, requires_approval, color_hue)
+         linked_page_id, access_token, token_expires_at, refresh_token,
+         refresh_token_expires_at, requires_approval, color_hue)
        VALUES (@platform, @account_name, @business_label, @timezone, @remote_account_id,
-         @linked_page_id, @access_token, @requires_approval, @color_hue)`
+         @linked_page_id, @access_token, @token_expires_at, @refresh_token,
+         @refresh_token_expires_at, @requires_approval, @color_hue)`
     )
     .run({
       platform: input.platform,
@@ -100,6 +107,9 @@ export function createChannel(input: CreateChannelInput): number {
       remote_account_id: input.remote_account_id || null,
       linked_page_id: input.linked_page_id || null,
       access_token: input.access_token || null,
+      token_expires_at: input.token_expires_at ?? null,
+      refresh_token: input.refresh_token ?? null,
+      refresh_token_expires_at: input.refresh_token_expires_at ?? null,
       requires_approval: input.requires_approval ? 1 : 0,
       color_hue: input.color_hue ?? null,
     });
@@ -1812,7 +1822,7 @@ export function getPostPublications(postId: number): PostPublicationRow[] {
   return getDb()
     .prepare(
       `SELECT pub.id, pub.channel_id, pub.scheduled_at, pub.status, pub.is_held,
-              pub.is_dry_run, pub.remote_post_id, pub.surface,
+              pub.is_dry_run, pub.remote_post_id, pub.surface, pub.delivery_state,
               pub.first_comment_status, pub.first_comment_error,
               pub.first_comment_retry_requested,
               c.account_name AS channel_name, c.platform AS channel_platform,

@@ -7,7 +7,7 @@ import type { Channel } from "@/lib/types";
 import { ChannelAvatar, ChannelChip, StatusBadge } from "@/components/ui";
 import { channelColor, formatInTz, tzAbbrev } from "@/lib/format";
 import { sendTime, formatLateness } from "@/lib/send-time";
-import { incompatibleChannelsForPostType } from "@/lib/platforms";
+import { deliveryLabel, incompatibleChannelsForPostType } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
@@ -206,6 +206,26 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
               story · 24h
             </span>
           ) : null}
+          {/* Where a delivered send actually got to. status='posted' means the worker's
+              job succeeded; for TikTok that is a handoff, not a publication, and the
+              badge alone would read as "it's up". Null for every platform that publishes
+              on command. */}
+          {deliveryLabel({
+            platform: send.channel_platform,
+            status: send.status,
+            delivery_state: send.delivery_state,
+          }) ? (
+            <span
+              className="rounded-full bg-surface-sunken px-1.5 py-px text-[10px] text-status-blocked"
+              title="TikTok takes the video but not the caption — you finish the post in the TikTok app."
+            >
+              {deliveryLabel({
+                platform: send.channel_platform,
+                status: send.status,
+                delivery_state: send.delivery_state,
+              })}
+            </span>
+          ) : null}
           {send.removed_from_platform === 1 ? (
             <span
               className="rounded-full px-1.5 py-px text-[10px] text-status-failed"
@@ -240,7 +260,14 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
                 ? "no metrics — the post was removed before any were collected"
                 : send.surface === "story"
                   ? "story expired before metrics were fetched"
-                  : "metrics not fetched yet"}
+                  : // A video still in a TikTok inbox, or one we never saw go public, has
+                    // no published post to measure. "not fetched yet" would promise
+                    // numbers that cannot arrive until the creator publishes it.
+                    send.delivery_state === "inbox"
+                    ? "no metrics until you publish it in TikTok"
+                    : send.delivery_state === "gave_up"
+                      ? "no metrics — we never confirmed this went live"
+                      : "metrics not fetched yet"}
             </span>
           ) : null}
         </div>

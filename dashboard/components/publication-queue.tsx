@@ -4,7 +4,7 @@ import { Fragment, startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PublicationRow } from "@/lib/queries";
 import type { Period, PublicationStatus, Platform, Tag } from "@/lib/types";
-import { PLATFORMS, supportsMetrics } from "@/lib/platforms";
+import { PLATFORMS, deliveryLabel, supportsMetrics } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
@@ -479,6 +479,24 @@ export function PublicationQueue({
                         </span>
                       ) : null}
                     </span>
+                    {/* A TikTok video waiting in the creator's inbox is NOT posted, and
+                        the badge above cannot say so on its own — status='posted' means
+                        the worker's job succeeded, which it did. deliveryLabel returns
+                        null for every platform that publishes on command, so this line
+                        simply is not there for them. */}
+                    {deliveryLabel({
+                      platform: p.channel_platform,
+                      status: p.status,
+                      delivery_state: p.delivery_state,
+                    }) ? (
+                      <p className="mt-1 text-[11px] text-status-blocked">
+                        {deliveryLabel({
+                          platform: p.channel_platform,
+                          status: p.status,
+                          delivery_state: p.delivery_state,
+                        })}
+                      </p>
+                    ) : null}
                     {p.status === "posted" && !supportsMetrics(p.channel_platform) ? (
                       // Discord and Telegram have no metrics at all — rendering nothing here
                       // (rather than an always-empty strip or a perpetual "metrics pending…")
@@ -521,7 +539,12 @@ export function PublicationQueue({
                           Unknown platform &quot;{p.channel_platform}&quot; — no metrics display for it.
                         </p>
                       )
-                    ) : p.status === "posted" && p.is_dry_run !== 1 ? (
+                    ) : p.status === "posted" &&
+                      p.is_dry_run !== 1 &&
+                      // Nothing is pending for a send still sitting in a TikTok inbox, or
+                      // one we never saw go live: there is no published post to measure.
+                      // "metrics pending…" there would promise numbers that cannot come.
+                      (p.delivery_state === null || p.delivery_state === "published") ? (
                       <p className="data mt-1 text-[10px] text-faint">metrics pending…</p>
                     ) : null}
                     {p.last_error ? (
