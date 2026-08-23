@@ -1,7 +1,13 @@
 import { getBppPool } from "@/lib/insights-queries";
 import { getChannels, listChannelGroups, getGroupMembers, getBandCounts } from "@/lib/queries";
 import { config } from "@/lib/config";
-import { accountIdLabel, supportsAvatar, usesAccountId } from "@/lib/platforms";
+import {
+  accountIdLabel,
+  oauthConnectPath,
+  platformLabel,
+  supportsAvatar,
+  usesAccountId,
+} from "@/lib/platforms";
 import { PageHeader, ChannelChip, ChannelAvatar, EmptyState } from "@/components/ui";
 import { ChannelForm } from "@/components/channel-form";
 import { ChannelToggle } from "@/components/channel-toggles";
@@ -206,6 +212,31 @@ export default async function ChannelsPage({
                   </p>
                 )}
 
+                {/* Reconnect lives on the CARD, not only in the add form. A TikTok
+                    channel needs re-authorizing when its yearly refresh token expires or
+                    when a new scope is added, and routing that through "Add channel"
+                    both hides it and implies it would create a duplicate. */}
+                {oauthConnectPath(c.platform) ? (
+                  <div className="mt-3 rounded-lg border border-border bg-surface-sunken/40 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-ink-soft">Connection</p>
+                        <p className="mt-0.5 text-[11px] text-muted">
+                          Re-authorize with {platformLabel(c.platform)} — needed yearly when
+                          the refresh token expires, or after a new permission is added.
+                          Your queue, history and name are kept.
+                        </p>
+                      </div>
+                      <a
+                        /* eslint-disable-next-line @next/next/no-html-link-for-pages */
+                        href={oauthConnectPath(c.platform) as string}
+                        className="shrink-0 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-surface"
+                      >
+                        Reconnect
+                      </a>
+                    </div>
+                  </div>
+                ) : null}
                 <ChannelName channelId={c.id} accountName={c.account_name} />
                 <ChannelColor
                   channelId={c.id}

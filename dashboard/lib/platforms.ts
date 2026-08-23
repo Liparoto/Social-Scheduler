@@ -194,6 +194,22 @@ export function supportsVideo(value: string): boolean {
 //
 // Default TRUE for an unrecognised platform, matching supportsMetrics: worst case an
 // always-empty button, rather than hiding a capability a platform actually has.
+// Platforms whose credentials come from an OAuth round trip rather than a pasted token.
+// They need a RECONNECT affordance on the channel card, not just a Connect button in the
+// add form: the access token expires on its own, the refresh token expires yearly, and
+// granting a new scope means re-authorizing an account that already exists. Without it
+// the only route back is the add-channel form, which looks like it would create a second
+// channel — so the fix for a broken connection is hidden behind an action that reads as
+// the wrong one.
+export function usesOAuth(value: string): boolean {
+  return value === "tiktok";
+}
+
+/** Where to send someone to (re)authorize an OAuth platform. */
+export function oauthConnectPath(value: string): string | null {
+  return usesOAuth(value) ? `/api/channels/${value}/authorize` : null;
+}
+
 export function supportsAvatar(value: string): boolean {
   return BY_VALUE.get(value)?.supportsAvatar ?? true;
 }

@@ -28,7 +28,7 @@ export const dynamic = "force-dynamic";
 // Platforms with an account-insights endpoint. Discord and Telegram have none at all,
 // and Facebook Pages arrive with their own adapter later — stating that on the card is
 // better than an empty card that reads as a bug.
-const HAS_ACCOUNT_INSIGHTS = new Set(["instagram", "threads", "tiktok"]);
+const HAS_ACCOUNT_INSIGHTS = new Set(["instagram", "threads", "tiktok", "facebook"]);
 
 /**
  * What each platform's card shows, in that platform's own terms.
@@ -56,6 +56,15 @@ const CARD_METRICS: Record<
     { key: "likes", label: "Likes", kind: "flow" },
     { key: "replies", label: "Replies", kind: "flow" },
   ],
+  // Facebook Pages. No reach and no impressions ROW — page_impressions and
+  // page_impressions_unique are retired (probed live 2026-08-23), so unlike Instagram
+  // there is nothing to put in that slot and pretending otherwise would show a zero where
+  // Meta simply stopped reporting.
+  facebook: [
+    { key: "profile_views", label: "Page views", kind: "flow" },
+    { key: "total_interactions", label: "Engagements", kind: "flow" },
+    { key: "views", label: "Video views", kind: "flow" },
+  ],
   // TikTok's entire account-level API: four counters, no series, no reach, no views, no
   // engagement. Followers are shown separately as the headline, so the card carries the
   // other three. "Total likes" is lifetime and only ever rises — labelled so it cannot be
@@ -67,7 +76,12 @@ const CARD_METRICS: Record<
   ],
 };
 
-const SPARK_KEY: Record<string, MetricKey> = { tiktok: "followers_count" };
+const SPARK_KEY: Record<string, MetricKey> = {
+  tiktok: "followers_count",
+  // Page views rather than the reach the other cards plot — a Page has no reach left to
+  // plot at all.
+  facebook: "profile_views",
+};
 
 // Platforms that publish no past data at all, so nothing can ever backfill: the series
 // begins the day the channel was connected and grows one sample at a time. Saying "still
@@ -293,9 +307,7 @@ export default function InsightsPage() {
                     <span className="font-medium">{channel.account_name}</span>
                     <span className="text-muted">
                       — {platformLabel(channel.platform)}{" "}
-                      {channel.platform === "facebook"
-                        ? "insights are not wired up yet"
-                        : "has no insights endpoint at all"}
+                      has no insights endpoint at all
                     </span>
                   </li>
                 ))}

@@ -210,6 +210,13 @@ class Config:
     # TikTok app credentials (per-install: each clone registers its OWN app — the audit,
     # the quotas and the terms all attach to the app, never to the person). The dashboard
     # runs the OAuth flow; the worker needs them too, to refresh the 24-hour access token.
+    # Facebook PAGE account-level insight metric names. Configurable for the same reason
+    # fb_post_insight_metrics is: Meta retires these without notice, and a live probe on
+    # 2026-08-23 found page_impressions, page_impressions_unique and page_fans already
+    # gone. When the next one dies, this is an .env edit rather than a release.
+    fb_account_metrics: str = (
+        "page_views_total,page_post_engagements,page_daily_follows_unique,page_video_views"
+    )
     tiktok_client_key: str = ""
     tiktok_client_secret: str = ""
     # Time-of-day band clock times (channel-local, "HH:MM"). See docs/design-tag-taxonomy.md.
@@ -251,6 +258,11 @@ class Config:
                 "THREADS_INSIGHT_METRICS", "views,likes,replies,reposts,quotes"
             ),
             threads_api_version=os.environ.get("THREADS_API_VERSION", "v1.0"),
+            fb_account_metrics=os.environ.get(
+                "FB_ACCOUNT_METRICS",
+                "page_views_total,page_post_engagements,page_daily_follows_unique,"
+                "page_video_views",
+            ),
             tiktok_client_key=os.environ.get("TIKTOK_CLIENT_KEY", ""),
             tiktok_client_secret=os.environ.get("TIKTOK_CLIENT_SECRET", ""),
             ig_account_series_metrics=os.environ.get(

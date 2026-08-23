@@ -61,6 +61,19 @@ COLUMN_MAP = {
     # deliberately unmapped rather than folded in, for the same reason worker/metrics.py
     # keeps them apart — summing them would inflate a number that means something else.
     "reposts": "shares",
+    # Facebook PAGE account-level names, verified against a live Page on 2026-08-23. The
+    # obvious ones — page_impressions, page_impressions_unique, page_fans — are RETIRED
+    # and answer "(#100) The value must be a valid insights metric", which is why there is
+    # no reach or impressions entry to map: a Page has neither at account level any more.
+    "page_views_total": "profile_views",
+    "page_post_engagements": "total_interactions",
+    "page_daily_follows_unique": "follows_gained",
+    "page_video_views": "views",
+    # Deliberately unmapped, left in raw_json: page_total_actions counts CTA-button
+    # clicks, which is not website_clicks; and page_follows' running-total-versus-daily
+    # semantics could not be confirmed against a Page that has no data yet. Folding
+    # either into a column would invent an equivalence, the way "quotes" is kept out
+    # above.
 }
 
 # Every column the upsert may write. The upsert builds SQL from this whitelist rather than
@@ -325,6 +338,64 @@ def sync_tiktok_account(conn, config, client, channel, now, budget, logger=None)
     return {"days": 1}
 
 
+def sync_facebook_account(conn, config, client, channel, now, budget, logger=None) -> dict:
+    """Facebook Page account metrics.
+
+    Shaped by what a live Page actually accepts (probed 2026-08-23), not by the docs. The
+    metrics everyone reaches for first — page_impressions, page_impressions_unique,
+    page_fans — are RETIRED and answer "(#100) The value must be a valid insights metric",
+    so:
+
+      * the follower count comes from the NODE (followers_count), not from insights;
+      * there is no reach and no impressions at Page level at all, and those columns stay
+        NULL rather than being filled with something adjacent.
+
+    The metric names are config, not constants, because Meta retires them without notice
+    and the next death should be an .env edit rather than a release.
+    """
+    page_id, token = channel["remote_account_id"], channel["access_token"]
+    fetched_at = now.isoformat()
+    today = day_of(now)
+    days = 0
+
+    # 1. Node totals. A Page with no insights data at all still has a follower count, so
+    #    this runs first and independently — a card showing followers beats an empty card.
+    if not budget.exhausted(client):
+        budget.spend()
+        totals = client.get_page_totals(page_id, token)
+        followers = totals.get("followers_count")
+        if followers is None:
+            followers = totals.get("fan_count")
+        if followers is not None:
+            upsert_day(conn, channel["id"], today, {"followers_count": followers},
+                       totals, fetched_at)
+            days = 1
+
+    # 2. Day-by-day insights for the recent window. The upsert makes re-covering the same
+    #    days free, so there is no need to track where the last run stopped.
+    metrics = _split(config.fb_account_metrics)
+    if metrics and not budget.exhausted(client):
+        budget.spend()
+        window = timedelta(days=config.account_series_window_days)
+        series = client.get_account_insights_series(
+            page_id, token, metrics,
+            since=str(int((now - window).timestamp())),
+            until=str(int(now.timestamp())),
+        )
+        per_day: dict[str, dict] = {}
+        for name, points in series.items():
+            for end_time, value in points:
+                day = _day_from_end_time(end_time)
+                if day is None or value is None:
+                    continue
+                per_day.setdefault(day, {})[name] = value
+        for day, raw in sorted(per_day.items()):
+            upsert_day(conn, channel["id"], day, _to_columns(raw), raw, fetched_at)
+        days = max(days, len(per_day))
+
+    return {"days": days}
+
+
 def sync_demographics(conn, config, client, channel, now, budget, logger=None) -> dict:
     """Audience breakdowns. One call per (audience, breakdown) pair — twelve on Instagram,
     which is why this runs daily rather than every cycle.
@@ -395,7 +466,9 @@ _AUDIENCE_OF = {
 _ACCOUNT_SYNCS = {
     "instagram": sync_instagram_account,
     "threads": sync_threads_account,
-    "facebook": None,   # phase 5
+    # Node followers + the insight names that survive. See sync_facebook_account for why
+    # reach and impressions are absent rather than unimplemented.
+    "facebook": sync_facebook_account,
     "discord": None,
     "telegram": None,
     # Four counters, sampled daily — TikTok publishes no series of its own. Needs the
@@ -431,8 +504,13 @@ def run_account_metrics(conn, config, client=None, now=None, logger=None,
                     forced):
             continue
 
-        client_obj = pick_client(channel["platform"])
         try:
+            # Inside the guard, not above it: building the client can itself raise
+            # (UnknownPlatform when a channel names a platform whose registries
+            # disagree), and this loop's whole contract is that one bad channel must not
+            # stop the rest. It sat outside for as long as every platform with a sync
+            # also had a client — which stopped being true the moment Facebook got one.
+            client_obj = pick_client(channel["platform"])
             sync(conn, config, client_obj, channel, now, budget, logger=logger)
             # Demographics move slowly and cost twelve calls, so they keep their own,
             # slower clock rather than riding this one.
@@ -453,8 +531,16 @@ def run_account_metrics(conn, config, client=None, now=None, logger=None,
         except Exception as exc:  # noqa: BLE001 — one bad channel must not stop the rest
             conn.rollback()
             message = redact(str(exc))
+            # insights_refresh_requested is cleared HERE too, not only on success. A
+            # channel whose sync fails every time — a revoked scope, say — otherwise stays
+            # flagged forever and the dashboard reads "Queued — the worker picks this up
+            # on its next cycle" permanently, while the real problem sits in the error
+            # line right beside it. One attempt per click: the error is shown, and asking
+            # again is a decision for the person reading it. Same rule avatars.py already
+            # states for avatar_refresh_requested.
             conn.execute(
-                "UPDATE channels SET insights_error = ? WHERE id = ?",
+                "UPDATE channels SET insights_error = ?, insights_refresh_requested = 0 "
+                "WHERE id = ?",
                 (message[:500], channel["id"]),
             )
             conn.commit()

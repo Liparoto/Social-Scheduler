@@ -398,3 +398,40 @@ def test_a_synced_channel_waits_for_its_interval(conn, config):
     later = NOW + timedelta(hours=config.insights_sync_interval_hours + 1)
     assert run_account_metrics(conn, config, now=later,
                                client_for=lambda p: FakeAccountClient()) == 1
+
+
+def test_a_failing_sync_clears_the_refresh_flag_rather_than_wedging_it(conn, config):
+    """A channel whose sync always fails (a revoked scope, for instance) must not stay
+    flagged forever — the dashboard would read 'Queued, picked up next cycle' permanently
+    while the actual error sat in the line next to it. One attempt per click; asking again
+    is the reader's decision. Mirrors the rule avatars.py already follows."""
+    from datetime import datetime, timezone
+
+    from worker.account_metrics import run_account_metrics
+
+    conn.execute(
+        "INSERT INTO channels (platform, account_name, timezone, remote_account_id, "
+        "access_token, insights_refresh_requested) "
+        "VALUES ('instagram', 'ig', 'UTC', 'IG1', 'tok', 1)"
+    )
+    conn.commit()
+    cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    class Boom:
+        """Fails on whatever the sync reaches for. WHICH call breaks is not the point —
+        the contract is that any failure records an error and releases the flag."""
+
+        def __getattr__(self, name):
+            def _raise(*a, **kw):
+                raise RuntimeError("scope_not_authorized")
+            return _raise
+
+    run_account_metrics(conn, config, Boom(), datetime(2026, 8, 23, tzinfo=timezone.utc))
+
+    row = conn.execute(
+        "SELECT insights_refresh_requested, insights_error FROM channels WHERE id = ?",
+        (cid,),
+    ).fetchone()
+    assert row["insights_refresh_requested"] == 0, "the queued flag wedged on failure"
+    # An error is recorded, so the dashboard shows a reason rather than a silent "Queued".
+    assert row["insights_error"], "a failure left no explanation behind"

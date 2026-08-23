@@ -635,6 +635,19 @@ class GraphClient:
         """
         return self._get(page_id, {"fields": "id,name", "access_token": token})
 
+    def get_page_totals(self, page_id: str, token: str) -> dict:
+        """Point-in-time Page counters from the node itself.
+
+        Separate from the /insights edge on purpose: probing the live Page on 2026-08-23
+        showed page_fans, page_impressions and page_impressions_unique are all RETIRED
+        (Meta answers "(#100) The value must be a valid insights metric"), while these
+        node fields still work. So the follower count has to come from here, not from
+        insights the way Instagram's does.
+        """
+        return self._get(
+            page_id, {"fields": "followers_count,fan_count", "access_token": token}
+        )
+
     def get_page_post_insights(self, post_id: str, token: str, metrics: list[str]) -> dict:
         """Insight metrics for a Page post. Returns {metric_name: value}.
 
