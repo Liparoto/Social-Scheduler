@@ -68,3 +68,39 @@ def test_multiple_credential_shapes_in_one_string_are_all_redacted():
     assert "access_token=<redacted>" in out
     assert "/bot<redacted>/sendMessage" in out
     assert "webhooks/5555/<redacted>" in out
+
+
+# ---- TikTok ---------------------------------------------------------------------------
+# TikTok's tokens are prefixed (act.* / rft.*) and travel in an Authorization header or a
+# form body rather than the URL, so they leak through a different door than Meta's — but
+# the same door an exception message opens.
+
+
+def test_redacts_a_tiktok_access_token_in_a_bearer_header():
+    out = redact("headers={'Authorization': 'Bearer act.abc123DEF456ghi'}")
+    assert "act.abc123DEF456ghi" not in out
+    assert "<redacted>" in out
+
+
+def test_redacts_a_tiktok_refresh_token_in_a_form_body():
+    out = redact("data={'grant_type': 'refresh_token', 'refresh_token': 'rft.xyz789GHI012'}")
+    assert "rft.xyz789GHI012" not in out
+
+
+def test_redacts_a_tiktok_client_secret_by_key_name():
+    out = redact("client_secret=aBcDeF123456 &grant_type=refresh_token")
+    assert "aBcDeF123456" not in out
+
+
+def test_tiktok_redaction_keeps_the_surrounding_sentence_readable():
+    out = redact(
+        "POST /v2/oauth/token/ -> 200: invalid_grant: token rft.7hK2mQ9xTz is revoked"
+    )
+    assert "invalid_grant" in out
+    assert "rft.7hK2mQ9xTz" not in out
+
+
+def test_tiktok_patterns_do_not_eat_ordinary_prose():
+    # "act." at the start of a word is common English ("act. Then..."); the pattern must
+    # require a token-shaped body, not just the prefix.
+    assert redact("the worker will act. Then it stops.") == "the worker will act. Then it stops."
