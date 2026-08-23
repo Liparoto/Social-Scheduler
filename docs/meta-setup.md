@@ -46,18 +46,36 @@ META_GRAPH_BASE=https://graph.instagram.com
 ```
 
 ## Step 3 — Turn the short-lived token into a 60-day token
-The Step 2 token expires in ~1 hour. Exchange it (uses your app secret — server-side only):
+**The Step 2 token expires in about an hour.** Nothing warns you — the channel will look
+connected and work all afternoon, then stop. Run this from the repo root:
+
+```
+.venv/bin/python -m worker.exchange_token
+```
+
+Choose **Instagram**, paste the Step 2 token when asked, and it does the rest: exchanges
+for the 60-day token, confirms which account it belongs to, and offers to save it straight
+onto a channel. Your pasted token stays hidden — it never appears on screen or in your
+shell history — and it uses the app id/secret already in `.env`, so no secret goes in a URL.
+
+If no Instagram channel exists yet, it prints your **IG user id** and tells you to add the
+channel first (Step 4), then re-run to store the token.
+
+> **This token still expires — in 60 days.** Re-run the same command before then, pasting
+> the current token (it must be at least 24 hours old to refresh). `--check`, below, tells
+> you where you stand.
+
+<details><summary>Doing it by hand instead</summary>
+
 ```
 curl -s "https://graph.instagram.com/access_token\
 ?grant_type=ig_exchange_token\
 &client_secret=YOUR_APP_SECRET\
 &access_token=SHORT_LIVED_TOKEN"
 ```
-The returned `access_token` is valid **60 days**. Refresh before expiry with
-`ig_refresh_token` (see reference.md). Use this long-lived token in Step 4.
-
-> Ask me and I can add a `python -m worker.exchange_token` helper that does this for you
-> using the app id/secret already in `.env`.
+The returned `access_token` is valid 60 days; refresh with `ig_refresh_token`
+(see reference.md). Paste it into the dashboard yourself.
+</details>
 
 ## Step 4 — Add the channel in the dashboard
 1. Start the dashboard: `cd dashboard && npm run dev` → open the printed URL.
@@ -133,6 +151,42 @@ If it fails, the publication shows **Failed** with the exact Graph API error —
 
 ---
 
+## When a token misbehaves
+
+Start here, always — before changing any setting:
+
+```
+.venv/bin/python -m worker.exchange_token --check
+```
+
+It reports what every stored token actually *is* — kind, permissions, expiry — and changes
+nothing. Meta's publish errors name none of that, so guessing from the error alone sends you
+in circles.
+
+```
+[1] Liparoto (instagram): reachable as @liparoto (expiry not reported)
+[4] Liparoto (facebook):  PAGE token, never, pages_manage_posts=yes
+```
+
+**`(#200) Permissions error` on a Facebook publish** has exactly two causes, and `--check`
+tells you which:
+
+- **`pages_manage_posts=NO`** — the token lacks the publishing permission. Adding it to the
+  app afterwards does nothing to a token already issued; you must add it to the *"Manage
+  everything on your Page"* use case, then generate a **new** token (steps 2–4 above).
+- **An expiry date instead of `never`** — the token was copied from `me/accounts` without
+  the extension step. Re-run `worker.exchange_token`.
+
+Two things that will *not* tell you a token is broken, so don't rely on them: `preflight`
+passes on a read-only token (reads work, publishing doesn't), and the dashboard shows the
+channel as connected either way.
+
+Instagram is the exception — Meta's `debug_token` refuses Instagram-Login tokens
+(`(#2) Service temporarily unavailable`), so `--check` proves reachability instead and
+cannot report the expiry. **Track the 60-day window yourself.**
+
+---
+
 ## Adding a Facebook Page
 
 Publishing to your own Page works with your app in **Development mode** — no App Review —
@@ -157,23 +211,54 @@ as long as you're an **admin** on both the app and the Page. Same arrangement as
    `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`. When the approval popup
    asks which Pages to allow, **select every Page you want to manage** — Pages you leave
    unticked simply won't appear later.
-4. **Get your Page id.** Run `me/accounts` in the Explorer. Each entry is a Page you administer,
-   with its `id`, `name`, and a Page `access_token`. Note the `id` of the Page you want.
-   An empty `{"data": []}` means you administer no Pages — create one first (see the note below).
-   Check `tasks` includes `CREATE_CONTENT` and `MANAGE`; that's what proves you can publish.
-5. **Make the token permanent.** The Page token from step 4 expires in about an hour, because it
-   inherits the lifetime of the short-lived user token behind it. To get one that doesn't expire:
-   - Copy the token, open **developers.facebook.com/tools/debug/accesstoken/**, paste, **Debug**
-   - Click **Extend Access Token** → this returns a long-lived *user* token
-   - Put that extended token in the Explorer and run `me/accounts` **again**
+4. **Get the permanent Page token.** From the repo root:
 
-   The Page `access_token` in *this* result is permanent. (This route avoids ever putting your
-   app secret in a browser URL, which the `fb_exchange_token` method requires.)
-6. **Add the channel.** In the dashboard: **Channels → Add channel**, platform
-   **Facebook Page**, put the Page id in the id field and the permanent Page token in the
-   token field. Paste the token straight into the dashboard — it's stored only in this install's
-   local database.
-7. **Verify without posting.** Run `python3 -m worker.preflight` — it checks credentials and
+   ```
+   .venv/bin/python -m worker.exchange_token
+   ```
+
+   Choose **Facebook Page**, then paste the **user token** sitting in the Explorer's
+   *Access Token* box — not a Page token, and nothing you've already exchanged. The helper
+   extends it, lists the Pages you administer, checks the one you pick can actually publish,
+   and stores the result. It prints your Page id if no channel exists yet.
+
+   **Do not shortcut this by copying a token out of `me/accounts` directly.** That token
+   inherits the ~1 hour lifetime of the short-lived user token behind it, and looks
+   identical to a permanent one. This is the single most common way this setup goes wrong:
+   everything works, and then it doesn't. The helper refuses to save such a token.
+
+   Before saving it verifies four things, each a real failure that otherwise surfaces hours
+   later as an unexplained `(#200)`:
+
+   | Check | Why |
+   |---|---|
+   | `type` is `PAGE` | a user token reads your Page fine and never publishes |
+   | `pages_manage_posts` present | its absence *is* the `(#200) Permissions error` |
+   | `expires_at` is `0` | catches the short-lived-token trap above |
+   | Page matches the channel | stops Page B's token overwriting Page A's channel |
+
+   If any check fails it stops and changes nothing, so a bad token can't replace a working one.
+
+5. **Add the channel** (if you haven't). Dashboard → **Channels → Add channel**, platform
+   **Facebook Page**, Page id in the id field. Re-run the command above to store the token.
+   It's kept only in this install's local database.
+
+<details><summary>Doing it by hand instead</summary>
+
+Run `me/accounts` in the Explorer and note your Page's `id` — check `tasks` includes
+`CREATE_CONTENT` and `MANAGE`, which is what proves you can publish. An empty
+`{"data": []}` means you administer no Pages; create one first (see the note below).
+
+Then, because that Page token expires in ~1 hour: copy it → open
+**developers.facebook.com/tools/debug/accesstoken/** → paste → **Debug** →
+**Extend Access Token** (this returns a long-lived *user* token) → put that extended token
+back in the Explorer and run `me/accounts` **again**. The Page `access_token` in *this*
+result is permanent. Paste it into the dashboard.
+
+The round trip exists only to keep your app secret out of the browser URL bar, which the
+`fb_exchange_token` method needs. The helper does the same exchange locally instead.
+</details>
+6. **Verify without posting.** Run `python3 -m worker.preflight` — it checks credentials and
    publishes nothing. For a Facebook channel this is a plain Page read (Pages have no
    publish-quota endpoint like Instagram's), so a `✓` here means the token and Page id work.
    Then schedule a post with `DRY_RUN=1` and confirm the worker logs the plan. Only then set

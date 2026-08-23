@@ -7,6 +7,11 @@ and to make **content recycling** (re-publishing good content over time) systema
 It is an **internal tool, not a product**. No paid SaaS, nothing cloud-hosted, no accounts
 system. The only external dependency is Meta's own developer platform.
 
+> **Setting this up for the first time?** Read **[`docs/getting-started.md`](docs/getting-started.md)**
+> instead of this page. It assumes no programming background, covers Mac and Windows, and
+> walks the whole thing end to end. The rest of this readme is reference for people already
+> running it.
+
 ## Independent installs (multi-tenant by cloning)
 Every clone of this repo is a **completely separate install** — its own `.env`, its own SQLite
 database, and its own Meta app credentials + per-channel tokens. There is no shared backend and
