@@ -16,12 +16,13 @@ download, the auto-fill timestamp fix — both now recorded at the end of this f
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | TikTok: probe R1, then the watcher + metrics | P1 | `half-day` after the probe | Medium | Blocked on a real delivery from the owner's own TikTok app. See "TikTok adapter" below — the code is written and merged up to the handoff; only the two pieces that depend on an unverified assumption are held back. |
-| 2 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | Facebook Page post-content sync (`media_sync`) | P1 | `half-day` | Medium | Owner asked 2026-08-23. Instagram and Threads mirror the account's own posts into `remote_media`, so the Library and Insights cover everything on the account rather than only what this tool published. `media_sync._ADAPTERS["facebook"]` is still `None`. A Page IS now connected, so this is unblocked — and the metric names must be probed live first, exactly as the account-level ones were. |
+| 2 | TikTok post-content sync (`media_sync`) | P3 | `half-day` | Medium | Same gap, same table. Needs paged `/v2/video/list/` calls. Lower priority: a new account with one video has nothing to mirror yet. |
+| 3 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
 
 ---
 
-### TikTok adapter — shipped 2026-08-23 up to the handoff, deliberately not past it
+### TikTok adapter — shipped 2026-08-23, COMPLETE and verified on the owner's account
 
 **What it does.** TikTok is a channel like any other: compose a video, tick TikTok alongside
 Instagram, and at the scheduled time the worker uploads it to the creator's TikTok inbox.
@@ -41,13 +42,32 @@ You tap the notification, write the caption, publish. Auto-fill treats it normal
 **The audit is per APP, not per person.** A second install registers its own TikTok app and
 needs no audit for inbox delivery. Credentials are never shared between clones.
 
-**What is held back and why.** The delivery watcher (does a delivered video ever go live?)
-and TikTok post metrics both rest on one unverified assumption, recorded as **R1** in the
-spec: that an inbox `publish_id` eventually reports `PUBLISH_COMPLETE` with a
-`publicaly_available_post_id` once the creator publishes it in the app. TikTok's status
-docs make that likely; they do not guarantee it. One real delivery answers it. Building on
-it first would risk a week's work on a coin flip — so `delivery_state` already records
-`inbox`/`published`/`gave_up`, and only the code that *fills in* `published` is waiting.
+**R1 answered, and it corrected the design.** Publication 68 was delivered, published from
+the phone, and probed. `PUBLISH_COMPLETE` arrives the moment the creator publishes and is
+independent of visibility; the public post id is a METRICS key TikTok returns only for a
+public, moderated video. The spec had conflated them — promoting on the post id would have
+stranded a video published to Friends Only reading "waiting in your inbox" with no state it
+could ever leave. The watcher promotes on status and records the id separately, and keeps
+watching a published row that has no id yet, since a creator can go public later.
+
+Its arrival also proved the sandbox does NOT pin inbox uploads to private — the id only
+exists for a public video.
+
+**Now working end to end, verified live:** deliver → detect publication → post metrics
+(views/likes/comments/shares, no reach or saves) → account stats (followers, following,
+videos, lifetime likes) → profile photo.
+
+**Four API traps cost a round trip each and are recorded in `reference.md`:** PKCE uses HEX
+rather than RFC 7636's base64url and fails only at the token exchange; the OAuth endpoint
+reports errors flat while every other v2 endpoint nests them; sandboxes have their own
+client key and a target-user allowlist; Desktop app type is what permits a localhost
+redirect.
+
+**Bugs this work exposed, all pre-existing:** `run_account_metrics` built its client
+outside the per-channel guard, so one bad channel killed the whole pass; a failing sync
+never cleared `insights_refresh_requested`, so the card read "Queued" forever with the real
+error beside it; and Reconnect existed only inside "Add channel", which hid the only way
+back for a platform whose refresh token expires yearly.
 
 **Found by looking at a real browser, not by the tests:** the queue rendered a green
 **Posted** pill next to the honest "In your TikTok inbox" line — the exact claim the design
@@ -123,9 +143,17 @@ boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: i
       type errors. Checked and found already correct: `autofill.py` ranks on reach+saves and
       takes MAX across group members *because* Threads scores 0 there — see line 347.
 
-**Blocked on something external (not schedulable):**
-- Facebook Pages adapter — real-post verification. Written, never proved live; no Page connected.
-- Facebook Pages insights — same blocker; metric names must be probed, never guessed.
+**Facebook Pages — unblocked 2026-08-23, a Page is now connected.**
+- Account insights: **shipped.** Built from a live probe, not the docs — and the docs were
+  wrong in a way that would have shipped broken. `page_impressions`,
+  `page_impressions_unique`, `page_fans`, `page_fan_adds`, `page_fan_removes` and
+  `page_engaged_users` are ALL retired ("(#100) The value must be a valid insights
+  metric"). So a Page has **no reach and no impressions at account level at all**, and the
+  follower count comes from the node rather than from insights. Names live in
+  `FB_ACCOUNT_METRICS` so the next retirement is an `.env` edit.
+- Real-post verification: still open. The adapter was written and never proved live; one
+  publication now exists on the Page (channel 4) but has not been checked end to end.
+- Post-content sync: open, item 1 above.
 
 ---
 
