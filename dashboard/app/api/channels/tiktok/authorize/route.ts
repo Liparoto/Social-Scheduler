@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { TIKTOK_SCOPES, authorizeUrl, challengeFor, createVerifier } from "@/lib/tiktok-oauth";
 import { randomBytes } from "node:crypto";
-import { config } from "@/lib/config";
+import { tiktokCredentials } from "@/lib/config";
 
 export const runtime = "nodejs";
 
@@ -17,8 +17,9 @@ export const runtime = "nodejs";
  * docs/tiktok-setup.md names the exact string to register.
  */
 export function GET(req: NextRequest) {
-  // config, not process.env — see lib/config.ts: the .env lives at the repo root.
-  const clientKey = config.tiktokClientKey;
+  // Read live, not from a snapshot taken at import: swapping a production key for a
+  // sandbox one is exactly when this route gets used, and a cached key fails silently.
+  const { clientKey } = tiktokCredentials();
   if (!clientKey) {
     // Fail with an explanation rather than sending a malformed URL to TikTok, which
     // answers with an opaque error page that says nothing about .env.

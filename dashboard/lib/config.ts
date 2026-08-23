@@ -71,15 +71,6 @@ export const config = {
   assetStorageDir: resolveRepoPath(get("ASSET_STORAGE_DIR", "data/assets")),
   publicAssetBaseUrl: get("PUBLIC_ASSET_BASE_URL", ""),
   defaultTimezone: get("DEFAULT_TIMEZONE", "UTC"),
-  // TikTok OAuth app credentials. These MUST come through get() rather than
-  // process.env: Next auto-loads only dashboard/.env, and this install's .env lives at
-  // the repo root so the Python worker can share it. Reading process.env directly leaves
-  // them undefined no matter how many times the server is restarted.
-  //
-  // Server-only, and this module is marked "server-only" — the client secret must never
-  // reach the browser.
-  tiktokClientKey: get("TIKTOK_CLIENT_KEY", ""),
-  tiktokClientSecret: get("TIKTOK_CLIENT_SECRET", ""),
   videoConverter: resolveVideoConverter(),
   videoConvertTimeoutMs:
     (Number.isFinite(videoConvertTimeoutSec) && videoConvertTimeoutSec > 0
@@ -114,6 +105,31 @@ function liveEnv(): Record<string, string> {
     liveEnvCache = { data: loadRootEnv(), loadedAt: now };
   }
   return liveEnvCache.data;
+}
+
+/**
+ * TikTok OAuth app credentials, read LIVE from the repo-root .env.
+ *
+ * Live rather than the frozen `fileEnv` snapshot, for a reason paid for the hard way:
+ * these get swapped (production key → sandbox key, or rotated) while the server is
+ * running, and a cached value fails in the worst possible way — the Connect button still
+ * works, sends the OLD key, and TikTok answers with a bare "client_key" error that says
+ * nothing about staleness. A restart would have fixed it; nothing on screen would have
+ * told you that.
+ *
+ * Connecting an account is a rare, interactive action, so re-reading a small file costs
+ * nothing. Same pattern as the DRY_RUN/KILL_SWITCH switches below, and for the same
+ * reason: a value that changes underfoot must not be captured at import.
+ *
+ * Server-only (this module is marked "server-only") — the secret must never reach the
+ * browser.
+ */
+export function tiktokCredentials(): { clientKey: string; clientSecret: string } {
+  const env = liveEnv();
+  return {
+    clientKey: process.env.TIKTOK_CLIENT_KEY ?? env.TIKTOK_CLIENT_KEY ?? "",
+    clientSecret: process.env.TIKTOK_CLIENT_SECRET ?? env.TIKTOK_CLIENT_SECRET ?? "",
+  };
 }
 
 // Same semantics as worker/config.py's _as_bool: an explicit allow-list ("1", "true",

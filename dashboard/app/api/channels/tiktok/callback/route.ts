@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createChannel } from "@/lib/queries";
-import { config } from "@/lib/config";
+import { config, tiktokCredentials } from "@/lib/config";
 
 export const runtime = "nodejs";
 
@@ -28,10 +28,10 @@ function back(req: NextRequest, params: Record<string, string>) {
  * browser anything to post.
  */
 export async function GET(req: NextRequest) {
-  // config, not process.env — see lib/config.ts: the .env lives at the repo root, so
-  // process.env never carries these however often the server restarts.
-  const clientKey = config.tiktokClientKey;
-  const clientSecret = config.tiktokClientSecret;
+  // Read live, for the same reason as the authorize route: the key that started the
+  // flow must be the key that finishes it, or the exchange fails after the user has
+  // already approved.
+  const { clientKey, clientSecret } = tiktokCredentials();
   if (!clientKey || !clientSecret) {
     return back(req, { tiktok_error: "TIKTOK_CLIENT_KEY/SECRET are not set in .env." });
   }
