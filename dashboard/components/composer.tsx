@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { channelColor, videoPreviewSrc } from "@/lib/format";
+import { channelColor, formatParts, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { captionsForPlatform } from "@/lib/caption-limits";
@@ -58,14 +58,16 @@ function formatWallClock(value: string): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
   if (!m) return null;
   const [, y, mo, d, h, mi] = m;
-  return new Intl.DateTimeFormat("en-US", {
+  // formatParts, not Intl directly: it pins the date/time connector so the server and
+  // the browser agree despite their different ICU versions. See lib/format.ts.
+  return formatParts(new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi)), {
     timeZone: "UTC",
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi)));
+  });
 }
 
 export function Composer({

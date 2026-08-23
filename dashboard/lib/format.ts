@@ -1,6 +1,39 @@
 // Display helpers. All timestamps are stored UTC; we render them in a channel's
 // own IANA timezone (per-channel timezone is a core requirement).
 
+/**
+ * Format a date through Intl, then pin the punctuation Intl itself keeps changing.
+ *
+ * Node and the browser ship DIFFERENT ICU/CLDR versions, and CLDR has twice changed how
+ * a date is joined to a time. The same call therefore renders differently on the two
+ * sides of a hydration boundary, and React reacts by throwing the server HTML away and
+ * re-rendering the entire tree on the client:
+ *
+ *   1. The connector flipped from ", " to " at "  — "Aug 23, 6:00 PM" vs "Aug 23 at 6:00 PM".
+ *   2. The space before AM/PM became U+202F (narrow no-break space) — which looks
+ *      IDENTICAL in the error message React prints, so the diff reads as two matching
+ *      strings and tells you nothing.
+ *
+ * Rebuilding from formatToParts and normalising the literals pins both, so the output is
+ * byte-identical whatever ICU either end happens to have — including HTML Next cached
+ * under a previously-installed Node, which is a third way the two can disagree. Only the
+ * literals are touched; the locale-, calendar-, and timezone-aware values still come
+ * straight from Intl.
+ */
+export function formatParts(
+  d: Date,
+  opts: Intl.DateTimeFormatOptions
+): string {
+  const pin = (literal: string) =>
+    literal
+      .replace(/\s+at\s+/i, ", ") // CLDR's date/time connector
+      .replace(/[\u00a0\u202f\u2009]/g, " "); // any flavour of no-break/thin space
+  return new Intl.DateTimeFormat("en-US", opts)
+    .formatToParts(d)
+    .map((p) => (p.type === "literal" ? pin(p.value) : p.value))
+    .join("");
+}
+
 export function formatInTz(
   iso: string | null,
   timeZone: string,
@@ -9,14 +42,14 @@ export function formatInTz(
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", {
+  return formatParts(d, {
     timeZone,
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
     ...opts,
-  }).format(d);
+  });
 }
 
 export function tzAbbrev(timeZone: string): string {
