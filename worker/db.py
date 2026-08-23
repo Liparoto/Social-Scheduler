@@ -175,6 +175,21 @@ def update_publication(conn: sqlite3.Connection, publication_id: int, **fields) 
     conn.commit()
 
 
+def update_channel(conn: sqlite3.Connection, channel_id: int, **fields) -> None:
+    """Update arbitrary channel columns in one statement.
+
+    Exists because TikTok's token refresh has to write four columns atomically — an access
+    token stored without its rotated refresh token leaves the channel working now and
+    locked out at the next refresh.
+    """
+    if not fields:
+        return
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [channel_id]
+    conn.execute(f"UPDATE channels SET {cols} WHERE id = ?", values)
+    conn.commit()
+
+
 def update_post(conn: sqlite3.Connection, post_id: int, **fields) -> None:
     if not fields:
         return

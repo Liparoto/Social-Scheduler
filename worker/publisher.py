@@ -1113,6 +1113,24 @@ def publish_one(
     token = channel["access_token"]
     ig = plan["account_id"]
 
+    # 2b. TikTok's access token expires every 24 hours. Refreshed HERE, in the publish
+    #     path, rather than in a background job: a token refreshed by some other loop an
+    #     hour ago can still die between then and the last byte of a chunked upload.
+    if channel["platform"] == "tiktok":
+        from .tiktok_tokens import TikTokAuthRevoked, refresh_channel_token
+
+        try:
+            channel = refresh_channel_token(conn, config, client, channel, now, logger=logger)
+            token = channel["access_token"]
+        except TikTokAuthRevoked as exc:
+            # Terminal. No amount of retrying re-authorises an account, and a quiet retry
+            # loop would bury the one instruction the owner needs: reconnect the channel.
+            log(f"tiktok auth revoked: {exc}")
+            return _mark_failure(conn, pub, config, now, str(exc), terminal=True)
+        except Exception as exc:  # noqa: BLE001 — transient refresh failure; retry with backoff
+            log(f"tiktok token refresh failed: {exc}")
+            return _mark_failure(conn, pub, config, now, f"token refresh: {exc}", terminal=False)
+
     # 3. Rate-limit gate: read Meta's REAL quota, cache it, refuse if exhausted.
     #    Only platforms _QUOTA_GATED marks True — Facebook Pages expose no
     #    content_publishing_limit endpoint, and inventing a hardcoded number here would

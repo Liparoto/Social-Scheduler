@@ -242,3 +242,69 @@ def test_dry_run_touches_tiktok_not_at_all(
     # A dry run leaves the delivery state alone — it delivered nothing.
     assert row["delivery_state"] is None
     assert row["remote_post_id"] == "DRYRUN"
+
+
+# ---- Token refresh, wired into the publish path ---------------------------------------
+
+
+def test_publishing_refreshes_an_expiring_token_first(conn, config, make_publication):
+    """The refresh has to happen INSIDE the publish path, not in a background job: a token
+    refreshed an hour ago by some other loop can still expire between then and the upload."""
+    import dataclasses
+
+    from worker.tests.conftest import FakeTikTokClient
+
+    client = FakeTikTokClient()
+    tiktok_config = dataclasses.replace(
+        config, tiktok_client_key="k", tiktok_client_secret="s"
+    )
+    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+                           media_kind="video", public_url=None)
+    _write_local_file(config, conn, pub["post_id"])
+    # Push the token to the edge of expiry.
+    conn.execute(
+        "UPDATE channels SET token_expires_at = ? WHERE id = ?",
+        ("2020-01-01T00:00:00+00:00", pub["channel_id"]),
+    )
+    conn.commit()
+
+    publish_one(conn, pub, tiktok_config, client, dry_run=False, sleep_fn=lambda _s: None)
+
+    kinds = [c[0] for c in client.calls]
+    assert kinds[0] == "tt_refresh", f"expected a refresh before anything else, got {kinds}"
+    stored = conn.execute(
+        "SELECT access_token FROM channels WHERE id = ?", (pub["channel_id"],)
+    ).fetchone()
+    assert stored["access_token"] == "act.REFRESHED"
+
+
+def test_a_revoked_authorisation_fails_terminally_and_says_reconnect(
+    conn, config, make_publication
+):
+    import dataclasses
+
+    from worker.tests.conftest import FakeTikTokClient
+
+    client = FakeTikTokClient()
+    tiktok_config = dataclasses.replace(
+        config, tiktok_client_key="k", tiktok_client_secret="s"
+    )
+    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+                           media_kind="video", public_url=None)
+    _write_local_file(config, conn, pub["post_id"])
+    # No refresh token and an expired access token: only a human can fix this.
+    conn.execute(
+        "UPDATE channels SET token_expires_at = ?, refresh_token = NULL WHERE id = ?",
+        ("2020-01-01T00:00:00+00:00", pub["channel_id"]),
+    )
+    conn.commit()
+
+    publish_one(conn, pub, tiktok_config, client, dry_run=False, sleep_fn=lambda _s: None)
+
+    row = conn.execute(
+        "SELECT status, next_retry_at, last_error FROM publications WHERE id = ?",
+        (pub["id"],),
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert row["next_retry_at"] is None      # retrying cannot reconnect an account
+    assert "reconnect" in row["last_error"].lower()
