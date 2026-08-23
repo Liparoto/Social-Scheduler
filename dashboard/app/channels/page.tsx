@@ -8,6 +8,7 @@ import { ChannelToggle } from "@/components/channel-toggles";
 import { ChannelCredentials } from "@/components/channel-credentials";
 import { ChannelAvatarRefresh } from "@/components/channel-avatar-refresh";
 import { ChannelColor } from "@/components/channel-color";
+import { ChannelName } from "@/components/channel-name";
 import { ChannelTimezone } from "@/components/channel-timezone";
 import { AutofillConfig } from "@/components/autofill-config";
 import { ChannelGroups } from "@/components/channel-groups";
@@ -186,6 +187,7 @@ export default async function ChannelsPage({
                   </p>
                 )}
 
+                <ChannelName channelId={c.id} accountName={c.account_name} />
                 <ChannelColor
                   channelId={c.id}
                   platform={c.platform}

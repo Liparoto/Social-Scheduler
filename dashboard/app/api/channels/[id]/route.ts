@@ -30,7 +30,15 @@ export async function PATCH(
     );
   }
   const fields: Record<string, unknown> = {};
-  if (typeof body.account_name === "string") fields.account_name = body.account_name.trim();
+  if (typeof body.account_name === "string") {
+    const name = body.account_name.trim();
+    // "" satisfies the column's NOT NULL and then renders as a blank chip with nothing
+    // left to click, so the only way back would be SQL. Refuse it here.
+    if (!name) {
+      return NextResponse.json({ error: "Account name can't be empty." }, { status: 400 });
+    }
+    fields.account_name = name;
+  }
   if ("business_label" in body) fields.business_label = body.business_label || null;
   // `timezone` is intentionally NOT accepted here — it goes through
   // POST /api/channels/[id]/timezone, which also rebases the pending queue.
