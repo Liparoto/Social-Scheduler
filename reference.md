@@ -747,3 +747,49 @@ for a Pacific account and is silently wrong east of Greenwich.
 Also confirmed: with no `since`/`until` at all, the total envelope returns a MULTI-day
 window (reach 208 against a best single day of 189), so it must never be recorded as
 "today".
+
+
+---
+
+## TikTok (Content Posting API + Display API)
+
+Verified against TikTok's documentation on 2026-08-22. Base URL `https://open.tiktokapis.com`;
+authorisation happens at `https://www.tiktok.com/v2/auth/authorize/`.
+
+**The body is the success signal.** Every response carries an `error` object and a rejection
+arrives as HTTP 200 with `error.code != "ok"`. Checking the status code alone reads a refusal
+as a success — the same trap Telegram's `ok` field sets.
+
+| Call | Shape |
+|---|---|
+| Authorize | `GET https://www.tiktok.com/v2/auth/authorize/` — `client_key`, `scope` (COMMA-separated), `response_type=code`, `redirect_uri`, `state`, `code_challenge`, `code_challenge_method=S256` |
+| Token / refresh | `POST /v2/oauth/token/`, **form-encoded** (not JSON). `grant_type=authorization_code` needs `code`+`code_verifier`; `grant_type=refresh_token` needs `refresh_token` |
+| Identity | `GET /v2/user/info/?fields=open_id,display_name`, `Authorization: Bearer` |
+| Inbox init | `POST /v2/post/publish/inbox/video/init/` with `source_info: {source: FILE_UPLOAD, video_size, chunk_size, total_chunk_count}` → `{publish_id, upload_url}`. **No `post_info`** — this endpoint has no caption field |
+| Upload | `PUT <upload_url>` per chunk, `Content-Range: bytes <start>-<end>/<total>` (end INCLUSIVE), `Content-Type: video/mp4` |
+| Status | `POST /v2/post/publish/status/fetch/` with `{publish_id}` → `status`, `fail_reason`, `publicaly_available_post_id` |
+| Metrics | `POST /v2/video/query/?fields=...` with `{filters: {video_ids: [...]}}`, max 20 ids, scope `video.list` |
+
+**Token lifetimes.** Access token 24 hours (`expires_in`), refresh token 365 days
+(`refresh_expires_in`) — and the refresh token **rotates**: each refresh returns a new one
+and invalidates the one sent. Storing it is mandatory.
+
+**Chunk rules.** 5 MB minimum, 64 MB maximum, 1–1000 chunks; the final chunk carries the
+remainder up to 128 MB. A whole file under 5 MB is a legal single chunk. A trailing chunk
+below the 5 MB floor is rejected, so a short remainder is folded into the last chunk — and
+the number of chunks sent must equal the `total_chunk_count` declared at init.
+
+**App type must be Desktop.** Desktop apps may use an `http://localhost:PORT` redirect URI
+and must use PKCE; Web apps are forced to HTTPS. This is what lets a localhost-only tool run
+the OAuth flow at all.
+
+**`publicaly_available_post_id`** is TikTok's own misspelling. It appears only once a post is
+public *and* through moderation, which is what makes its arrival proof the creator published
+the video.
+
+**Statuses:** `PROCESSING_UPLOAD` / `PROCESSING_DOWNLOAD` → `SEND_TO_USER_INBOX` (delivered —
+this integration's "done") → `PUBLISH_COMPLETE`; `FAILED` carries `fail_reason`.
+
+**Unaudited clients** may only post `SELF_ONLY`, and up to 5 users may post in any 24 hours.
+Inbox delivery is unaffected — the creator publishes it themselves, at whatever visibility
+they choose.
