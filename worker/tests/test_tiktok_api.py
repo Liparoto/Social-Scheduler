@@ -266,3 +266,86 @@ def test_flat_error_is_still_classified_as_revoked_where_it_should_be():
     with pytest.raises(TikTokAPIError) as exc:
         client.refresh_access_token("key", "secret", "rft.OLDVALUE")
     assert any(code in str(exc.value) for code in _REVOKED_CODES)
+
+
+def test_download_image_bytes_streams_and_caps(tmp_path):
+    """The avatar flow is fetch-URL then DOWNLOAD-BYTES, and every client in the registry
+    has to implement both halves. Testing only the URL half is how this shipped missing:
+    avatars.py calls client.download_image_bytes() by name on whatever client the registry
+    hands it, so a client without the method fails with AttributeError at runtime while
+    its own unit tests stay green."""
+
+    class StreamResponse:
+        ok = True
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_content(self, chunk_size=8192):
+            for i in range(0, len(self._payload), chunk_size):
+                yield self._payload[i:i + chunk_size]
+
+    class StreamSession:
+        def __init__(self, payload):
+            self.payload = payload
+            self.asked = None
+
+        def get(self, url, **kwargs):
+            self.asked = (url, kwargs)
+            return StreamResponse(self.payload)
+
+    session = StreamSession(b"JPEGDATA" * 100)
+    client = TikTokClient(session=session)
+
+    data = client.download_image_bytes("https://p16.tiktokcdn.com/avatar.jpeg")
+
+    assert data == b"JPEGDATA" * 100
+    assert session.asked[1]["stream"] is True, "must stream, not buffer an unbounded body"
+
+
+def test_download_image_bytes_refuses_an_oversized_body():
+    class Endless:
+        ok = True
+        status_code = 200
+        text = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_content(self, chunk_size=8192):
+            while True:
+                yield b"x" * chunk_size
+
+    class EndlessSession:
+        def get(self, url, **kwargs):
+            return Endless()
+
+    client = TikTokClient(session=EndlessSession())
+    with pytest.raises(TikTokAPIError):
+        client.download_image_bytes("https://p16.tiktokcdn.com/huge", max_bytes=1000)
+
+
+def test_every_client_the_registry_builds_can_download_an_avatar():
+    """avatars._URL_FETCHERS names the platforms that HAVE an avatar; each of their
+    clients must also be able to fetch the image itself."""
+    from worker.avatars import _URL_FETCHERS
+    from worker.clients import _CLIENT_FACTORIES
+
+    for platform, fetch in _URL_FETCHERS.items():
+        if fetch is None:
+            continue
+        client = _CLIENT_FACTORIES[platform]("v1", "https://example.test")
+        assert hasattr(client, "download_image_bytes"), (
+            f"{platform} has an avatar fetcher but its client cannot download the image"
+        )

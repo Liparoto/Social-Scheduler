@@ -69,6 +69,12 @@ const CARD_METRICS: Record<
 
 const SPARK_KEY: Record<string, MetricKey> = { tiktok: "followers_count" };
 
+// Platforms that publish no past data at all, so nothing can ever backfill: the series
+// begins the day the channel was connected and grows one sample at a time. Saying "still
+// backfilling" here would promise history that is never coming — a wait with no end.
+// Threads is the same shape (see sync_threads_account) but predates this notice.
+const NO_HISTORY = new Set(["tiktok"]);
+
 // Instagram and Threads report followers GAINED per day. TikTok reports only a running
 // follower total, so its growth is the change in that level across the window — the same
 // number, arrived at differently. Using follows_gained for TikTok would render a
@@ -251,7 +257,12 @@ export default function InsightsPage() {
                         Last sync failed: {channel.insights_error}
                       </p>
                     ) : null}
-                    {!channel.media_backfill_complete ? (
+                    {NO_HISTORY.has(channel.platform) ? (
+                      <p className="border-t border-border px-5 py-2 text-[11px] text-muted">
+                        History starts the day you connected — {platformLabel(channel.platform)}{" "}
+                        publishes no past data, so this fills in one day at a time.
+                      </p>
+                    ) : !channel.media_backfill_complete ? (
                       <p className="border-t border-border px-5 py-2 text-[11px] text-muted">
                         Still backfilling history — numbers below will keep filling in.
                       </p>

@@ -298,6 +298,40 @@ class TikTokClient:
         )
         return body.get("data", {})
 
+    # ---- Avatars ----------------------------------------------------------------------
+    def download_image_bytes(self, url: str, max_bytes: int = 5_000_000) -> bytes:
+        """Fetch raw bytes from an absolute CDN URL.
+
+        Not part of the TikTok API — this is avatars.py's second half. It resolves an
+        avatar URL with the client's platform method, then calls THIS by name on whatever
+        client the registry handed it, so every client whose platform has an avatar
+        fetcher must implement it or fail with AttributeError at runtime.
+
+        Streams and caps, matching GraphClient's version: an unexpectedly huge or endless
+        response is stopped rather than read into memory in full.
+        """
+        what = "GET avatar"
+        try:
+            with self.session.get(url, timeout=self.timeout, stream=True) as resp:
+                if not resp.ok:
+                    raise TikTokAPIError(
+                        f"{what} -> {resp.status_code}: {redact(resp.text)[:200]}"
+                    )
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise TikTokAPIError(
+                            f"avatar download too large (> {max_bytes} bytes)"
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
+        except requests.RequestException as exc:
+            raise TikTokAPIError(f"{what} -> request failed: {redact(str(exc))}") from None
+
     # ---- Display: metrics ------------------------------------------------------------
     def query_videos(self, access_token: str, video_ids, fields) -> list[dict]:
         """Metadata for specific videos. Up to 20 ids per request; needs the video.list
