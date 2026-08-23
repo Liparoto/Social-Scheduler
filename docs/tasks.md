@@ -194,7 +194,8 @@ boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: i
 - Post-content sync: **DONE.** 360 posts mirrored back to 2021-09-06, with per-post metrics.
   `published_posts` rather than `feed`, because `feed` also carries posts made by OTHER PEOPLE
   on the Page, and mirroring those would put content the owner never wrote into their library.
-- First comment: still unverified — item 1 in the table above.
+- First comment: **DONE.** Publication 70 posted both the photo and its hashtag comment
+  (`1503535688485860_38452879274296258`).
 
 **Also shipped 2026-08-23, and not previously written down anywhere:**
 - **Channel rename.** Every other per-channel setting had an edit control and the name did not
@@ -245,7 +246,10 @@ Everything downstream shares this. Get the schema and repo skeleton right.
 
 ---
 
-## Phase 2 — Instagram publish worker (image + carousel)  `[~] code complete; awaits live-account check`
+## Phase 2 — Instagram publish worker (image + carousel)  `[x] done`
+Live-account check closed: 33 real (non-dry-run) Instagram sends between 2026-07-23 and
+2026-08-23. The header carried `awaits live-account check` for a month after that stopped
+being true.
 Highest-risk API surface, proven first against a **test** account.
 
 ### Implementation
@@ -699,7 +703,9 @@ without touching the database directly.
       also found a shape the unit fixtures missed — `publish_path` lives under `pub/`, so the
       restore must create directories; now pinned by its own test.
 
-## Phase 6 — Extend adapters  `[~]` — IG, Threads, Discord, Telegram live; FB written but unverified
+## Phase 6 — Extend adapters  `[x] done` — every adapter proved against a live account
+IG, Threads, Discord, Telegram, Facebook and TikTok. Facebook was the long-standing gap and
+closed 2026-08-23 (publications 69 and 70); TikTok arrived and was proved the same day.
 Built only after 1–5 are solid. **Re-verify live Meta docs** for each before building.
 Done one sub-project at a time (own spec → plan → build), not all at once.
 - [x] **Facebook Pages publish + metrics adapter** — spec
@@ -777,9 +783,11 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       2026-07-25** — see the Threads real-post item above. The Meta-side plumbing this item
       was waiting on (Threads product added to the Meta app, Threads Login OAuth, long-lived
       token + the *Threads* user id) was all completed, and the first real post published.
-- [~] Real-post verification (owner, Facebook) — **PARKED 2026-07-24**, to resume alongside other
-      platform connections. Code is done, reviewed, merged and dry-run verified; what remains is
-      Meta-side account plumbing only. State when parked:
+- [x] Real-post verification (owner, Facebook) — **DONE 2026-08-23**, after being parked since
+      2026-07-24. A Page was connected and publication 69 published for real
+      (`269462483652949_1503476255158470`), confirmed independently when `media_sync` walked
+      Facebook's own feed and handed the same id back. Publication 70 then proved the first
+      comment too. The parked state below is kept as the record of what the blocker was:
       - **Blocker:** the Meta app (`Liparoto Social Scheduler`) does not offer
         `pages_manage_posts`. It only has the Instagram use case, so its permission list has the
         two read-only Page perms (`pages_show_list`, `pages_read_engagement`) plus
@@ -882,8 +890,9 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       the composer, stored, carried into the publish plan, and then never read by anything:
       no comment was ever posted, on any platform. Now:
       Instagram posts to the media's comment edge; Threads posts a self-reply
-      (`reply_to_id`) since it has no comment edge; Facebook is written but UNVERIFIED
-      (no FB channel to test against). The attempt happens strictly AFTER the publication
+      (`reply_to_id`) since it has no comment edge; Facebook's comment edge was VERIFIED on
+      2026-08-23 (publication 70), having been written on the assumption it matched
+      Instagram's — an assumption that held. The attempt happens strictly AFTER the publication
       is marked `posted`, and a comment failure can never downgrade a live post — it lands
       on `first_comment_status`/`first_comment_error` (migration 0017) and nowhere else.
       No automatic retry (a blind retry risks a second comment on a live post): retrying is
@@ -891,7 +900,7 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       worker, cleared whether it succeeds or fails. The field is also editable AFTER
       creation now — before, only the composer could set it, so bulk-imported and extracted
       posts could never have one at all.
-      Facebook remains the one unverified adapter (no FB channel on this install).
+      Every adapter is now verified against a live account — Facebook closed 2026-08-23.
 - [-] **SCRAPPED 2026-08-21 (owner-approved) — approval-workflow UI.** An approval step needs
       two people: one to submit, one to approve. This install has one, and zero channels set
       `requires_approval`. The DB column stays (it costs nothing and the schema was always meant
@@ -899,9 +908,9 @@ Done one sub-project at a time (own spec → plan → build), not all at once.
       genuinely shared.
 
 ### Verification
-- [~] Each adapter dry-run first, then one real post to a test account, before automation.
-      Done for Instagram, Threads, Discord and Telegram. **Facebook is the only adapter never
-      proved against a live account** — no Page is connected to this install.
+- [x] Each adapter dry-run first, then one real post to a test account, before automation.
+      Done for Instagram, Threads, Discord, Telegram, **Facebook (2026-08-23, publications 69
+      and 70)** and **TikTok (2026-08-23, publication 68)**. No adapter is unproven.
 
 ---
 
@@ -1366,7 +1375,9 @@ to worker code.** A live heartbeat proves the daemon is alive, not that it is ru
       (a human mark, not an engagement score). See "Phase — BPP, rebuilt as curation" below.
       Extends the existing metrics + autofill/evergreen ranking; depends on good metrics flowing
       (IG done; FB from the adapter above). Design after the FB adapter lands.
-- [ ] **"Fire with the Mac off" scheduling — simple, free, self-serviceable.** For FB, Meta's
+- [-] **SCRAPPED 2026-08-23 (owner-approved) — "fire with the Mac off" scheduling.** Cut during
+      the audit. Every route explored ended at a paid service or a second always-on machine,
+      both of which this project's rules push back on. Original note kept below. For FB, Meta's
       native scheduling is essentially free (the deferred "Option B"). For IG there's no
       Meta-side scheduling → needs an always-on host; explore simple/free options (always-on
       Pi/old Mac, free-tier VM, scheduled cloud runner) and their trade-offs (image-delivery
@@ -2087,7 +2098,9 @@ Four items handled together after the Insights work, per owner request.
 re-synced: 146/146 posts carry views, the Reel reads 293 views, 120 thumbnails cached.
 
 ### Still open (re-audited 2026-08-21 — see "Open work at a glance" at the top of this file)
-- [ ] Facebook Pages insights — blocked by decision; no Page connected to probe against.
+- [x] Facebook Pages insights — **DONE 2026-08-23.** A Page was connected and the metric names
+      probed live rather than guessed: six of the obvious ones turned out retired, so a Page has
+      no reach or impressions at account level and the follower count comes from the node.
 - [-] Autostart login-scoped vs boot-scoped — **SCRAPPED 2026-08-21**; folded into "fire with
       the Mac off". Interim answer: macOS automatic login.
 - [x] `/media` overstates reclaimable space — **FIXED 2026-08-21** (`cover_use_count`).
