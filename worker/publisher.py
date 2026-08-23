@@ -806,9 +806,10 @@ def _comment_facebook(client, account_id, message, media_id, token, config,
     """A Page post's comment edge. Requires `pages_manage_engagement` on the Page token —
     a different scope from publishing, so this can fail on a token that posts fine.
 
-    UNVERIFIED against a live Page: this install has no Facebook channel to test with.
-    The shape matches Instagram's comment edge, but treat the first real FB comment as
-    the verification step, exactly as reference.md does for other unverified FB details.
+    VERIFIED against a live Page on 2026-08-23: publication 70 published post
+    269462483652949_1503535688485860 and its comment 1503535688485860_38452879274296258,
+    with first_comment_status reaching 'posted'. The shape does match Instagram's comment
+    edge, which is what it was written on the assumption of — that assumption held.
     """
     return client.create_comment(media_id, message, token)
 

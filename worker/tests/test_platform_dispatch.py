@@ -283,3 +283,33 @@ def test_a_platform_with_a_publisher_but_no_base_url_fails_loudly_not_via_fallba
     assert not any(kind in facebook_call_kinds for kind, _ in fake_client.calls)
     assert good_row["status"] == "posted"   # the batch carried on
     assert n == 2                           # both were processed, not abandoned
+
+
+def test_the_probe_registry_is_guarded_like_every_other_one():
+    """insights_probe._PROBES was the ONE platform registry with no assert against
+    SUPPORTED_PLATFORMS — which is precisely how 'tiktok' came to be missing from it
+    without anything complaining. A platform absent from the others is a loud import
+    error; absent from this one it was silently 'unchecked'."""
+    from worker.clients import SUPPORTED_PLATFORMS
+    from worker.insights_probe import _PROBES
+
+    assert set(_PROBES) == set(SUPPORTED_PLATFORMS), "probe registry out of sync"
+
+
+def test_facebook_has_a_real_probe_now_that_a_page_exists():
+    from worker.insights_probe import _PROBES, probe_facebook
+
+    assert _PROBES["facebook"] is probe_facebook
+
+
+def test_the_facebook_probe_still_asks_about_the_retired_names():
+    """A probe that only asks about names it expects to work cannot tell you when a dead
+    one comes back, nor confirm a name really is gone rather than merely unused."""
+    from worker.insights_probe import FB_PAGE_CANDIDATES
+
+    for retired in ("page_impressions", "page_impressions_unique", "page_fans",
+                    "page_fan_adds", "page_fan_removes", "page_engaged_users"):
+        assert retired in FB_PAGE_CANDIDATES, f"{retired} dropped from the probe"
+    for survivor in ("page_views_total", "page_post_engagements",
+                     "page_daily_follows_unique", "page_video_views"):
+        assert survivor in FB_PAGE_CANDIDATES

@@ -26,7 +26,7 @@ import sys
 import time
 
 from . import db
-from .clients import ClientRegistry
+from .clients import SUPPORTED_PLATFORMS, ClientRegistry
 from .config import Config
 from .graph_api import GraphAPIError
 from .redact import redact
@@ -54,6 +54,22 @@ THREADS_CANDIDATES = [
     "clicks", "shares",
 ]
 THREADS_BREAKDOWNS = ["country", "city", "age", "gender"]
+
+# Facebook PAGE account-level candidates. Deliberately includes the names known to be
+# RETIRED as of 2026-08-23 (page_impressions, page_impressions_unique, page_fans,
+# page_fan_adds, page_fan_removes, page_engaged_users) rather than a curated list of
+# survivors: a probe that only asks about names it expects to work cannot tell you when a
+# dead one comes back, nor confirm that a name really is gone rather than merely unused.
+FB_PAGE_CANDIDATES = [
+    "page_views_total", "page_post_engagements", "page_daily_follows_unique",
+    "page_video_views", "page_total_actions", "page_follows",
+    "page_impressions", "page_impressions_unique", "page_fans",
+    "page_fan_adds", "page_fan_removes", "page_engaged_users",
+]
+
+# Node fields, which is where a Page's follower count has to come from now that page_fans
+# is retired. Probed separately because a node read and an insights read fail differently.
+FB_PAGE_NODE_FIELDS = ["followers_count", "fan_count"]
 
 # Between probe calls. Small, but a probe fires dozens of requests back-to-back and
 # there is no reason to be the reason a real publish gets throttled.
@@ -244,16 +260,81 @@ def probe_threads(client, ch, result: ProbeResult, print_fn) -> None:
             print_fn(f"    ✗ follower_demographics/{breakdown:<10} {_short(value, 50)}")
 
 
+def probe_facebook(client, ch, result: ProbeResult, print_fn) -> None:
+    """Ask a live Page which of its metric names still exist.
+
+    Meta retires Page insight names aggressively and the docs lag reality — a hand probe
+    on 2026-08-23 found SIX of the obvious ones already gone, including page_impressions
+    and page_fans, which every guide still lists. Anything built from documentation rather
+    than from this would answer "(#100) The value must be a valid insights metric" forever.
+
+    Three distinct outcomes are reported, and the middle one matters most: a name TikTok
+    or Meta accepts but has no data for is not the same as a name they reject. A new Page
+    returns empty for everything, and reading that as "retired" would delete working
+    metrics from the config.
+    """
+    page_id, token = ch["remote_account_id"], ch["access_token"]
+
+    print_fn("  page node (where the follower count now comes from):")
+    for field in FB_PAGE_NODE_FIELDS:
+        ok, value = _try(
+            field,
+            lambda f=field: client._get(page_id, {"fields": f, "access_token": token}),
+            print_fn,
+        )
+        if ok and isinstance(value, dict) and field in value:
+            result.profile[field] = value[field]
+            print_fn(f"    ✓ {field:<26} = {value[field]}")
+        elif ok:
+            print_fn(f"    · {field:<26} accepted but not returned")
+        else:
+            print_fn(f"    ✗ {field:<26} {_short(value, 70)}")
+
+    print_fn("  page insights:")
+    for metric in FB_PAGE_CANDIDATES:
+        ok, value = _try(
+            metric,
+            lambda m=metric: client.get_account_insights_series(
+                page_id, token, [m], period="day"
+            ),
+            print_fn,
+        )
+        if not ok:
+            print_fn(f"    ✗ {metric:<26} {_short(value, 70)}")
+            continue
+        points = (value or {}).get(metric) or []
+        if points:
+            result.series_ok.append(metric)
+            end_time, latest = points[-1]
+            print_fn(f"    ✓ {metric:<26} = {latest} ({str(end_time)[:10]})")
+        else:
+            # Accepted but empty. NOT the same as retired — a quiet Page returns this for
+            # everything, and dropping such a name from the config would remove a metric
+            # that works.
+            result.series_ok.append(metric)
+            print_fn(f"    · {metric:<26} accepted, no data yet")
+
+
 # Platforms with no insights endpoint at all are reported as such rather than probed —
 # the same distinction metrics._FETCHERS makes with an explicit None.
 _PROBES = {
     "instagram": probe_instagram,
     "threads": probe_threads,
-    "facebook": None,   # Page insights land in phase 5; names are volatile enough to need
-                        # their own probe rather than a guess bolted onto this one.
+    "facebook": probe_facebook,
     "discord": None,
     "telegram": None,
+    # TikTok's account numbers come from /v2/user/info/ node fields, not from an insights
+    # edge with volatile metric names — there is nothing here to probe FOR. Declared so
+    # the assert below can hold, rather than left absent to be silently "unchecked".
+    "tiktok": None,
 }
+
+# The guard every other platform registry has, and the only one this file was missing —
+# which is exactly how 'tiktok' came to be absent from it without anything complaining.
+# See clients.SUPPORTED_PLATFORMS for the full set of registries this pattern protects.
+assert set(_PROBES) == set(SUPPORTED_PLATFORMS), (
+    "insights_probe._PROBES and clients.SUPPORTED_PLATFORMS disagree"
+)
 
 
 def probe_channels(rows, registry: ClientRegistry, *, print_fn=print) -> list[ProbeResult]:

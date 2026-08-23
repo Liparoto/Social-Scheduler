@@ -18,10 +18,32 @@ Facebook's own feed independently handed that same post id back through `media_s
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Verify the Facebook first comment against the live Page | P2 | `<30m` | Easy | `publisher.py`'s `_comment_facebook` still carries an "UNVERIFIED against a live Page" note written when no Page existed. One is connected now and publication 69 published cleanly — but with `first_comment_status = 'none'`, so the comment edge has never actually fired. It is the last untested branch on a platform in daily use. Low risk by design (a failed comment can never downgrade a live post), but currently unknown. |
-| 2 | `_PROBES` is the one platform registry with no assert guard | P3 | `<30m` | Easy | Every other platform registry asserts against `SUPPORTED_PLATFORMS`, which is what makes forgetting one a loud import error instead of a silent gap. `insights_probe._PROBES` does not, and `tiktok` is simply absent — so TikTok quietly reports "unchecked" rather than being probed, and the next platform will do the same. |
-| 3 | Write `probe_facebook` for `insights_probe` | P3 | `~1h` | Medium | The registry's own placeholder asks for it: "names are volatile enough to need their own probe". Those names were probed BY HAND on 2026-08-23 and six turned out retired. Wiring it in makes the next retirement self-diagnosing rather than a throwaway script. Blocked by #2 — same file, same registry. |
-| 4 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal, carried since before 2026-08-21. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. The only genuinely large item left. |
+| # | Open item | Priority | Time | Difficulty | Why it matters |
+|---|---|---|---|---|---|
+| 1 | Overview: make the account chips filter the list below | P2 | `~half day` | Medium | Owner asked 2026-08-23. The accounts already sit at the top of the Overview; clicking one (or several) should narrow the sends below to just those channels, the way the existing account dropdown does. Turns a header into a control people already expect to be one. |
+
+**Everything else on the 2026-08-23 table is done.** Kept below with what proved it, because
+each was closed by evidence rather than by assumption:
+
+- **Verify the Facebook first comment — DONE.** Publication 70 published post
+  `269462483652949_1503535688485860` AND its comment `1503535688485860_38452879274296258`,
+  reaching `first_comment_status = 'posted'`. The same post (91) had already commented
+  successfully on Instagram and Threads, so this was a like-for-like test. The UNVERIFIED
+  note in `publisher.py` is retired.
+- **`_PROBES` assert guard — DONE.** It was the only platform registry without one, which is
+  exactly how `tiktok` came to be missing from it silently. Guard added, `tiktok` declared
+  None (its account numbers are node fields, not volatile insight names — nothing to probe
+  FOR), and a dispatch test now covers it.
+- **`probe_facebook` — DONE.** Run live against the Page: the six survivors report "accepted,
+  no data yet" and the six retired names report their rejection. It deliberately still asks
+  about the dead names, because a probe that only asks what it expects to work cannot tell
+  you when one comes back — nor confirm a name is truly gone rather than merely unused.
+
+**SCRAPPED 2026-08-23 (owner-approved) — do not re-propose without re-litigating:**
+- **"Fire with the Mac off" scheduling.** Carried since before 2026-08-21 as the one large
+  item. Cut by the owner during the 2026-08-23 audit. It would have meant hosting something
+  outside this Mac, which the project's own rules push back on — every alternative explored
+  so far ended at a paid service or a second machine.
 
 ---
 
