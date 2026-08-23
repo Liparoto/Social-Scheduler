@@ -783,6 +783,25 @@ the number of chunks sent must equal the `total_chunk_count` declared at init.
 and must use PKCE; Web apps are forced to HTTPS. This is what lets a localhost-only tool run
 the OAuth flow at all.
 
+**PKCE: the code challenge is HEX, not base64url.** RFC 7636 mandates base64url and every
+other OAuth provider uses it. TikTok does not — "hashing the code verifier using hex
+encoding of SHA256". The verifier itself stays in the unreserved set, 43–128 characters.
+Get this wrong and the failure comes at the very END: authorization succeeds, the user
+approves, and only the token exchange fails with "Code verifier or code challenge is
+invalid." Verified the hard way on 2026-08-23.
+
+**Errors come in TWO shapes.** `/v2/oauth/token/` reports failure OAuth2-style and FLAT —
+`{"error": "invalid_request", "error_description": "...", "log_id": "..."}` — where `error`
+is a plain STRING. Every other v2 endpoint nests `{"error": {"code", "message", "log_id"}}`.
+Code that assumes the nested shape reads `undefined` off a string (JS) or raises
+AttributeError (Python), and in both cases discards the only useful part of the response.
+
+**Sandbox.** An app that has never passed review can only be used through a Sandbox, which
+has its OWN client key (prefixed `sbaw…`) and an allowlist: every TikTok account that will
+authorize it must be added under Sandbox settings → Target Users, up to 10 per sandbox, 5
+sandboxes per app. An account not on that list fails authorization with `non_sandbox_target`.
+Direct Post stays audit-gated regardless.
+
 **`publicaly_available_post_id`** is TikTok's own misspelling. It appears only once a post is
 public *and* through moderation, which is what makes its arrival proof the creator published
 the video.
