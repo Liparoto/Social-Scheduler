@@ -18,9 +18,19 @@ Facebook's own feed independently handed that same post id back through `media_s
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| # | Open item | Priority | Time | Difficulty | Why it matters |
-|---|---|---|---|---|---|
-| 1 | Overview: make the account chips filter the list below | P2 | `~half day` | Medium | Owner asked 2026-08-23. The accounts already sit at the top of the Overview; clicking one (or several) should narrow the sends below to just those channels, the way the existing account dropdown does. Turns a header into a control people already expect to be one. |
+**The table is empty. Nothing is open.**
+
+That has not been true before on this project, so it is worth stating plainly rather than
+leaving a stale row behind: the last large item was scrapped by the owner during this audit,
+and everything else closed with evidence the same day.
+
+**Overview account filter — DONE 2026-08-23.** The channel cards at the top of the Overview
+are now buttons: click one or several and the publications below narrow to them. They drive
+the SAME state as the Accounts filter, which became a multi-select checkbox dropdown for
+exactly that reason — a single-select could only ever disagree with the cards. Empty means
+every account, which is what an unfiltered list already meant, so there is no "all" sentinel
+to fall out of step. A "Showing 2 accounts · clear" control names what is being hidden,
+because a filtered list that looks unfiltered is how people conclude their posts vanished.
 
 **Everything else on the 2026-08-23 table is done.** Kept below with what proved it, because
 each was closed by evidence rather than by assumption:

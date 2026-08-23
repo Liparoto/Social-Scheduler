@@ -12,6 +12,7 @@ import {
 } from "@/lib/platforms";
 import { ChannelChip, StatusBadge } from "@/components/ui";
 import { PublicationActions } from "@/components/publication-actions";
+import { CheckboxFilterDropdown } from "@/components/checkbox-filter-dropdown";
 import { formatInTz, tzAbbrev, videoPreviewSrc } from "@/lib/format";
 import { sendTime, formatLateness } from "@/lib/send-time";
 import { groupQueueRows, cancelableIds } from "@/lib/queue-groups";
@@ -106,6 +107,8 @@ export function PublicationQueue({
   topicTags,
   workerOnline = true,
   blockedIds = [],
+  selectedChannels,
+  onSelectedChannelsChange,
 }: {
   pubs: PublicationRow[];
   channels: { id: number; account_name: string; platform: string }[];
@@ -122,6 +125,14 @@ export function PublicationQueue({
    * mismatch the server's HTML.
    */
   blockedIds?: number[];
+  /**
+   * Which channels to show, shared with the clickable rail above the queue so the two
+   * controls cannot disagree. Empty means EVERY channel — the same thing an unfiltered
+   * list already meant, which is why there is no separate "all" value to keep in sync.
+   * Omit both props and the queue keeps its own state, as it did before the rail existed.
+   */
+  selectedChannels?: Set<number>;
+  onSelectedChannelsChange?: (next: Set<number>) => void;
 }) {
   const router = useRouter();
   const blocked = new Set(blockedIds);
@@ -195,7 +206,10 @@ export function PublicationQueue({
     return () => controller.abort();
   }, [openPostId, openExpected, openLoaded]);
 
-  const [account, setAccount] = useState<"all" | number>("all");
+  // Uncontrolled fallback, for any caller that renders the queue without a rail.
+  const [ownAccounts, setOwnAccounts] = useState<Set<number>>(new Set());
+  const accounts = selectedChannels ?? ownAccounts;
+  const setAccounts = onSelectedChannelsChange ?? setOwnAccounts;
   const [platform, setPlatform] = useState<"all" | Platform>("all");
   const [status, setStatus] = useState<StatusFilter>("all");
   // DESTINATION, not platform: an Instagram channel has both surfaces, so this is a
@@ -203,7 +217,8 @@ export function PublicationQueue({
   const [destination, setDestination] = useState<"all" | "story" | "feed">("all");
 
   const shown = pubs.filter((p) => {
-    if (account !== "all" && p.channel_id !== account) return false;
+    // An empty set means no account filter at all, not "no accounts".
+    if (accounts.size > 0 && !accounts.has(p.channel_id)) return false;
     if (platform !== "all" && p.channel_platform !== platform) return false;
     if (status !== "all" && p.status !== status) return false;
     if (destination !== "all" && p.surface !== destination) return false;
@@ -213,18 +228,15 @@ export function PublicationQueue({
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <select
-          className={selectCls}
-          value={account === "all" ? "all" : String(account)}
-          onChange={(e) => setAccount(e.target.value === "all" ? "all" : Number(e.target.value))}
-        >
-          <option value="all">All accounts</option>
-          {channels.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.account_name}
-            </option>
-          ))}
-        </select>
+        {/* A checkbox dropdown rather than a <select>: it has to express the same
+            multi-channel selection the rail above can, and a single-select could only
+            ever disagree with the cards. */}
+        <CheckboxFilterDropdown
+          label="Accounts"
+          options={channels.map((c) => ({ value: c.id, label: c.account_name }))}
+          selected={accounts}
+          onApply={(values) => setAccounts(values)}
+        />
         <select
           className={selectCls}
           value={platform}
