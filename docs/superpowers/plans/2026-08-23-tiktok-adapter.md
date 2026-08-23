@@ -1541,11 +1541,25 @@ and the message in `incompatiblePostError`:
 Run: `cd dashboard && npm test`
 Expected: PASS, and no regressions in the existing suite.
 
-- [ ] **Step 5: Lint (this repo is at 0 errors — keep it there) and commit**
+- [ ] **Step 5: Tell the composer's user their caption stays here (spec Decision 9)**
+
+The inbox endpoint sends no caption, so a composer that shows a caption box next to a TikTok
+chip is quietly lying about where that text is going. In the composer, whenever a selected
+target is a TikTok channel, render a plain notice near the caption field:
+
+> **TikTok:** your caption isn't sent — TikTok has you write it in the app when you publish.
+> It's saved here so you can copy it.
+
+Add a **Copy caption** button beside it (`navigator.clipboard.writeText`), since retyping is
+the actual workflow. Cover the notice's presence/absence with a `test-ui` test: shown when a
+TikTok channel is selected, absent otherwise.
+
+- [ ] **Step 6: Lint (this repo is at 0 errors — keep it there) and commit**
 
 ```bash
 cd dashboard && npm run lint
-git add dashboard/lib/platforms.ts dashboard/lib/types.ts dashboard/lib/platforms-tiktok.test.ts
+git add dashboard/lib/platforms.ts dashboard/lib/types.ts dashboard/lib/platforms-tiktok.test.ts \
+        dashboard/components dashboard/test-ui
 git commit -m "feat(dashboard): teach the composer that TikTok takes video and nothing else"
 ```
 
