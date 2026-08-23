@@ -7,18 +7,21 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` considered and re
 
 ---
 
-## Open work at a glance  ·  audited 2026-08-21
+## Open work at a glance  ·  audited 2026-08-23
 
 Everything below this heading is history. **This table is the whole of what is actually open.**
-Re-audit before trusting it. The sweep that produced it found **nine items still marked `[ ]`
-that had in fact shipped**, and **two shipped features never written down at all** (asset
-download, the auto-fill timestamp fix — both now recorded at the end of this file).
+Re-audit before trusting it. The 2026-08-21 sweep found nine items still marked `[ ]` that had
+shipped; the 2026-08-23 sweep found **both remaining table rows already done** (the two media
+mirrors, built that same day) and — the one worth noticing — **the Facebook publish path proved
+live while still listed as unproven**. Publication 69 posted for real to the Page at 20:34, and
+Facebook's own feed independently handed that same post id back through `media_sync`.
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-| 1 | Facebook Page post-content sync (`media_sync`) | P1 | `half-day` | Medium | Owner asked 2026-08-23. Instagram and Threads mirror the account's own posts into `remote_media`, so the Library and Insights cover everything on the account rather than only what this tool published. `media_sync._ADAPTERS["facebook"]` is still `None`. A Page IS now connected, so this is unblocked — and the metric names must be probed live first, exactly as the account-level ones were. |
-| 2 | TikTok post-content sync (`media_sync`) | P3 | `half-day` | Medium | Same gap, same table. Needs paged `/v2/video/list/` calls. Lower priority: a new account with one video has nothing to mirror yet. |
-| 3 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. |
+| 1 | Verify the Facebook first comment against the live Page | P2 | `<30m` | Easy | `publisher.py`'s `_comment_facebook` still carries an "UNVERIFIED against a live Page" note written when no Page existed. One is connected now and publication 69 published cleanly — but with `first_comment_status = 'none'`, so the comment edge has never actually fired. It is the last untested branch on a platform in daily use. Low risk by design (a failed comment can never downgrade a live post), but currently unknown. |
+| 2 | `_PROBES` is the one platform registry with no assert guard | P3 | `<30m` | Easy | Every other platform registry asserts against `SUPPORTED_PLATFORMS`, which is what makes forgetting one a loud import error instead of a silent gap. `insights_probe._PROBES` does not, and `tiktok` is simply absent — so TikTok quietly reports "unchecked" rather than being probed, and the next platform will do the same. |
+| 3 | Write `probe_facebook` for `insights_probe` | P3 | `~1h` | Medium | The registry's own placeholder asks for it: "names are volatile enough to need their own probe". Those names were probed BY HAND on 2026-08-23 and six turned out retired. Wiring it in makes the next retirement self-diagnosing rather than a throwaway script. Blocked by #2 — same file, same registry. |
+| 4 | "Fire with the Mac off" scheduling | P2 | `multi-day` | Hard | Owner goal, carried since before 2026-08-21. Needs its own brainstorm, and absorbs the scrapped boot-scoped-autostart item. The only genuinely large item left. |
 
 ---
 
@@ -143,7 +146,7 @@ boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: i
       type errors. Checked and found already correct: `autofill.py` ranks on reach+saves and
       takes MAX across group members *because* Threads scores 0 there — see line 347.
 
-**Facebook Pages — unblocked 2026-08-23, a Page is now connected.**
+**Facebook Pages — DONE 2026-08-23. A Page is connected and the publish path is proved.**
 - Account insights: **shipped.** Built from a live probe, not the docs — and the docs were
   wrong in a way that would have shipped broken. `page_impressions`,
   `page_impressions_unique`, `page_fans`, `page_fan_adds`, `page_fan_removes` and
@@ -151,9 +154,36 @@ boot-scoped `LaunchDaemon` · the grouped-channel timezone "decision" (closed: i
   metric"). So a Page has **no reach and no impressions at account level at all**, and the
   follower count comes from the node rather than from insights. Names live in
   `FB_ACCOUNT_METRICS` so the next retirement is an `.env` edit.
-- Real-post verification: still open. The adapter was written and never proved live; one
-  publication now exists on the Page (channel 4) but has not been checked end to end.
-- Post-content sync: open, item 1 above.
+- Real-post verification: **DONE, after being carried as unproven for weeks.** Publication 69
+  published to the Page at 20:34 on 2026-08-23 — `status=posted`, `is_dry_run=0`, no error,
+  `remote_post_id=269462483652949_1503476255158470`. The confirmation is independent rather
+  than self-reported: `media_sync` later walked Facebook's own `published_posts` feed, returned
+  that same post id with a permalink, and linked it back to publication 69.
+- Post-content sync: **DONE.** 360 posts mirrored back to 2021-09-06, with per-post metrics.
+  `published_posts` rather than `feed`, because `feed` also carries posts made by OTHER PEOPLE
+  on the Page, and mirroring those would put content the owner never wrote into their library.
+- First comment: still unverified — item 1 in the table above.
+
+**Also shipped 2026-08-23, and not previously written down anywhere:**
+- **Channel rename.** Every other per-channel setting had an edit control and the name did not
+  — which only became a problem once a platform started naming channels for you.
+- **Reconnect on the channel card.** It lived only inside "Add channel", which both hid it and
+  implied it would create a duplicate. For a platform whose refresh token expires yearly, that
+  was the wrong home for the only way back.
+- **The same latent bug in FOUR modules.** `account_metrics`, `media_sync`, `media_metrics` and
+  `thumbnails` each built their API client OUTSIDE the per-channel error guard, so one channel
+  whose client could not be constructed killed the entire pass — against each loop's own
+  comment promising the opposite. Latent for as long as every platform with an adapter also had
+  a working client; Facebook getting one is what walked into it.
+- **A refresh flag that wedged.** A failing account sync recorded `insights_error` but never
+  cleared `insights_refresh_requested`, so a channel failing every cycle read "Queued — picked
+  up next cycle" forever, with the real reason beside it. `avatars.py` already stated this rule;
+  `account_metrics.py` did not follow it. Two related controls were also hidden where the
+  worker's query could never honour them (`Refresh metrics` on an unpublished send, `Refresh
+  photo` on a platform with no avatar).
+- **`docs/getting-started.md` and an expanded `docs/meta-setup.md`** (commit `18697a4`).
+  **NOT authored by this session** — recorded here because it is real work that exists and was
+  absent from this file. Confirm who wrote it before treating it as reviewed.
 
 ---
 
