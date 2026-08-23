@@ -26,15 +26,32 @@ function base64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** A fresh PKCE verifier. 48 random bytes → 64 base64url characters, inside RFC 7636's
- *  43–128 range. */
+/**
+ * A fresh PKCE verifier: 48 random bytes as base64url → 64 characters.
+ *
+ * base64url IS right here (unlike the challenge above): TikTok requires the unreserved
+ * set [A-Z] [a-z] [0-9] "-" "." "_" "~" and a length of 43–128, and base64url output is a
+ * subset of that at 64 characters.
+ */
 export function createVerifier(): string {
   return base64url(randomBytes(48));
 }
 
-/** S256: the unpadded base64url SHA-256 of the verifier. */
+/**
+ * The PKCE code challenge — SHA-256 of the verifier, **hex encoded**.
+ *
+ * NOT base64url. RFC 7636 mandates base64url and every other OAuth provider uses it;
+ * TikTok does not. Their Desktop Login Kit doc says it outright — "hashing the code
+ * verifier using hex encoding of SHA256" — and their example ends in
+ * `.toString(CryptoJS.enc.Hex)`.
+ *
+ * Getting this wrong fails only at the very END of the flow: authorization succeeds, the
+ * user approves, and the token exchange dies with "Code verifier or code challenge is
+ * invalid." Do not "correct" this back to base64url to match the RFC; the RFC is not what
+ * is on the other end of the wire.
+ */
 export function challengeFor(verifier: string): string {
-  return base64url(createHash("sha256").update(verifier).digest());
+  return createHash("sha256").update(verifier).digest("hex");
 }
 
 export function authorizeUrl(opts: {

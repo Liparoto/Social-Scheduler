@@ -13,18 +13,29 @@ test("the verifier is long enough and url-safe", () => {
   assert.match(v, /^[A-Za-z0-9\-._~]+$/);
 });
 
-test("the challenge is the unpadded base64url sha256 of the verifier", () => {
-  // The worked example from RFC 7636 Appendix B — checking our own arithmetic against a
-  // known-good vector rather than against ourselves.
+test("the challenge is the HEX sha256 of the verifier, not base64url", () => {
+  // TikTok deviates from RFC 7636 here and requires hex. This test previously asserted
+  // the RFC's own base64url vector — it passed, and the integration still failed at the
+  // token exchange, because the RFC is not what is on the other end of the wire.
   assert.equal(
+    challengeFor("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+    "13d31e961a1ad8ec2f16b10c4c982e0876a878ad6df144566ee1894acb70f9c3",
+  );
+  // The base64url form of that same digest, which is what a well-meaning "fix" back to
+  // the standard would produce. Pinned so that change fails loudly here.
+  assert.notEqual(
     challengeFor("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
     "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
   );
 });
 
-test("the challenge carries no padding or non-url-safe characters", () => {
-  const challenge = challengeFor(createVerifier());
-  assert.doesNotMatch(challenge, /[=+/]/);
+test("the challenge is 64 lowercase hex characters", () => {
+  assert.match(challengeFor(createVerifier()), /^[0-9a-f]{64}$/);
+});
+
+test("the verifier uses only the characters TikTok allows", () => {
+  // TikTok's unreserved set: [A-Z] [a-z] [0-9] "-" "." "_" "~", length 43-128.
+  assert.match(createVerifier(), /^[A-Za-z0-9\-._~]{43,128}$/);
 });
 
 test("two verifiers are never the same", () => {
