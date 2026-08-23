@@ -349,3 +349,34 @@ def test_every_client_the_registry_builds_can_download_an_avatar():
         assert hasattr(client, "download_image_bytes"), (
             f"{platform} has an avatar fetcher but its client cannot download the image"
         )
+
+
+def test_get_user_videos_pages_by_cursor_and_reports_when_done():
+    session = FakeSession(FakeResponse({
+        "data": {"videos": [{"id": "1"}], "cursor": 999, "has_more": True},
+        "error": {"code": "ok"},
+    }))
+    client = TikTokClient(session=session)
+
+    videos, cursor = client.get_user_videos("act.T", ("id",), limit=20)
+
+    assert [v["id"] for v in videos] == ["1"]
+    assert cursor == 999
+    _, url, kwargs = session.calls[0]
+    assert url.endswith("/v2/video/list/")
+    # Fields in the query string, filters in the body — the split this API uses.
+    assert kwargs["params"]["fields"] == "id"
+    assert kwargs["json"]["max_count"] == 20
+
+
+def test_get_user_videos_returns_no_cursor_when_has_more_is_false():
+    """has_more false must produce None, or the sync loop pages forever."""
+    session = FakeSession(FakeResponse({
+        "data": {"videos": [], "cursor": 123, "has_more": False},
+        "error": {"code": "ok"},
+    }))
+    client = TikTokClient(session=session)
+
+    _, cursor = client.get_user_videos("act.T", ("id",))
+
+    assert cursor is None

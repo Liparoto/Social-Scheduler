@@ -150,15 +150,37 @@ def _fetch_threads(client, media, channel, config):
     return client.get_threads_insights(media["remote_post_id"], channel["access_token"], metrics)
 
 
+def _fetch_tiktok(client, media, channel, config):
+    """Counts for one mirrored TikTok video.
+
+    Reachable now only because media_sync mirrors the account's back catalogue — the
+    entry here used to be None precisely because no remote_media row for TikTok could
+    exist. Same four metrics as a published send: views, likes, comments, shares, and
+    deliberately no reach or saves, which TikTok does not have.
+    """
+    from .metrics import TIKTOK_VIDEO_FIELDS
+
+    videos = client.query_videos(
+        channel["access_token"], [media["remote_post_id"]], TIKTOK_VIDEO_FIELDS
+    )
+    if not videos:
+        raise RuntimeError(f"tiktok returned no video for id {media['remote_post_id']}")
+    video = videos[0]
+    return {
+        key: video[key]
+        for key in ("view_count", "like_count", "comment_count", "share_count")
+        if key in video
+    }
+
+
 _FETCHERS = {
     "instagram": _fetch_instagram,
     "threads": _fetch_threads,
     "facebook": None,   # phase 5
     "discord": None,
     "telegram": None,
-    # No remote_media mirror exists for TikTok (media_sync has no adapter for it), so
-    # there is nothing here to attach per-media metrics to.
-    "tiktok": None,
+    # Reachable now that media_sync mirrors TikTok's back catalogue.
+    "tiktok": _fetch_tiktok,
 }
 
 assert set(_FETCHERS) == set(SUPPORTED_PLATFORMS), (

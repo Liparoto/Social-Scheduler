@@ -123,6 +123,57 @@ def _list_threads(client, channel, page_size, next_url):
     )
 
 
+# The fields TikTok returns for a listed video. All verified present on a live account
+# (2026-08-23) rather than taken from the docs.
+TIKTOK_MEDIA_FIELDS = (
+    "id", "create_time", "video_description", "cover_image_url", "share_url", "duration",
+)
+
+
+# TikTok refuses max_count above 20 outright ("invalid_params: max_count needs to be in
+# the range of [1, 20]"), while MEDIA_SYNC_PAGE_SIZE is tuned for Meta's larger pages.
+# Clamped here rather than by lowering the install-wide setting, so Instagram and Threads
+# keep their bigger pages and TikTok stops failing every cycle.
+TIKTOK_MAX_PAGE_SIZE = 20
+
+
+def _list_tiktok(client, channel, page_size, next_url):
+    """TikTok pages by cursor rather than by a next URL, so the loop's opaque token
+    carries the cursor. Same contract, different currency."""
+    return client.get_user_videos(
+        channel["access_token"], TIKTOK_MEDIA_FIELDS,
+        limit=min(page_size, TIKTOK_MAX_PAGE_SIZE), cursor=next_url,
+    )
+
+
+def _map_tiktok(item: dict) -> dict:
+    """TikTok's caption comes BACK even though it never went out.
+
+    The publish path cannot send a caption at all — the creator writes it in the app — so
+    until this sync existed, the caption on a TikTok post was only ever whatever the owner
+    typed here as a note. video_description is what they actually published, which makes
+    this the one place the record is completed rather than assumed.
+    """
+    created = item.get("create_time")
+    return {
+        "remote_post_id": item.get("id"),
+        # TikTok posts one shape of thing. Stating it beats inferring a Meta media_type.
+        "media_type": "VIDEO",
+        # No product-surface concept here — None keeps "this platform has no such thing"
+        # honest, the same call _map_threads makes.
+        "media_product_type": None,
+        "permalink": item.get("share_url"),
+        "caption": item.get("video_description"),
+        "thumbnail_url": item.get("cover_image_url"),
+        # A unix epoch, not Meta's string. Normalised to the same UTC ISO spelling
+        # everything else stores, because published_at is string-compared in SQL.
+        "published_at": (
+            datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+            if created is not None else None
+        ),
+    }
+
+
 # One (list, map) pair per platform. None means "this platform has no media-list edge" —
 # the same explicit-None convention metrics._FETCHERS uses, so a platform that is simply
 # missing from the dict is a registration bug rather than an intentional gap.
@@ -132,9 +183,7 @@ _ADAPTERS = {
     "facebook": None,   # Page feed sync lands in phase 5
     "discord": None,
     "telegram": None,
-    # Mirroring the account's own video list would need paged video.list calls; the first
-    # version of this adapter covers publishing and the metrics that hang off it.
-    "tiktok": None,
+    "tiktok": (_list_tiktok, _map_tiktok),
 }
 
 assert set(_ADAPTERS) == set(SUPPORTED_PLATFORMS), (

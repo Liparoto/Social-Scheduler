@@ -27,6 +27,7 @@ USER_INFO_PATH = "/v2/user/info/"
 INBOX_INIT_PATH = "/v2/post/publish/inbox/video/init/"
 STATUS_PATH = "/v2/post/publish/status/fetch/"
 VIDEO_QUERY_PATH = "/v2/video/query/"
+VIDEO_LIST_PATH = "/v2/video/list/"
 
 MB = 1024 * 1024
 MIN_CHUNK_BYTES = 5 * MB
@@ -297,6 +298,50 @@ class TikTokClient:
             "POST /v2/post/publish/status/fetch/",
         )
         return body.get("data", {})
+
+    def get_user_videos(self, access_token: str, fields, *, limit: int = 20,
+                        cursor=None) -> tuple[list[dict], object]:
+        """One page of the account's OWN videos, newest first.
+
+        Returns (videos, next_cursor). next_cursor is None when TikTok says has_more is
+        false, which is what lets the caller treat it as an opaque "more?" token exactly
+        like Meta's next_url — the pagination shapes differ, the contract does not.
+
+        This is the whole back catalogue: every video the account has posted, with its
+        CURRENT counts. It cannot report what a video's numbers were last week, so a
+        backfill establishes where each post stands today and the day-by-day history
+        accrues from then on.
+        """
+        payload: dict = {"max_count": limit}
+        if cursor is not None:
+            payload["cursor"] = cursor
+        body = self._post_json_with_fields(
+            VIDEO_LIST_PATH, access_token, payload, fields, "POST /v2/video/list/"
+        )
+        data = body.get("data", {})
+        videos = data.get("videos", []) or []
+        next_cursor = data.get("cursor") if data.get("has_more") else None
+        return videos, next_cursor
+
+    def _post_json_with_fields(self, path: str, access_token: str, payload: dict, fields,
+                               what: str) -> dict:
+        """POST with the field list in the QUERY STRING and the filters in the body —
+        the split TikTok's Display API uses for both video/list and video/query."""
+        url = f"{self.base_url}{path}"
+        try:
+            resp = self.session.post(
+                url,
+                params={"fields": ",".join(fields)},
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json; charset=UTF-8",
+                },
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise TikTokAPIError(f"{what} -> request failed: {redact(str(exc))}") from None
+        return self._body(resp, what)
 
     # ---- Avatars ----------------------------------------------------------------------
     def download_image_bytes(self, url: str, max_bytes: int = 5_000_000) -> bytes:
