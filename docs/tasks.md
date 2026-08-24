@@ -18,6 +18,7 @@ Facebook's own feed independently handed that same post id back through `media_s
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
+| 2 | **Media-vs-destination validation, everywhere** — refuse (or grey out) media a chosen destination genuinely cannot publish, per platform AND per surface | **High** | ~1-2 days | Medium | Found by the owner 2026-08-24 while testing Facebook video. The Facebook Reels gate built on `feat/facebook-video` is the ONLY per-surface media check in the app. Everything else is either absent or enforced in the wrong place. Concrete holes below. |
 | 1 | **Channel sort / reorder** — let the owner set an explicit channel order, honoured on the Channels, Insights and Overview pages | Low | ~half a day | Low | Channels render in whatever order the DB hands back (insertion order by `id`). With six channels across five platforms that is already arbitrary, and it differs from how the owner thinks about them. Needs a `sort_order` column on `channels` and one shared ordering helper so the three pages cannot disagree. Requested by the owner 2026-08-23. |
 
 Added 2026-08-23: the table was empty at audit time; the row above is a new request, not a
@@ -54,6 +55,47 @@ each was closed by evidence rather than by assumption:
   item. Cut by the owner during the 2026-08-23 audit. It would have meant hosting something
   outside this Mac, which the project's own rules push back on — every alternative explored
   so far ended at a paid service or a second machine.
+
+
+### Media-vs-destination validation — the open item in detail
+
+Raised by the owner on 2026-08-24: *"letting incorrect media go to places that can't publish
+it."* The Facebook Reels gating shipped on `feat/facebook-video` fixes exactly one instance of
+a much broader class. What is actually known:
+
+**1. Instagram Stories have no duration check at all.** Meta's Story video format is roughly
+60 seconds. Nothing in the dashboard or the worker checks it — not the composer, not
+`publisher._validate`. A 10-minute clip targeted at an IG Story schedules cleanly and fails at
+Meta with a generic error that says nothing about duration. **Verify the exact limit against
+Meta's live docs before building** — do not trust a remembered number, this project's rule.
+
+**2. The upload gate is platform-blind and hardcoded to Instagram.**
+`dashboard/app/api/assets/upload/route.ts` runs `classifyReelErrors` against
+`video-spec.ts`'s `REEL_SPEC`, which is INSTAGRAM's spec (15-minute cap). It is the only
+duration gate in the whole app, and it applies to EVERY upload regardless of destination.
+
+Two consequences, in opposite directions:
+- **Too strict:** an 18-minute video is refused at upload even though a Facebook Page feed
+  video accepts up to 20 minutes. Now that Facebook feed video exists, the app rejects media
+  it is perfectly capable of publishing.
+- **Too loose:** it only guards the UPLOAD path. Anything already in the library, or written
+  by another path, is never re-checked against the destination actually chosen.
+
+**3. The worker validates almost nothing about video.** `publisher._validate` checks caption
+length, asset counts, and (as of this branch) Facebook Reels duration/size/ratio. It has NO
+Instagram duration check of any kind — Instagram relies entirely on the upload gate above.
+
+**What "done" should look like:** the per-destination limits live in ONE place, keyed by
+platform AND surface, mirrored the way `PLATFORM_CAPS` / `platforms.ts` already are; the
+composer greys out an impossible destination with the reason inline (the pattern
+`facebook-reel-spec.ts` + `channel-surface-picker.tsx` now establishes); the worker keeps a
+terminal backstop for stale rows the UI cannot reach; and the upload gate stops imposing
+Instagram's limits on media bound for somewhere else.
+
+Prior art to reuse, not reinvent: `dashboard/lib/facebook-reel-spec.ts` (a hand-mirrored
+per-surface spec with a header naming the worker as authority),
+`facebookReelDisabledReason()`, and the disabled-with-reason chips in
+`channel-surface-picker.tsx`.
 
 ---
 
