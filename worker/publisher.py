@@ -617,9 +617,61 @@ def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
         raise _NonRetryable(f"instagram adapter has no publish path for post_type '{post_type}'")
 
 
+def _resolve_fb_post_id(client, response, video_id, token) -> str:
+    """Prefer the FEED POST id metrics actually read against; never lose the id.
+
+    Three-step fallback, best (cheapest, most trustworthy) source first:
+      1. `post_id` already present in the publish response dict — free, no extra
+         request, and Meta returned it directly rather than us inferring it.
+      2. otherwise GET /{video-id}?fields=post_id via the client.
+      3. otherwise the video id itself. A publish that actually succeeded must
+         never be recorded as failed just because its metrics id could not be
+         resolved — a video id still lets a human find the post.
+    """
+    post_id = response.get("post_id")
+    if post_id:
+        return post_id
+    return client.get_page_video_post_id(video_id, token) or video_id
+
+
+def _publish_fb_video(client, plan, token, config, sleep_fn, *, as_reel: bool) -> str:
+    """Publish a Page video, to the feed or to Reels, and return the FEED POST id.
+
+    Both endpoints are asynchronous — Meta transcodes server-side — so both poll
+    before the publish is treated as done, using the Reels budget: the image
+    path's shorter ceiling is too short for video, and running out is retryable,
+    never terminal (see _poll_until_finished).
+    """
+    page = plan["account_id"]
+    url = plan["asset_urls"][0]
+    create = client.create_page_reel if as_reel else client.create_page_video
+    response = create(page, url, token, description=plan["caption"])
+    # create_page_reel guarantees video_id; create_page_video only has id (the
+    # video node, same convention as create_page_photo before it).
+    video_id = response.get("video_id") or response["id"]
+
+    _poll_until_finished(
+        client, video_id, token, config, sleep_fn,
+        status_fn=client.get_page_video_status,
+        interval=config.reels_status_poll_interval,
+        max_tries=config.reels_status_poll_max_tries,
+    )
+
+    return _resolve_fb_post_id(client, response, video_id, token)
+
+
 def _publish_facebook(client, plan, token, config, sleep_fn) -> str:
     post_type = plan["post_type"]
-    if post_type == "single":
+    if post_type == "video":
+        surface = plan.get("surface", "feed")
+        if surface == "feed":
+            return _publish_fb_video(client, plan, token, config, sleep_fn, as_reel=False)
+        if surface == "reel":
+            return _publish_fb_video(client, plan, token, config, sleep_fn, as_reel=True)
+        raise _NonRetryable(
+            f"facebook has no video publish path for surface '{surface}'"
+        )
+    elif post_type == "single":
         return _publish_fb_single(client, plan, token)
     elif post_type == "carousel":
         return _publish_fb_multi(client, plan, token)

@@ -759,6 +759,20 @@ class GraphClient:
         raw = (payload.get("status") or {}).get("video_status") or "unknown"
         return self._FB_VIDEO_STATUS.get(raw, raw)
 
+    def get_page_video_post_id(self, video_id: str, token: str) -> str | None:
+        """The FEED POST id for a published Page video, or None if Meta omits it.
+
+        Metrics read reactions/comments/shares off the POST node, but the publish
+        endpoints return the VIDEO node. This is the fallback path — publisher.py
+        checks the publish response itself for `post_id` first, since that's free;
+        this GET only runs when that check comes up empty. Returning None rather
+        than raising lets the caller fall back to the video id: a post that
+        published successfully must not be recorded as failed just because its
+        metrics id could not be resolved.
+        """
+        payload = self._get(video_id, {"fields": "post_id", "access_token": token})
+        return payload.get("post_id")
+
     def get_page_post_summary(self, post_id: str, token: str) -> dict:
         """Stable engagement counts for a Page post.
 

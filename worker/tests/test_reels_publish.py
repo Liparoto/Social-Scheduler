@@ -140,10 +140,12 @@ def test_reel_needs_exactly_one_video_asset():
         )
 
 
-@pytest.mark.parametrize("platform", ["facebook", "threads", "discord", "telegram"])
+@pytest.mark.parametrize("platform", ["threads", "discord", "telegram"])
 def test_reel_fails_terminally_on_every_other_platform(platform):
-    """No platform except Instagram publishes Reels. Each must refuse TERMINALLY with a
-    clear message — never retry forever, never silently drop the video."""
+    """Instagram and Facebook are the only platforms with a video publish path; every
+    other one must refuse TERMINALLY with a clear message — never retry forever, never
+    silently drop the video. (Facebook's own surface dispatch, and its refusal for
+    surfaces it doesn't support, are covered in test_facebook_video_publishing.py.)"""
     plan = {"platform": platform, "post_type": "video", "account_id": "X",
             "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
             "caption": "hi", "cover_frame_ms": None}
