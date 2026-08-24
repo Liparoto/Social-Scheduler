@@ -100,7 +100,7 @@ def test_every_other_platform_still_accepts_images():
 
 
 def test_tiktok_enforces_no_caption_limit_because_it_sends_no_caption():
-    assert PLATFORM_CAPS["tiktok"].caption_limit("reel") is None
+    assert PLATFORM_CAPS["tiktok"].caption_limit("video") is None
 
 
 # ---- Validation -----------------------------------------------------------------------
@@ -125,7 +125,7 @@ def test_validate_refuses_a_text_post_to_tiktok():
 
 
 def test_validate_accepts_a_reel_to_tiktok():
-    post = {"post_type": "reel", "first_comment": None}
+    post = {"post_type": "video", "first_comment": None}
     assets = [{"id": 1, "media_kind": "video", "storage_path": "a.mp4", "publish_path": None}]
     _validate(post, assets, True, None, "tiktok", None)   # must not raise
 
@@ -144,7 +144,7 @@ def test_delivered_send_records_the_publish_id_but_no_post_id(
     conn, config, fake_tiktok_client, make_publication
 ):
     """Decision 6, in one assertion: 'delivered' is not 'posted'."""
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None)
     _write_local_file(config, conn, pub["post_id"])
 
@@ -171,7 +171,7 @@ def test_delivery_uploads_the_bytes_and_waits_for_the_inbox_status(
         {"status": "PROCESSING_UPLOAD"},
         {"status": "SEND_TO_USER_INBOX"},
     ])
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None)
     _write_local_file(config, conn, pub["post_id"])
 
@@ -192,7 +192,7 @@ def test_a_failed_upload_status_fails_the_publication_with_tiktoks_reason(
     client = FakeTikTokClient(status_sequence=[
         {"status": "FAILED", "fail_reason": "video_format_unsupported"}
     ])
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None)
     _write_local_file(config, conn, pub["post_id"])
 
@@ -229,7 +229,7 @@ def test_an_image_post_to_tiktok_fails_terminally_rather_than_retrying(
 def test_dry_run_touches_tiktok_not_at_all(
     conn, config, fake_tiktok_client, make_publication
 ):
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None)
 
     out = publish_one(conn, pub, config, fake_tiktok_client, dry_run=True)
@@ -258,7 +258,7 @@ def test_publishing_refreshes_an_expiring_token_first(conn, config, make_publica
     tiktok_config = dataclasses.replace(
         config, tiktok_client_key="k", tiktok_client_secret="s"
     )
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None)
     _write_local_file(config, conn, pub["post_id"])
     # Push the token to the edge of expiry.
@@ -289,7 +289,7 @@ def test_a_revoked_authorisation_fails_terminally_and_says_reconnect(
     tiktok_config = dataclasses.replace(
         config, tiktok_client_key="k", tiktok_client_secret="s"
     )
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None)
     _write_local_file(config, conn, pub["post_id"])
     # No refresh token and an expired access token: only a human can fix this.

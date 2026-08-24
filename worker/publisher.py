@@ -27,7 +27,7 @@ from .logging_setup import LOGGER_NAME
 from .redact import redact
 
 MIN_CAROUSEL = 2
-SUPPORTED_POST_TYPES = ("single", "carousel", "text", "reel")
+SUPPORTED_POST_TYPES = ("single", "carousel", "text", "video")
 
 
 def _utcnow() -> datetime:
@@ -238,15 +238,15 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         return
     if post_type == "single" and len(assets) != 1:
         raise _NonRetryable(f"single post needs exactly 1 asset, has {len(assets)}")
-    if post_type == "reel":
+    if post_type == "video":
         if len(assets) != 1:
-            raise _NonRetryable(f"a reel needs exactly 1 asset, has {len(assets)}")
+            raise _NonRetryable(f"a video post needs exactly 1 asset, has {len(assets)}")
         if assets[0]["media_kind"] != "video":
             raise _NonRetryable(
-                f"a reel needs a video asset, got media_kind='{assets[0]['media_kind']}'"
+                f"a video post needs a video asset, got media_kind='{assets[0]['media_kind']}'"
             )
     # Video-only platforms. Caught here rather than left to the adapter for the same
-    # reason as the reel and carousel rules below: an unpublishable combination that gets
+    # reason as the video and carousel rules below: an unpublishable combination that gets
     # scheduled first dies terminally later, long after the composer could have said so.
     if post_type in ("single", "carousel") and not caps.supports_images:
         raise _NonRetryable(f"{platform} cannot publish image posts — it is video only")
@@ -611,7 +611,7 @@ def _publish_instagram(client, plan, token, config, sleep_fn) -> str:
         return _publish_single(client, plan, token, config, sleep_fn)
     elif post_type == "carousel":
         return _publish_carousel(client, plan, token, config, sleep_fn)
-    elif post_type == "reel":
+    elif post_type == "video":
         return _publish_reel(client, plan, token, config, sleep_fn)
     else:
         raise _NonRetryable(f"instagram adapter has no publish path for post_type '{post_type}'")
@@ -755,7 +755,7 @@ def _publish_tiktok(client, plan, token, config, sleep_fn) -> str:
     from .tiktok_api import plan_chunks
 
     post_type = plan["post_type"]
-    if post_type != "reel":
+    if post_type != "video":
         raise _NonRetryable(
             f"tiktok adapter has no publish path for post_type '{post_type}' — video only"
         )

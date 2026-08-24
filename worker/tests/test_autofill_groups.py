@@ -79,7 +79,7 @@ def test_capable_post_ids_ignores_targeting_and_cooldown(conn):
 def test_reel_is_capable_for_instagram_but_not_threads(conn):
     ig = make_channel(conn, platform="instagram", name="IG")
     th = make_channel(conn, platform="threads", name="TH")
-    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
+    reel = make_post(conn, post_type="video", media_kind="video", targets=(ig, th))
     assert reel in capable_post_ids(conn, ch(conn, ig))
     assert reel not in capable_post_ids(conn, ch(conn, th))
 
@@ -155,7 +155,7 @@ def test_reel_goes_to_instagram_only_capability_is_an_exception(conn):
     """Threads declares supports_video=False. The Reel must still queue to Instagram —
     this is the rule that keeps evergreen video recycling alive."""
     gid, ig, th = pair(conn)
-    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
+    reel = make_post(conn, post_type="video", media_kind="video", targets=(ig, th))
     assert picked(conn, gid) == [(reel, [ig])]
 
 
@@ -374,7 +374,7 @@ def test_group_queue_depth_counts_slots_not_rows(conn, config):
 
 def test_group_reel_queues_instagram_only_and_does_not_stall_the_slot(conn, config):
     gid, ig, th = pair(conn, min_depth=1, target=1)
-    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
+    reel = make_post(conn, post_type="video", media_kind="video", targets=(ig, th))
 
     run_autofill(conn, config, NOW)
 

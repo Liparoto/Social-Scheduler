@@ -99,7 +99,7 @@ def test_caption_limits_are_declared_per_post_type():
     assert PLATFORM_CAPS["threads"].caption_limit("single") == 500
     assert PLATFORM_CAPS["instagram"].caption_limit("single") is None
     # An unknown post type must not invent a limit.
-    assert PLATFORM_CAPS["threads"].caption_limit("reel") is None
+    assert PLATFORM_CAPS["threads"].caption_limit("video") is None
 
 
 def test_meta_platforms_do_not_upload_bytes_themselves():

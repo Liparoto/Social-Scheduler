@@ -51,13 +51,13 @@ def make_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
     return pid
 
 
-def make_reel_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
-                    content_kind="evergreen"):
-    """A reel: post_type='reel' with exactly one video asset (mirrors what the Reels
+def make_video_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
+                     content_kind="evergreen"):
+    """A video post: post_type='video' with exactly one video asset (mirrors what the
     validator from Task 3 requires to publish)."""
     pid = conn.execute(
         "INSERT INTO posts (caption, post_type, status, content_status, content_kind, created_at) "
-        "VALUES ('reel caption','reel','draft','ready',?,?)",
+        "VALUES ('reel caption','video','draft','ready',?,?)",
         (content_kind, created_at),
     ).lastrowid
     aid = conn.execute(
@@ -299,9 +299,9 @@ def test_reels_are_eligible_for_autofill(conn):
     query, a reel is publishable but never auto-queued — it just silently never
     appears, with no error anywhere."""
     ch = make_channel(conn)
-    p = make_reel_post(conn, ch)
+    p = make_video_post(conn, ch)
     rows = select_candidates(conn, ch, NOW)
-    assert [r["post_type"] for r in rows] == ["reel"]
+    assert [r["post_type"] for r in rows] == ["video"]
     assert p in picks(conn, ch, 10)
 
 
@@ -309,8 +309,8 @@ def test_reels_not_selected_for_channel_with_no_video_publish_path(conn):
     """Mirrors test_text_post_not_selected_for_instagram_channel, but for the OTHER
     capability-gated post_type: a channel on a platform whose PLATFORM_CAPS declares no
     video capability (video_surfaces=frozenset(), so supports_video is False) must never
-    have a reel auto-queued to it. Without this gate the worker would fail it terminally
-    every autofill cycle forever, since 'failed' isn't in ACTIVE_QUEUE_STATUSES.
+    have a video post auto-queued to it. Without this gate the worker would fail it
+    terminally every autofill cycle forever, since 'failed' isn't in ACTIVE_QUEUE_STATUSES.
 
     Uses 'threads' rather than 'facebook' as the example: Facebook now DOES declare a
     'reel' video_surface (it has two real video destinations, feed and Reels — see
@@ -318,7 +318,7 @@ def test_reels_not_selected_for_channel_with_no_video_publish_path(conn):
     demonstrates a platform with none. Threads genuinely has neither a video surface nor
     a publish path (_publish_threads has no video branch), so it still does."""
     ch = make_channel(conn, platform="threads")
-    p = make_reel_post(conn, ch)
+    p = make_video_post(conn, ch)
     rows = select_candidates(conn, ch, NOW)
     assert [r["post_type"] for r in rows] == []
     assert p not in picks(conn, ch, 10)
