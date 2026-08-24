@@ -2,7 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { PLATFORMS, accountIdLabel, usesAccountId, usesLinkedPage, platformLabel } from "@/lib/platforms";
+import {
+  PLATFORMS,
+  accountIdLabel,
+  supportsIdLookup,
+  usesAccountId,
+  usesLinkedPage,
+  platformLabel,
+} from "@/lib/platforms";
+import { AccountIdLookup } from "@/components/account-id-lookup";
+import { FacebookConnect } from "@/components/facebook-connect";
 import { ColorSwatchPicker } from "@/components/color-swatch-picker";
 import { TimezonePicker } from "@/components/timezone-picker";
 
@@ -49,6 +58,11 @@ export function ChannelForm({
   // TikTok's channel row is created by the OAuth callback, not by this form's Save — it
   // is the only platform whose credential cannot be typed in at all.
   const isTikTok = form.platform === "tiktok";
+  // Facebook has its own Connect panel: unlike the other platforms, its id and its
+  // credential are produced by the same exchange, and the token that finds the Page (a
+  // short-lived USER token) is NOT the token the channel stores (a permanent PAGE token).
+  // Offering the generic id lookup here invited pasting the former where the latter goes.
+  const isFacebook = form.platform === "facebook";
 
   function set<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -59,7 +73,18 @@ export function ChannelForm({
     const res = await fetch("/api/channels", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      // Trim the credential fields, because the lookup already validates a TRIMMED token
+      // while createChannel stores whatever is here verbatim. A token pasted with a
+      // trailing newline (routine out of a terminal or the Graph API Explorer) would
+      // otherwise look up green — "@liparoto found" — and then be saved with the
+      // whitespace still on it, failing later as an auth error with nothing to connect it
+      // back to the paste. The value that was verified must be the value that is stored.
+      body: JSON.stringify({
+        ...form,
+        access_token: form.access_token.trim(),
+        remote_account_id: form.remote_account_id.trim(),
+        linked_page_id: form.linked_page_id.trim(),
+      }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -140,6 +165,20 @@ export function ChannelForm({
             className={field}
           />
         </div>
+        {isFacebook ? (
+          <FacebookConnect
+            onConnected={({ pageId, name, pageToken }) =>
+              setForm((f) => ({
+                ...f,
+                remote_account_id: pageId,
+                // The verified PAGE token, which is what the channel stores. The user
+                // token that produced it is discarded by the panel and never lands here.
+                access_token: pageToken,
+                account_name: f.account_name.trim() === "" ? name : f.account_name,
+              }))
+            }
+          />
+        ) : null}
         {isTikTok ? null : usesAccountId(form.platform) ? (
           <div>
             <label className={label}>
@@ -151,6 +190,25 @@ export function ChannelForm({
               value={form.remote_account_id}
               onChange={(e) => set("remote_account_id", e.target.value)}
             />
+            {supportsIdLookup(form.platform) && !isFacebook ? (
+              <AccountIdLookup
+                platform={form.platform}
+                token={form.access_token}
+                hasName={form.account_name.trim() !== ""}
+                onPick={(account) =>
+                  setForm((f) => ({
+                    ...f,
+                    remote_account_id: account.id,
+                    // Only fill a name the owner has not written themselves — theirs is a
+                    // label they chose ("Liparoto Threads"), and overwriting it with the
+                    // platform handle would quietly undo their own wording.
+                    account_name: f.account_name.trim() === "" && account.name
+                      ? account.name
+                      : f.account_name,
+                  }))
+                }
+              />
+            ) : null}
           </div>
         ) : null}
         {usesLinkedPage(form.platform) ? (

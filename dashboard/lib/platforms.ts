@@ -168,6 +168,21 @@ export function usesAccountId(value: string): boolean {
   return BY_VALUE.get(value)?.usesAccountId ?? true;
 }
 
+// Platforms whose account id can be read back from the access token itself, via a single
+// identity call (see lib/account-lookup.ts). Only the three Meta-family platforms can:
+// TikTok's open id already arrives with its OAuth callback, Discord has no account id
+// field at all, and a Telegram chat id genuinely cannot be derived from a bot token —
+// somebody has to message the bot before it knows the chat exists.
+//
+// Default FALSE for an unrecognised platform, which is the safe direction here: the cost
+// is a missing convenience button, whereas the opposite default offers a lookup that can
+// only ever fail and makes a working setup look broken.
+const ID_LOOKUP = new Set(["instagram", "threads", "facebook"]);
+
+export function supportsIdLookup(value: string): boolean {
+  return ID_LOOKUP.has(value);
+}
+
 // Default false is the safe direction: worst case the composer is over-cautious about an
 // unrecognised platform, rather than offering a text post to something that can't publish one.
 export function supportsText(value: string): boolean {

@@ -36,6 +36,11 @@ real post — staying in **Development mode**, no App Review, no paid tools.
 4. Click **Generate token** next to the account. Approve the dialog. **Copy the token now —
    it isn't shown again.** (This first token is short-lived, ~1 hour — see Step 3.)
 5. The same panel shows your **Instagram user id** (a long number). Note it.
+   - **Or skip it entirely.** In the dashboard, **Channels → Add channel** → pick
+     Instagram, paste the token into **Access token**, then click **"Don't know it? Look
+     it up from your access token"** under the id field. The dashboard asks Meta who the
+     token belongs to and fills the id in for you. It shows the username too, which is the
+     part worth checking — that one line confirms both the token and the id at once.
    - You don't need to add yourself as an "Instagram Tester" for your *own* account — the
      Add-account/Generate-token step is the authorization. ⚠ (Strongly implied by Meta's
      flow; not stated verbatim on one page.)
@@ -211,24 +216,33 @@ as long as you're an **admin** on both the app and the Page. Same arrangement as
    `pages_show_list`, `pages_read_engagement`, and `pages_manage_posts`. When the approval popup
    asks which Pages to allow, **select every Page you want to manage** — Pages you leave
    unticked simply won't appear later.
-4. **Get the permanent Page token.** From the repo root:
+4. **Get the permanent Page token — in the dashboard.** **Channels → Add channel** →
+   Platform **Facebook Page**. Paste the **user token** from the Explorer's *Access Token*
+   box into the **Connect** panel and press **Connect**.
+
+   That is the whole step. The dashboard extends the short-lived token to a long-lived
+   one, lists the Pages you administer, and — once you pick one — derives that Page's
+   **permanent** token, verifies it, and fills in the Page id, the account name and the
+   token for you. Press **Save channel**. Nothing is stored until you do.
+
+   The user token is used once and discarded; it is never saved and never leaves your
+   machine except to Meta. Pages you lack publishing rights on appear greyed out with the
+   role you are missing, rather than silently vanishing from the list.
+
+   **Prefer the terminal, or on a machine with no dashboard running?** The original helper
+   still does the same job, and is still the only path for Instagram and Threads:
 
    ```
    .venv/bin/python -m worker.exchange_token
    ```
-
-   Choose **Facebook Page**, then paste the **user token** sitting in the Explorer's
-   *Access Token* box — not a Page token, and nothing you've already exchanged. The helper
-   extends it, lists the Pages you administer, checks the one you pick can actually publish,
-   and stores the result. It prints your Page id if no channel exists yet.
 
    **Do not shortcut this by copying a token out of `me/accounts` directly.** That token
    inherits the ~1 hour lifetime of the short-lived user token behind it, and looks
    identical to a permanent one. This is the single most common way this setup goes wrong:
    everything works, and then it doesn't. The helper refuses to save such a token.
 
-   Before saving it verifies four things, each a real failure that otherwise surfaces hours
-   later as an unexplained `(#200)`:
+   Both paths verify the same things before saving — each one a real failure that
+   otherwise surfaces hours later as an unexplained `(#200)`:
 
    | Check | Why |
    |---|---|
@@ -335,8 +349,12 @@ publishes no statement relating it to Instagram identifiers.)
    The returned `access_token` is valid ~60 days. Refresh it before expiry the same way you
    would an Instagram token, using Threads' own refresh endpoint — ask me if you want the
    exact call when you're closer to that date.
-4. **Find your Threads user id.** The token-generation panel usually shows it, but the
-   reliable way is to ask the API with the token you just made:
+4. **Find your Threads user id.** Easiest: in the dashboard, **Channels → Add channel** →
+   Threads, paste the long-lived token into **Access token**, then click **"Don't know it?
+   Look it up from your access token"** under the id field. It fills in the id and shows
+   the username, so you can confirm it is the account you meant.
+
+   The token-generation panel usually shows the id too, and the equivalent by hand is:
    ```
    curl -s "https://graph.threads.net/v1.0/me?fields=id,username&access_token=YOUR_THREADS_TOKEN"
    ```

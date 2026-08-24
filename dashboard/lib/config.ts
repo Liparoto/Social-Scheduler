@@ -71,6 +71,25 @@ export const config = {
   assetStorageDir: resolveRepoPath(get("ASSET_STORAGE_DIR", "data/assets")),
   publicAssetBaseUrl: get("PUBLIC_ASSET_BASE_URL", ""),
   defaultTimezone: get("DEFAULT_TIMEZONE", "UTC"),
+  // Read from the same env vars as worker/config.py:243, :246 and :260, with the same
+  // defaults, so the account-id lookup can never ask a different API version — or a
+  // different HOST — than the worker publishes against. Threads versions independently of
+  // the Instagram/Facebook epoch (v1.0 vs v25.0+), which is why the versions are two
+  // values and not one.
+  graphVersion: get("META_GRAPH_VERSION", "v25.0"),
+  threadsApiVersion: get("THREADS_API_VERSION", "v1.0"),
+  // Which Meta login path this install is on. worker/clients.py:46 resolves INSTAGRAM's
+  // host from this same var, so it decides what an Instagram token here even is:
+  //   graph.instagram.com  -> Instagram-Login: the token identifies the IG account itself
+  //   graph.facebook.com   -> Facebook-Login: the token is a FACEBOOK user token, and the
+  //                           IG id is reached via a Page, not via /me
+  // The default is graph.facebook.com (.env.example:71), so this cannot be assumed.
+  graphBase: get("META_GRAPH_BASE", "https://graph.facebook.com"),
+  // The Meta app's own credentials, same vars as worker/config.py:241-242. Needed to
+  // extend a short-lived token and to call debug_token. Server-side only — these are
+  // read in route handlers and never included in a response or sent to the browser.
+  metaAppId: get("META_APP_ID", ""),
+  metaAppSecret: get("META_APP_SECRET", ""),
   videoConverter: resolveVideoConverter(),
   videoConvertTimeoutMs:
     (Number.isFinite(videoConvertTimeoutSec) && videoConvertTimeoutSec > 0
