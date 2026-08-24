@@ -184,18 +184,22 @@ class GraphClient:
 
     RUPLOAD_BASE = "https://rupload.facebook.com/video-upload"
 
-    def _post_rupload(self, video_id: str, token: str, file_url: str) -> dict:
+    def _post_rupload(self, upload_url: str, token: str, file_url: str) -> dict:
         """The Reels upload phase, which does NOT go through _post.
 
         Different host, headers instead of form fields, and no body at all: Meta fetches
         file_url itself. The token rides in an Authorization header rather than the URL,
         so unlike _post there is no token in the request line — but the response is still
-        redacted, because a Meta error body can echo request context back.
+        redacted (worker.redact now covers the OAuth-header and bare-EAA-token shapes
+        too), because a Meta error body can echo request context back.
+
+        upload_url is whatever the caller resolved (Meta's own `upload_url` from the
+        start phase, preferred, or the constructed RUPLOAD_BASE URL as a fallback) — this
+        helper does not build it, so it stays agnostic to which one was used.
         """
-        url = f"{self.RUPLOAD_BASE}/{self.graph_version}/{video_id}"
         headers = {"Authorization": f"OAuth {token}", "file_url": file_url}
         try:
-            resp = self.session.post(url, headers=headers, timeout=self.timeout)
+            resp = self.session.post(upload_url, headers=headers, timeout=self.timeout)
         except requests.RequestException as exc:
             raise GraphAPIError(f"POST rupload -> request failed: {redact(str(exc))}") from None
         if not resp.ok:
@@ -665,20 +669,23 @@ class GraphClient:
         file_url: str,
         token: str,
         description: str | None = None,
-    ) -> str:
-        """Publish an ordinary video to a Page's feed. Returns the VIDEO id.
+    ) -> dict:
+        """Publish an ordinary video to a Page's feed. Returns the raw response.
 
         One call, no upload session: Meta fetches file_url server-side, exactly as the
         photo path does. Accepts any aspect ratio and up to 20 minutes via URL, which is
         why the feed surface sends the untouched original rather than the 9:16 derivative.
 
-        The returned id is the VIDEO node, NOT the feed post. Metrics read against the
-        post, so the caller must resolve it (see publisher._resolve_fb_post_id).
+        Same convention as create_page_photo: return the whole dict rather than pulling
+        out `id`. The `id` here is the VIDEO node, NOT the feed post that metrics read
+        against — if this response ever carries a `post_id` too (Meta is inconsistent
+        about this across video endpoints), throwing it away would force a needless
+        follow-up GET to resolve it (see publisher._resolve_fb_post_id).
         """
         data = {"file_url": file_url, "access_token": token}
         if description:
             data["description"] = description
-        return self._post(f"{page_id}/videos", data)["id"]
+        return self._post(f"{page_id}/videos", data)
 
     def create_page_reel(
         self,
@@ -686,14 +693,25 @@ class GraphClient:
         file_url: str,
         token: str,
         description: str | None = None,
-    ) -> str:
-        """Publish a Reel to a Page in Meta's three phases. Returns the VIDEO id.
+    ) -> dict:
+        """Publish a Reel to a Page in Meta's three phases. Returns a merged dict.
 
-        start  -> Meta allocates a video id and an upload URL
+        start  -> Meta allocates a video id and (usually) an upload URL
         upload -> we hand it a public file_url; Meta fetches the bytes itself
         finish -> video_state=PUBLISHED, with the caption as `description`
 
-        Like create_page_video, the id returned is the VIDEO node and not the feed post.
+        The upload phase is directed at whatever URL Meta actually returned from start
+        (`upload_url`) rather than a URL we construct ourselves — Meta hands that back
+        precisely so the host or path can change or shard later. The constructed
+        RUPLOAD_BASE URL is only a fallback for the (undocumented-as-ever-happening) case
+        where `upload_url` is absent.
+
+        Returns `{"video_id": ..., **finish_response}` — the video_id from the start
+        phase is guaranteed present (we raise before it if the start phase didn't return
+        one), merged with whatever the finish phase's response body was. Nothing from
+        either response is discarded: like create_page_video, the id here is the VIDEO
+        node and not the feed post, and if either phase ever surfaces a `post_id` the
+        caller gets it without a needless extra GET.
         """
         started = self._post(f"{page_id}/video_reels", {
             "upload_phase": "start",
@@ -703,7 +721,8 @@ class GraphClient:
         if not video_id:
             raise GraphAPIError(f"video_reels start returned no video_id: {redact(str(started))}")
 
-        self._post_rupload(video_id, token, file_url)
+        upload_url = started.get("upload_url") or f"{self.RUPLOAD_BASE}/{self.graph_version}/{video_id}"
+        self._post_rupload(upload_url, token, file_url)
 
         data = {
             "upload_phase": "finish",
@@ -713,8 +732,10 @@ class GraphClient:
         }
         if description:
             data["description"] = description
-        self._post(f"{page_id}/video_reels", data)
-        return video_id
+        finished = self._post(f"{page_id}/video_reels", data)
+        # video_id last: it must win over anything (unexpectedly) named the same in the
+        # finish response, since it's the one value here we've already verified is real.
+        return {**finished, "video_id": video_id}
 
     # Facebook's video status is a nested object of lowercase values; Instagram's is a
     # flat status_code of SCREAMING ones. Mapping here — at the client boundary — lets

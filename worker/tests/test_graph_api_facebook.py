@@ -136,13 +136,23 @@ def test_create_page_video_posts_file_url_to_videos_edge():
     session = FakeSession([FakeResponse({"id": "v123"})])
     client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
 
-    video_id = client_.create_page_video("PAGE", "https://x.test/a.mp4", "TOK", description="hi")
+    out = client_.create_page_video("PAGE", "https://x.test/a.mp4", "TOK", description="hi")
 
-    assert video_id == "v123"
+    assert out == {"id": "v123"}
     url, data, _headers = session.posts[0]
     assert url.endswith("/PAGE/videos")
     assert data["file_url"] == "https://x.test/a.mp4"
     assert data["description"] == "hi"
+
+
+def test_create_page_video_returns_the_full_response_including_post_id():
+    """If the /videos endpoint ever hands back a post_id alongside the video id, the
+    caller must get it — throwing it away would force a needless follow-up GET to
+    resolve video id -> feed post id. Same convention as create_page_photo."""
+    session = FakeSession([FakeResponse({"id": "v123", "post_id": "page_1_post_9"})])
+    client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
+    out = client_.create_page_video("PAGE", "https://x.test/a.mp4", "TOK")
+    assert out == {"id": "v123", "post_id": "page_1_post_9"}
 
 
 def test_create_page_video_omits_empty_description():
@@ -158,16 +168,21 @@ def test_create_page_video_omits_empty_description():
 
 
 def test_create_page_reel_runs_all_three_phases():
+    # upload_url deliberately differs from the RUPLOAD_BASE construction (a sharded
+    # host) so this test can catch a regression to hardcoding it — see
+    # test_create_page_reel_uploads_to_the_url_meta_returns_not_a_constructed_one.
     session = FakeSession([
-        FakeResponse({"video_id": "v9", "upload_url": "https://rupload.facebook.com/video-upload/v25.0/v9"}),
+        FakeResponse({"video_id": "v9", "upload_url": "https://rupload-shard7.facebook.com/video-upload/v25.0/v9"}),
         FakeResponse({"success": True}),
         FakeResponse({"success": True}),
     ])
     client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
 
-    video_id = client_.create_page_reel("PAGE", "https://x.test/a.mp4", "TOK", description="hi")
+    out = client_.create_page_reel("PAGE", "https://x.test/a.mp4", "TOK", description="hi")
 
-    assert video_id == "v9"
+    # Merged dict: the guaranteed video_id from the start phase, plus whatever the
+    # finish phase's response body carried.
+    assert out == {"video_id": "v9", "success": True}
     assert len(session.posts) == 3
 
     start_url, start_data, _ = session.posts[0]
@@ -175,7 +190,7 @@ def test_create_page_reel_runs_all_three_phases():
     assert start_data["upload_phase"] == "start"
 
     up_url, up_data, up_headers = session.posts[1]
-    assert up_url == "https://rupload.facebook.com/video-upload/v25.0/v9"
+    assert up_url == "https://rupload-shard7.facebook.com/video-upload/v25.0/v9"
     assert up_headers["Authorization"] == "OAuth TOK"
     assert up_headers["file_url"] == "https://x.test/a.mp4"
     # The hosted form sends NO body and none of the local-file headers.
@@ -188,6 +203,33 @@ def test_create_page_reel_runs_all_three_phases():
     assert fin_data["video_id"] == "v9"
     assert fin_data["video_state"] == "PUBLISHED"
     assert fin_data["description"] == "hi"
+
+
+def test_create_page_reel_uploads_to_the_url_meta_returns_not_a_constructed_one():
+    """Meta returns upload_url from the start phase precisely so the host or path can
+    change or shard without breaking us. Hardcoding RUPLOAD_BASE and ignoring it would
+    silently drift from whatever Meta actually told us to use."""
+    session = FakeSession([
+        FakeResponse({"video_id": "v9", "upload_url": "https://rupload-shard3.facebook.com/video-upload/v25.0/v9"}),
+        FakeResponse({"success": True}),
+        FakeResponse({"success": True}),
+    ])
+    client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
+    client_.create_page_reel("PAGE", "https://x.test/a.mp4", "TOK")
+    up_url, _up_data, _up_headers = session.posts[1]
+    assert up_url == "https://rupload-shard3.facebook.com/video-upload/v25.0/v9"
+
+
+def test_create_page_reel_falls_back_to_constructed_url_when_upload_url_is_absent():
+    session = FakeSession([
+        FakeResponse({"video_id": "v9"}),  # no upload_url this time
+        FakeResponse({"success": True}),
+        FakeResponse({"success": True}),
+    ])
+    client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
+    client_.create_page_reel("PAGE", "https://x.test/a.mp4", "TOK")
+    up_url, _up_data, _up_headers = session.posts[1]
+    assert up_url == "https://rupload.facebook.com/video-upload/v25.0/v9"
 
 
 def test_create_page_reel_raises_when_start_returns_no_video_id():
