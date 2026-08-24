@@ -139,3 +139,83 @@ def test_a_reel_missing_width_and_height_is_not_blocked_on_dimensions():
         [{"media_kind": "video", "id": 1, "duration_ms": 10_000}],
         dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
     )
+
+
+# -- Aspect ratio: Meta's Reels range is "between 16:9 and 9:16", inclusive both ends --
+
+def test_a_reel_narrower_than_9x16_is_refused():
+    with pytest.raises(_NonRetryable, match="aspect ratio"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 10_000,
+              "width": 540, "height": 2000}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_21x9_ultrawide_reel_is_refused():
+    with pytest.raises(_NonRetryable, match="aspect ratio"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 10_000,
+              "width": 2520, "height": 1080}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_reel_at_exactly_9x16_is_accepted():
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 10_000,
+          "width": 900, "height": 1600}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+def test_a_reel_at_exactly_16x9_landscape_is_accepted():
+    """The upper boundary of Meta's documented range ('between 16:9 and 9:16') is
+    16:9 landscape itself — 1920x1080 sits AT the boundary and IS permitted, not
+    rejected. Only something more extreme (e.g. 21:9 ultrawide) is refused."""
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 10_000,
+          "width": 1920, "height": 1080}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+def test_a_reel_missing_dimensions_is_not_blocked_on_aspect_ratio():
+    """Same rationale as unknown duration/size: legacy rows may not carry width/height
+    at all — Meta is the backstop, not this gate."""
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 10_000, "width": None,
+          "height": None}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+# -- Finding 1: surface='reel' requires post_type='video' AND a platform with a Reels
+# surface. This is the terminal guard against a stale post_targets row (e.g. the
+# composer let a video-backed reel target survive after its asset was swapped for an
+# image) reaching a create call and double-posting the wrong media. -------------------
+
+def test_a_reel_surface_on_a_non_video_post_is_refused_terminally():
+    with pytest.raises(_NonRetryable, match="reel surface needs a video post"):
+        _validate(
+            {"post_type": "single"},
+            [{"media_kind": "image", "id": 1, "storage_path": "a.jpg"}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_reel_surface_on_a_platform_without_a_reels_surface_is_refused_terminally():
+    """Instagram's feed video IS Reels — there is no separate 'reel' surface for it
+    (see PLATFORM_CAPS in clients.py). A stale row naming surface='reel' on Instagram
+    must not slip through just because post_type='video' checks out."""
+    with pytest.raises(_NonRetryable, match="reel surface needs a video post"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "storage_path": "a.mp4"}],
+            dry_run=True, asset_base_url=None, platform="instagram", surface="reel",
+        )

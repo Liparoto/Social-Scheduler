@@ -22,6 +22,15 @@ function fixture() {
     account_name: `${prefix}-ig`,
     timezone: "America/Los_Angeles",
   } as Parameters<typeof q.createChannel>[0]);
+  // Facebook, for the reel test below: Instagram's feed video IS a Reel — it has no
+  // separate 'reel' surface (see PLATFORM_CAPS in worker/clients.py) — so a reel target
+  // on an Instagram channel is not a combination the worker's _validate will actually
+  // let through. Facebook is the platform that genuinely has one.
+  const fb = q.createChannel({
+    platform: "facebook",
+    account_name: `${prefix}-fb`,
+    timezone: "America/Los_Angeles",
+  } as Parameters<typeof q.createChannel>[0]);
   const assetId = Number(
     db
       .prepare(
@@ -34,7 +43,7 @@ function fixture() {
     first_comment: "",
     asset_ids: [assetId],
   });
-  return { ig, postId, assetId };
+  return { ig, fb, postId, assetId };
 }
 
 async function schedule(postId: number, body: unknown) {
@@ -86,9 +95,13 @@ test("a feed target still schedules one feed publication covering all assets", a
 });
 
 test("a reel target schedules one feed-shaped publication covering all assets", async () => {
-  const { ig, postId } = fixture();
+  // Facebook, not Instagram: once the worker's _validate guard exists (surface='reel'
+  // requires post_type='video' on a platform whose caps declare a Reels surface),
+  // Instagram + reel is a combination that will never actually publish — Instagram's
+  // feed video already IS a Reel. Facebook is the platform this really happens on.
+  const { fb, postId } = fixture();
   const res = await schedule(postId, {
-    targets: [{ channel_id: ig, surface: "reel" }],
+    targets: [{ channel_id: fb, surface: "reel" }],
     post_now: true,
   });
 

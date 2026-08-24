@@ -191,7 +191,11 @@ the existing `_NonRetryable` with a clear message, per the project's visible-fai
 
 **Poll budget:** reuse `reels_status_poll_interval` × `reels_status_poll_max_tries` (10 s × 90 =
 15 minutes). Facebook transcodes server-side exactly as Instagram does; the image path's 5-minute
-budget is too short. Budget exhaustion is **retryable**, never terminal.
+budget is too short.
+
+**Budget exhaustion is NOT retryable — see the governing principle in "Error handling" below.**
+Unlike Instagram, the create call above has already published the video by the time this poll
+runs; exhaustion just means Meta hasn't confirmed transcoding yet, not that publishing failed.
 
 ### The id-resolution problem
 
@@ -258,8 +262,32 @@ channel is not verified for this install.
 Unchanged in shape — each channel target is an independent `publication` with its own status, and
 a Facebook video failure must not roll back or block the other targets.
 
-- Poll-budget exhaustion → retryable, backoff, visible in `last_error`.
-- `video_status: error` / `upload_failed` → terminal `_NonRetryable` carrying Meta's own message.
+**GOVERNING PRINCIPLE, shipped deliberately: once the create call (`create_page_video` /
+`create_page_reel`) returns, the post EXISTS on Facebook — video/reel creation publishes
+immediately, and polling afterwards only confirms Meta finished transcoding it. This is the
+opposite of Instagram, which polls BEFORE `publish_container` and so can safely raise/retry on
+any poll outcome, because nothing has been published there yet. On Facebook, nothing after the
+create call may cause a re-publish, so retryable and terminal are assigned by that rule, not by
+how "bad" the outcome sounds:**
+
+- **Poll-budget exhaustion is NOT retryable.** The video is already live; Meta is just slow to
+  confirm it. Retrying here would call `create_page_video`/`create_page_reel` again against a
+  Page where the video already exists — a double-post. Exhaustion instead falls through and
+  records the send as `posted`, with a visible (non-fatal) warning logged. An unexpected
+  exception mid-poll (e.g. a network blip) is treated the same way, for the same reason.
+- **`video_status: error` / `upload_failed` (EXPIRED too) IS retryable**, via a plain
+  `RuntimeError` — a definitive "processing failed" signal is the one case where nothing usable
+  was actually published, so a retry is safe rather than a double-post.
+- A publish response missing both `video_id` and `id` (id resolution has nothing to key off of)
+  is terminal `_NonRetryable`, not a plain `RuntimeError` — that failure happens AFTER the create
+  call too, so the video is already live; recording it as a visible terminal failure is honest,
+  while a retryable `RuntimeError` there would double-post.
+
+**Do not "fix" the above back to the intuitive-looking pairing (exhaustion=retryable,
+error=terminal) — that pairing is what an earlier draft of this spec said, and it is wrong for
+Facebook specifically because Facebook publishes BEFORE polling. Get this backwards and a
+transient slow transcode causes a duplicate post on the owner's Page.**
+
 - Validation refusals → terminal, worded so the reason is legible without reading code.
 - Never log the token, and never log full API responses. The `rupload` call puts the token in an
   `Authorization` header, which `worker/redact.py` must be confirmed to cover.

@@ -215,3 +215,15 @@ def test_reel_id_resolution_also_falls_back_to_the_video_id():
     result = _publish_facebook(client, _plan("reel"), "TOK", Cfg(), lambda _s: None)
     assert result == "v1"
     assert client.lookup_calls == ["v1"]
+
+
+# -- Finding 2 (final review): no video_id/id at all must be TERMINAL, not retryable --
+def test_missing_video_id_in_create_response_is_terminal_not_retryable():
+    """This happens AFTER the create call — the video is already live on the Page. A
+    plain RuntimeError here would be caught by publish_one's generic handler and
+    retried, and a retry means create_page_video runs AGAIN against a Page where the
+    video is already live: the exact double-post the governing principle at the top of
+    this file forbids. _NonRetryable records it as a visible terminal failure instead."""
+    client = FakeClient(video_response={})
+    with pytest.raises(_NonRetryable, match="had no"):
+        _publish_facebook(client, _plan("feed"), "TOK", Cfg(), lambda _s: None)

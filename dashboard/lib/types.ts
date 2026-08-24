@@ -20,11 +20,12 @@ export type PostType = "single" | "carousel" | "video" | "story" | "text";
 // a separate axis so one post can be a Story on Instagram AND an ordinary post on Telegram
 // — see docs/design-instagram-stories.md.
 //
-// NOTE: this TYPE accepting "reel" does not by itself make the app accept a reel target —
-// the schedule route's own runtime parsing (lib/story-fanout.ts's parseTargets) still
-// rejects it as unrecognised, deliberately: wiring that route up to "reel" is a later task.
-// Widened here only so the surface picker (Task 11) can build a { surface: "reel" }
-// PostTarget without a type error; nothing downstream of the picker currently accepts one.
+// NOTE: "reel" is a fully wired target, not merely a type-level placeholder. The schedule
+// route's runtime parsing (lib/story-fanout.ts's parseTargets) accepts it, and the worker
+// (worker/publisher.py's _publish_facebook / _publish_fb_video) publishes it to a Facebook
+// Page's Reels edge. _validate additionally enforces, terminally, that a 'reel' surface
+// target has post_type='video' on a platform whose caps declare a Reels surface — so a
+// stale/malformed target can't reach the create call and publish the wrong media.
 export type Surface = "feed" | "story" | "reel";
 
 /** One destination for a post: a channel plus which of its surfaces to publish to. */

@@ -219,6 +219,20 @@ function SendRow({ send, postId }: { send: PostPublicationRow; postId: number })
               story · 24h
             </span>
           ) : null}
+          {/* Same visual treatment as the Story badge above — a Facebook Reel is a
+              different surface from the same Page's feed, and nothing else on this row
+              says so. Unlike a Story, a Reel does NOT expire and its metrics come off
+              the same feed-post node as an ordinary video (see get_page_post_summary /
+              _resolve_fb_post_id in publisher.py), so this badge says only what's true
+              for Facebook: it's a Reel, not the 24h/restricted-metrics claim above. */}
+          {send.surface === "reel" ? (
+            <span
+              className="rounded-full bg-surface-sunken px-1.5 py-px text-[10px] text-muted"
+              title="Publishes to the Page's Reels, not its ordinary feed."
+            >
+              reel
+            </span>
+          ) : null}
           {/* Where a delivered send actually got to. status='posted' means the worker's
               job succeeded; for TikTok that is a handoff, not a publication, and the
               badge alone would read as "it's up". Null for every platform that publishes

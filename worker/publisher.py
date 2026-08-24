@@ -16,6 +16,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from fractions import Fraction
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -261,6 +262,18 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             f"post_type '{post_type}' is not a publishable content shape "
             "(note: Stories are a target SURFACE, not a post_type)"
         )
+    if surface == "reel" and (post_type != "video" or "reel" not in caps.video_surfaces):
+        # A stale/malformed post_targets row (e.g. the video that funded a reel target
+        # got swapped for an image in the composer, which only hides the Reel chip —
+        # it does not prune the row) must not reach the create call. Without this, a
+        # non-video post targeted at 'reel' would publish whatever asset it does have
+        # to the wrong Facebook surface, or double-post if the same row also carries a
+        # feed target. Checked here, terminally, so a stale row the UI can no longer
+        # reach still can't publish.
+        raise _NonRetryable(
+            f"a reel surface needs a video post on a platform with a Reels surface, "
+            f"got post_type='{post_type}' on {platform}"
+        )
     if surface == "story":
         # A Story is one media regardless of the post's content shape, so the post_type
         # checks below (which describe the SOURCE) don't apply. _load_targets has already
@@ -318,6 +331,20 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
                 raise _NonRetryable(
                     f"a Facebook Reel needs at least 540x960, this is {width}x{height}"
                 )
+            # Meta's documented Reels range is "between 16:9 and 9:16" — inclusive on
+            # both ends, same as the duration gate above. 16:9 landscape (~1.778) sits
+            # AT the boundary and IS permitted; only something more extreme (a 21:9
+            # ultrawide, say) is refused. Fraction, not float division, so the 16:9
+            # boundary itself can't be excluded by rounding. Missing width/height must
+            # not block the send, same rationale as the unknown-duration case above —
+            # Meta is the backstop.
+            if width and height:
+                ratio = Fraction(width, height)
+                if not (Fraction(9, 16) <= ratio <= Fraction(16, 9)):
+                    raise _NonRetryable(
+                        "a Facebook Reel needs an aspect ratio between 9:16 and 16:9, "
+                        f"this is {width}x{height}"
+                    )
     # Video-only platforms. Caught here rather than left to the adapter for the same
     # reason as the video and carousel rules below: an unpublishable combination that gets
     # scheduled first dies terminally later, long after the composer could have said so.
@@ -795,7 +822,14 @@ def _publish_fb_video(client, plan, token, config, sleep_fn, *, as_reel: bool) -
     # a generic retryable failure by publish_one, and the video is already live.
     video_id = response.get("video_id") or response.get("id")
     if not video_id:
-        raise RuntimeError(
+        # _NonRetryable, not RuntimeError: this happens AFTER the create call, so the
+        # video is already live on the Page. A generic RuntimeError would be caught by
+        # publish_one's normal retry path and re-run the create call against a Page
+        # where the video already exists — the exact double-post the governing
+        # principle at the top of this function forbids. Recording this as a terminal
+        # failure is honest (something IS wrong — we can't confirm the post id) and
+        # visible; retrying it would silently double-post.
+        raise _NonRetryable(
             f"facebook {'reel' if as_reel else 'video'} publish response had no "
             f"id: {redact(str(response))}"
         )

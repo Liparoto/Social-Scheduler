@@ -293,7 +293,16 @@ export function Composer({
   }
 
   function removeAsset(id: number) {
+    const removed = assets.find((a) => a.asset.id === id);
     setAssets((prev) => prev.filter((a) => a.asset.id !== id));
+    if (removed?.asset.media_kind === "video") {
+      // The Reel chip disappears once hasVideo goes false, but an ALREADY-picked reel
+      // target would otherwise survive the removal and be submitted invisibly — mirrors
+      // toggleTextOnly's story-target pruning below. (The worker's _validate refuses a
+      // stale reel target terminally too, but pruning it here keeps the UI honest about
+      // what's actually selected.)
+      setTargets((prev) => prev.filter((t) => t.surface !== "reel"));
+    }
   }
 
   function toggleTextOnly(next: boolean) {

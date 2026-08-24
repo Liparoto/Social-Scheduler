@@ -215,7 +215,7 @@ export function PublicationQueue({
   const [status, setStatus] = useState<StatusFilter>("all");
   // DESTINATION, not platform: an Instagram channel has both surfaces, so this is a
   // separate axis from the platform filter above. Matches the Library's filter.
-  const [destination, setDestination] = useState<"all" | "story" | "feed">("all");
+  const [destination, setDestination] = useState<"all" | "story" | "reel" | "feed">("all");
 
   const shown = pubs.filter((p) => {
     // An empty set means no account filter at all, not "no accounts".
@@ -269,6 +269,7 @@ export function PublicationQueue({
         >
           <option value="all">All destinations</option>
           <option value="story">Stories</option>
+          <option value="reel">Reels</option>
           <option value="feed">Feed only</option>
         </select>
         <span className="data ml-auto text-[11px] text-muted">
@@ -403,6 +404,14 @@ export function PublicationQueue({
                               Story
                             </span>
                           ) : null}
+                          {p.surface === "reel" ? (
+                            <span
+                              className="mr-1.5 rounded-full border border-border-strong px-1.5 py-px align-middle text-[10px] font-medium text-ink-soft"
+                              title="Publishes to Facebook Reels, not the feed"
+                            >
+                              Reel
+                            </span>
+                          ) : null}
                           {p.post_caption || (
                             <span className="text-faint italic">
                               {p.surface === "story" ? "Stories carry no caption" : "No caption"}
@@ -412,12 +421,16 @@ export function PublicationQueue({
                         <p className="data mt-0.5 text-[11px] text-faint">
                           {/* post_type describes the SOURCE post. For a story send it would
                               read "carousel · 4 imgs" while this row publishes exactly one
-                              slide — so say what THIS send actually does instead. */}
+                              slide — so say what THIS send actually does instead. Same
+                              reasoning for a reel send: post_type reads "video" either way,
+                              which doesn't say WHICH Facebook surface it's headed to. */}
                           {p.surface === "story"
                             ? p.story_slide_no && p.asset_count > 1
                               ? `Story · slide ${p.story_slide_no} of ${p.asset_count}`
                               : "Story"
-                            : `${p.post_type}${p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}`}
+                            : p.surface === "reel"
+                              ? "Reel"
+                              : `${p.post_type}${p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}`}
                           {p.remote_post_id && p.remote_post_id !== "DRYRUN"
                             ? ` · ${p.remote_post_id}`
                             : ""}

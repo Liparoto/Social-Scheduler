@@ -117,6 +117,9 @@ export function CalendarChip({
           {send.surface === "story" ? (
             <span className="shrink-0 text-[9px] uppercase text-faint">story</span>
           ) : null}
+          {send.surface === "reel" ? (
+            <span className="shrink-0 text-[9px] uppercase text-faint">reel</span>
+          ) : null}
         </>
       )}
     </Link>
