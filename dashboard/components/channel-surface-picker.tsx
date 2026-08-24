@@ -9,6 +9,7 @@ import {
   videoSurfaces,
 } from "@/lib/platforms";
 import { needsStoryCanvas } from "@/lib/story-geometry";
+import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
 import type { PostTarget, Surface } from "@/lib/types";
 
 export interface PickerChannel {
@@ -71,9 +72,12 @@ export function ChannelSurfacePicker({
   /** How many slides the post has — a story target fans out to one Story per slide. */
   slideCount?: number;
   /** The post's assets, so a non-9:16 source can be flagged as "will be reframed" BEFORE
-   *  scheduling rather than discovered afterwards. Optional: callers without dimensions to
-   *  hand (the sends panel) simply don't get the note. */
-  assets?: { width: number | null; height: number | null }[];
+   *  scheduling, and an out-of-spec video can be flagged as ineligible for a Facebook Reel,
+   *  rather than either being discovered afterwards. Optional: callers without dimensions
+   *  (and duration) to hand (the sends panel, schedule-from-library) simply don't get the
+   *  note — and, per facebookReelDisabledReason, an unknown value never disables the chip
+   *  on its own. */
+  assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
   postNow?: boolean;
 }) {
   const storyCount = Math.max(slideCount, 1);
@@ -104,6 +108,12 @@ export function ChannelSurfacePicker({
           // entry in videoSurfaces (Instagram included: its feed video already IS a Reel,
           // so a separate toggle there would be a distinction with no difference).
           const offersReel = hasVideo && surfaces.includes("reel");
+          // Independent of videoDisabled: the whole channel can take this video (Feed is
+          // fine), but Reel specifically has its own, tighter limits. offersReel implies
+          // videoDisabled is false (a platform with no video surfaces at all never lists
+          // "reel"), so this is the only thing that can grey out just the Reel chip.
+          const reelSpecReason = offersReel ? facebookReelDisabledReason(assets?.[0]) : null;
+          const reelDisabled = videoDisabled || !!reelSpecReason;
           const feedOn = hasTarget(value, c.id, "feed");
           const storyOn = hasTarget(value, c.id, "story");
           const reelOn = hasTarget(value, c.id, "reel");
@@ -158,7 +168,7 @@ export function ChannelSurfacePicker({
             return (
               <div
                 key={c.id}
-                className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
+                className={`rounded-lg border px-3 py-2.5 transition-colors ${
                   anyOn ? "border-transparent" : "border-border"
                 }`}
                 style={
@@ -167,38 +177,45 @@ export function ChannelSurfacePicker({
                     : undefined
                 }
               >
-                {identity}
-                <span className="ml-auto flex shrink-0 gap-1" role="group"
-                      aria-label={`${c.account_name} destinations`}>
-                  <SurfaceChip
-                    label="Feed"
-                    on={feedOn}
-                    disabled={feedDisabled}
-                    disabledReason={reason}
-                    dot={color.dot}
-                    onClick={() => onChange(toggleTarget(value, c.id, "feed"))}
-                  />
-                  {offersStory ? (
+                <div className="flex items-center gap-3">
+                  {identity}
+                  <span className="ml-auto flex shrink-0 gap-1" role="group"
+                        aria-label={`${c.account_name} destinations`}>
                     <SurfaceChip
-                      label="Story"
-                      on={storyOn}
-                      disabled={videoDisabled}
+                      label="Feed"
+                      on={feedOn}
+                      disabled={feedDisabled}
                       disabledReason={reason}
                       dot={color.dot}
-                      onClick={() => onChange(toggleTarget(value, c.id, "story"))}
+                      onClick={() => onChange(toggleTarget(value, c.id, "feed"))}
                     />
-                  ) : null}
-                  {offersReel ? (
-                    <SurfaceChip
-                      label="Reel"
-                      on={reelOn}
-                      disabled={videoDisabled}
-                      disabledReason={reason}
-                      dot={color.dot}
-                      onClick={() => onChange(toggleTarget(value, c.id, "reel"))}
-                    />
-                  ) : null}
-                </span>
+                    {offersStory ? (
+                      <SurfaceChip
+                        label="Story"
+                        on={storyOn}
+                        disabled={videoDisabled}
+                        disabledReason={reason}
+                        dot={color.dot}
+                        onClick={() => onChange(toggleTarget(value, c.id, "story"))}
+                      />
+                    ) : null}
+                    {offersReel ? (
+                      <SurfaceChip
+                        label="Reel"
+                        on={reelOn}
+                        disabled={reelDisabled}
+                        disabledReason={reelSpecReason ?? reason}
+                        dot={color.dot}
+                        onClick={() => onChange(toggleTarget(value, c.id, "reel"))}
+                      />
+                    ) : null}
+                  </span>
+                </div>
+                {/* Shown inline, not just on hover — the limit should explain itself the
+                    moment it matters, same spirit as the reframing/fan-out notes below. */}
+                {reelSpecReason ? (
+                  <p className="mt-1.5 pl-8 text-[11px] text-muted">{reelSpecReason}</p>
+                ) : null}
               </div>
             );
           }

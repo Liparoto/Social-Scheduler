@@ -311,10 +311,11 @@ export function Composer({
     // it selected-but-disabled would submit a target that cannot work.
     if (next) {
       deselectIncompatible(supportsText);
-      // A text post has no media, so it has nothing a Story could show. The picker hides
-      // the chip, but an ALREADY-picked story target would otherwise survive the switch
-      // and be submitted invisibly.
-      setTargets((prev) => prev.filter((t) => t.surface !== "story"));
+      // A text post has no media, so it has nothing a Story or a Reel could show — hasVideo
+      // flips false the same way it would if the video itself were removed (see
+      // removeAsset), so both chips hide. An ALREADY-picked story/reel target would
+      // otherwise survive the switch and be submitted invisibly.
+      setTargets((prev) => prev.filter((t) => t.surface !== "story" && t.surface !== "reel"));
     }
   }
 
@@ -615,7 +616,11 @@ export function Composer({
             textOnly={textOnly}
             hasVideo={hasVideo}
             slideCount={assets.length}
-            assets={assets.map((a) => ({ width: a.asset.width, height: a.asset.height }))}
+            assets={assets.map((a) => ({
+              width: a.asset.width,
+              height: a.asset.height,
+              duration_ms: a.asset.duration_ms,
+            }))}
             postNow={postNow}
           />
         </section>
