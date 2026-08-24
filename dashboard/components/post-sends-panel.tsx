@@ -15,7 +15,7 @@ import {
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
-import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
+import { destinationDisabledReason } from "@/lib/media-limits";
 import { splitInTz } from "@/lib/time";
 
 const READ_ONLY_STATUSES = new Set(["posted", "publishing"]);
@@ -37,12 +37,13 @@ const segBtn = (active: boolean) =>
  *  - the channel can't publish this post's type at all (incompatibleChannelsForPostType);
  *  - every surface it offers already has a live (non-read-only, non-canceled, non-failed)
  *    send queued (busyKeys);
- *  - a {facebook, reel} target whose video is out of Facebook Reels' own spec — checked
- *    with the SAME limits the picker itself greys the Reel chip with, so a stale target
- *    can't silently survive just because it was already sitting in `targets` before this
- *    check existed. Mirrors post-editor.tsx's reelIneligible and schedule-from-library.tsx's
- *    effectiveLibraryTargets. With no `assets` supplied, facebookReelDisabledReason(undefined)
- *    is null and nothing is pruned on that account — Meta is the backstop either way.
+ *  - the target's (channel, surface) pair is out of spec for this post's first asset —
+ *    checked with the SAME shared limits (dashboard/media-limits.json via
+ *    destinationDisabledReason) the picker itself greys every chip with, so a stale
+ *    target can't silently survive just because it was already sitting in `targets`
+ *    before this check existed. Mirrors post-editor.tsx's and schedule-from-library.tsx's
+ *    effectiveTargets. With no `assets` supplied, nothing is pruned on that account —
+ *    Meta is the backstop either way.
  *
  * Pulled out as its own export, like toggleTarget/hasTarget in channel-surface-picker.tsx,
  * so this is unit-testable without driving the panel's own state through a full render.
@@ -72,12 +73,19 @@ export function computeSendTargets({
       !(busyKeys.has(`${c.id}:feed`) && busyKeys.has(`${c.id}:story`))
   );
   const pickableIds = new Set(pickable.map((c) => c.id));
-  const reelIneligible = postType === "video" && facebookReelDisabledReason(assets?.[0]) !== null;
+  // media_kind isn't part of the narrow `assets` shape this panel is handed, so it's
+  // inferred from postType the same way the picker infers it from `hasVideo` — a video
+  // post is always a single video asset, everything else starts from an image.
+  const asset = assets?.[0]
+    ? { media_kind: postType === "video" ? "video" : "image", ...assets[0] }
+    : null;
   const effectiveTargets = targets.filter((t) => {
     if (!pickableIds.has(t.channel_id)) return false;
     if (busyKeys.has(`${t.channel_id}:${t.surface}`)) return false;
-    if (t.surface === "reel" && reelIneligible) return false;
-    return true;
+    if (!asset) return true;
+    const channel = channels.find((c) => c.id === t.channel_id);
+    if (!channel) return true;
+    return destinationDisabledReason(channel.platform, t.surface, asset) === null;
   });
   return { pickable, effectiveTargets };
 }
@@ -507,11 +515,12 @@ export function PostSendsPanel({
   postType: PostType;
   /** Slide count, so the picker can warn '4 slides -> 4 Stories' before publishing. */
   slideCount: number;
-  // First asset's dimensions/duration, so a Facebook Reel target can be greyed out (and a
-  // stale one pruned below) the same way post-editor.tsx's own picker already is — see
-  // facebook-reel-spec.ts. Optional: the editor already has the post's assets loaded, so
-  // this is threaded through as a prop rather than a new query; a caller with nothing to
-  // hand just gets an unfiltered picker, same as before this prop existed.
+  // First asset's dimensions/duration, so an out-of-spec destination target can be greyed
+  // out (and a stale one pruned below) the same way post-editor.tsx's own picker already
+  // is — see lib/media-limits.ts's destinationDisabledReason. Optional: the editor already
+  // has the post's assets loaded, so this is threaded through as a prop rather than a new
+  // query; a caller with nothing to hand just gets an unfiltered picker, same as before
+  // this prop existed.
   assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
   sends: PostPublicationRow[];
   channels: Channel[];

@@ -18,7 +18,7 @@ import type {
 import { channelColor } from "@/lib/format";
 import { isPostDirty } from "@/lib/post-editor-dirty";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
-import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
+import { destinationDisabledReason } from "@/lib/media-limits";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { useAssetOrder } from "@/components/use-asset-order";
@@ -176,22 +176,24 @@ export function PostEditor({
     () => new Set(incompatibleChannelsForPostType(post.post_type, channels).map((c) => c.id)),
     [channels, post.post_type]
   );
-  // A saved {facebook, reel} target can predate this gate entirely (or predate
-  // duration/dimension tracking on its video) — checked with the SAME limits the picker
-  // itself greys the Reel chip with, so a stale target can't silently survive a save just
-  // because it was already sitting in the database before this check existed.
-  const reelIneligible =
-    post.post_type === "video" && facebookReelDisabledReason(assets[0]) !== null;
+  // A saved target's (channel, surface) pair can predate this gate entirely (or predate
+  // duration/dimension tracking on its asset) — checked with the SAME shared limits
+  // (dashboard/media-limits.json via destinationDisabledReason) the picker itself greys
+  // every chip with, so a stale target can't silently survive a save just because it was
+  // already sitting in the database before this check existed.
+  const firstAsset = assets[0];
   // Derived, not written back into `targets` state — same reasoning as library-view.tsx's
   // effectiveChans: nothing to keep in sync if the incompatible set ever changes.
   const effectiveTargets = useMemo(
     () =>
       targets.filter((t) => {
         if (incompatibleChannelIds.has(t.channel_id)) return false;
-        if (t.surface === "reel" && reelIneligible) return false;
-        return true;
+        if (!firstAsset) return true;
+        const channel = channels.find((c) => c.id === t.channel_id);
+        if (!channel) return true;
+        return destinationDisabledReason(channel.platform, t.surface, firstAsset) === null;
       }),
-    [targets, incompatibleChannelIds, reelIneligible]
+    [targets, incompatibleChannelIds, firstAsset, channels]
   );
 
   // Post now publishes whatever is currently saved in the database — not whatever is

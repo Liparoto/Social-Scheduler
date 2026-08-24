@@ -31,7 +31,7 @@ type Entry = {
   note: string; varies?: string;
 };
 
-type AssetLike = {
+export type AssetLike = {
   media_kind?: string | null;
   duration_ms?: number | null;
   width?: number | null;
@@ -104,4 +104,25 @@ export function checkMedia(platform: string, surface: string, asset: AssetLike):
   }
 
   return out;
+}
+
+/** The reason this destination cannot take this asset, or null when it can.
+ *  Only "refuse" violations disable a chip — a "warn" (a limit that varies by account,
+ *  like Discord's) is shown but never blocks the send. Generalizes what used to be
+ *  facebook-reel-spec.ts's facebookReelDisabledReason to every platform/surface this
+ *  file has an entry for — Facebook Reels is now one case of the general rule, not a
+ *  special one. */
+export function destinationDisabledReason(
+  platform: string, surface: string, asset: AssetLike,
+): string | null {
+  const refusals = checkMedia(platform, surface, asset).filter((v) => v.severity === "refuse");
+  if (refusals.length === 0) return null;
+  const surfaceLabel = surface === "reel" ? "Reels" : surface === "story" ? "Stories" : "the feed";
+  const v = refusals[0];
+  const lead = v.kind === "too_long" ? "Too long for"
+    : v.kind === "too_short" ? "Too short for"
+    : v.kind === "too_small" ? "Too small for"
+    : v.kind === "too_large" ? "Too large for"
+    : "Wrong shape for";
+  return `${lead} ${surfaceLabel} (${v.message})`;
 }

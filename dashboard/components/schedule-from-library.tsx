@@ -9,7 +9,7 @@ import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelAvatar } from "@/components/ui";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
-import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
+import { destinationDisabledReason } from "@/lib/media-limits";
 import type { PostTarget } from "@/lib/types";
 
 export type LibraryPickItem = {
@@ -22,8 +22,9 @@ export type LibraryPickItem = {
   // Needed so the picker can say '4 slides → 4 Stories' BEFORE scheduling.
   asset_count: number;
   // First asset's dimensions/duration, so the picker can grey out an out-of-spec
-  // Facebook Reel target — see facebook-reel-spec.ts. NULL for text posts and for
-  // anything predating duration/dimension tracking; a null value never disables the chip.
+  // destination — see lib/media-limits.ts's destinationDisabledReason. NULL for text
+  // posts and for anything predating duration/dimension tracking; a null value never
+  // disables the chip.
   first_asset_width: number | null;
   first_asset_height: number | null;
   first_asset_duration_ms: number | null;
@@ -52,11 +53,11 @@ const segBtn = (active: boolean) =>
  * Two independent reasons a saved target can go stale here:
  *  - the channel can't take this post's type at all (e.g. picking a Threads target, then
  *    switching to a different, incompatible post);
- *  - a {facebook, reel} target whose video is (or has become, after a re-select) out of
- *    Facebook Reels' own spec — checked with the SAME limits the picker itself greys the
- *    Reel chip with, so a stale target can't silently survive a switch just because it was
- *    already sitting in `targets` before this check existed. Mirrors post-editor.tsx's
- *    reelIneligible.
+ *  - the target's (channel, surface) pair is out of spec for this post's first asset —
+ *    checked with the SAME shared limits (dashboard/media-limits.json via
+ *    destinationDisabledReason) the picker itself greys every chip with, so a stale
+ *    target can't silently survive a switch just because it was already sitting in
+ *    `targets` before this check existed. Mirrors post-editor.tsx's effectiveTargets.
  *
  * Pulled out as its own export, like toggleTarget/hasTarget in channel-surface-picker.tsx,
  * so this is unit-testable without driving the "pick a post" click through the component.
@@ -69,17 +70,25 @@ export function effectiveLibraryTargets(
   const incompatibleIds = new Set(
     selected ? incompatibleChannelsForPostType(selected.post_type, channels).map((c) => c.id) : []
   );
-  const reelIneligible =
-    selected?.post_type === "video" &&
-    facebookReelDisabledReason({
-      width: selected.first_asset_width,
-      height: selected.first_asset_height,
-      duration_ms: selected.first_asset_duration_ms,
-    }) !== null;
+  // media_kind isn't stored on LibraryPickItem itself, but a video post is always a
+  // single video asset and everything else (single/carousel) starts from an image — the
+  // same inference the picker itself makes from `hasVideo`. Text posts carry no asset
+  // dimensions at all, so the media_kind guess there is moot: every check below is
+  // guarded on width/height/duration being present.
+  const asset = selected
+    ? {
+        media_kind: selected.post_type === "video" ? "video" : "image",
+        width: selected.first_asset_width,
+        height: selected.first_asset_height,
+        duration_ms: selected.first_asset_duration_ms,
+      }
+    : null;
   return targets.filter((t) => {
     if (incompatibleIds.has(t.channel_id)) return false;
-    if (t.surface === "reel" && reelIneligible) return false;
-    return true;
+    if (!asset) return true;
+    const channel = channels.find((c) => c.id === t.channel_id);
+    if (!channel) return true;
+    return destinationDisabledReason(channel.platform, t.surface, asset) === null;
   });
 }
 

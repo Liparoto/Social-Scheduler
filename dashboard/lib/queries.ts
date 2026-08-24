@@ -1919,8 +1919,9 @@ export interface PostLibraryRow extends Post {
   first_asset_width: number | null;
   first_asset_height: number | null;
   // NULL for images and for anything predating migration 0011_video_assets.sql. Together
-  // with width/height, this is what lets the Library flow gate a Facebook Reel target the
-  // same way the composer and post editor already do — see facebook-reel-spec.ts.
+  // with width/height, this is what lets the Library flow gate a destination (Facebook
+  // Reel, Instagram Story, ...) against the shared limits the same way the composer and
+  // post editor already do — see lib/media-limits.ts's destinationDisabledReason.
   first_asset_duration_ms: number | null;
   asset_count: number;
   // Every asset this post holds, in slide order, as a comma-joined string of ids —

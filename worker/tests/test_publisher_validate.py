@@ -25,13 +25,16 @@ def test_video_needs_exactly_one_video_asset():
         )
 
 
-# Task 10: Facebook Reels format validation. A Reel is 3-90 seconds and at least
-# 540x960 (verified 2026-08-23, see reference.md); the Facebook feed video surface has
-# no such check — its ceiling (20 minutes) is far looser, which is the whole reason a
-# "feed" vs "reel" surface distinction exists.
+# Task 10 / Task 4: Facebook Reels format validation, via the shared media-limits.json
+# (worker/media_limits.py) rather than a Facebook-specific block. A Reel is 3-90 seconds
+# and at least 540x960 (verified 2026-08-23, see reference.md); the Facebook feed video
+# surface has no such check — its ceiling (20 minutes) is far looser, which is the whole
+# reason a "feed" vs "reel" surface distinction exists. These tests now exercise the
+# GENERIC _check_media_limits path (any platform/surface), proving the swap from the old
+# facebook-and-reel-only block is behaviour-preserving.
 
 def test_a_too_long_reel_is_refused_before_publishing():
-    with pytest.raises(_NonRetryable, match="90 seconds"):
+    with pytest.raises(_NonRetryable, match="longer than 90s"):
         _validate(
             {"post_type": "video"},
             [{"media_kind": "video", "id": 1, "duration_ms": 95_000,
@@ -41,7 +44,7 @@ def test_a_too_long_reel_is_refused_before_publishing():
 
 
 def test_a_too_short_reel_is_refused():
-    with pytest.raises(_NonRetryable, match="3 seconds"):
+    with pytest.raises(_NonRetryable, match="shorter than 3s"):
         _validate(
             {"post_type": "video"},
             [{"media_kind": "video", "id": 1, "duration_ms": 1_500,
@@ -104,7 +107,7 @@ def test_a_reel_at_exactly_90000ms_is_accepted():
 
 
 def test_a_reel_at_2999ms_is_refused():
-    with pytest.raises(_NonRetryable, match="3 seconds"):
+    with pytest.raises(_NonRetryable, match="shorter than 3s"):
         _validate(
             {"post_type": "video"},
             [{"media_kind": "video", "id": 1, "duration_ms": 2_999,
@@ -114,7 +117,7 @@ def test_a_reel_at_2999ms_is_refused():
 
 
 def test_a_reel_at_90001ms_is_refused():
-    with pytest.raises(_NonRetryable, match="90 seconds"):
+    with pytest.raises(_NonRetryable, match="longer than 90s"):
         _validate(
             {"post_type": "video"},
             [{"media_kind": "video", "id": 1, "duration_ms": 90_001,
@@ -192,6 +195,41 @@ def test_a_reel_missing_dimensions_is_not_blocked_on_aspect_ratio():
         [{"media_kind": "video", "id": 1, "duration_ms": 10_000, "width": None,
           "height": None}],
         dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+# -- Task 4: Instagram Story duration, via the SAME generic _check_media_limits path as
+# the Facebook Reels checks above — this closes the owner's original bug report: a
+# 10-minute video attached, targeted at an Instagram Story (60s max), scheduled, and only
+# failing at Meta with an error that says nothing about duration. ----------------------
+
+def test_an_over_long_instagram_story_is_refused_terminally():
+    with pytest.raises(_NonRetryable, match="Stor"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 600_000,
+              "width": 1080, "height": 1920}],
+            dry_run=True, asset_base_url=None, platform="instagram", surface="story",
+        )
+
+
+def test_an_in_spec_instagram_story_is_accepted():
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 20_000,
+          "width": 1080, "height": 1920}],
+        dry_run=True, asset_base_url=None, platform="instagram", surface="story",
+    )
+
+
+def test_the_same_over_long_clip_is_fine_on_the_instagram_feed():
+    """600 seconds is over the Story's 60s ceiling but well under the feed's 15 minutes —
+    same reasoning as the Facebook feed-vs-reel duration split above."""
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 600_000,
+          "width": 1080, "height": 1920}],
+        dry_run=True, asset_base_url=None, platform="instagram", surface="feed",
     )
 
 

@@ -121,9 +121,11 @@ test("selecting Reel alone marks Reel pressed and Feed not", () => {
   assert.match(String(reel), /aria-pressed="true"/);
 });
 
-// ---- Reel chip: gated by Facebook Reels' own duration/resolution/aspect limits ----
-// (see lib/facebook-reel-spec.test.ts for exhaustive coverage of the limits themselves;
-// these pin that the picker actually wires disabling + the inline reason to them.)
+// ---- Reel chip: gated by the shared media limits (dashboard/media-limits.json), same
+// as every other chip — Facebook Reels' own duration/resolution/aspect limits are one
+// entry in that file, not a special case anymore. (See lib/media-limits.test.ts for
+// exhaustive coverage of the limits themselves; these pin that the picker actually wires
+// disabling + the inline reason to them.)
 function reelButton(html: string): string {
   const m = /<button[^>]*>Reel<\/button>/.exec(html);
   assert.ok(m, "expected a Reel chip in the markup");
@@ -139,8 +141,10 @@ test("a too-long video disables the Reel chip and shows the reason inline, not j
   const chip = reelButton(html);
   assert.match(chip, /\bdisabled=""/);
   assert.match(chip, /title="Too long for Reels/);
-  // Not just the tooltip — the same reason renders as visible text in the row.
-  assert.match(html, /<p[^>]*>Too long for Reels \(20m00s — max 1m30s\)<\/p>/);
+  // Not just the tooltip — the same reason renders as visible text in the row. The exact
+  // wording now comes from the shared media-limits.json entry (facebook.reel.video's
+  // max_duration_ms), via destinationDisabledReason — not this file's own formatting.
+  assert.match(html, /<p[^>]*>Too long for Reels \(longer than 90s\)<\/p>/);
 });
 
 test("a too-short video disables the Reel chip with its own reason", () => {
@@ -150,7 +154,7 @@ test("a too-short video disables the Reel chip with its own reason", () => {
     assets: [{ width: 1080, height: 1920, duration_ms: 1_000 }],
   });
   assert.match(reelButton(html), /\bdisabled=""/);
-  assert.match(html, /Too short for Reels \(1\.0s — min 3\.0s\)/);
+  assert.match(html, /Too short for Reels \(shorter than 3s\)/);
 });
 
 test("an undersized video disables the Reel chip with its own reason", () => {
@@ -160,7 +164,7 @@ test("an undersized video disables the Reel chip with its own reason", () => {
     assets: [{ width: 480, height: 640, duration_ms: 10_000 }],
   });
   assert.match(reelButton(html), /\bdisabled=""/);
-  assert.match(html, /Too small for Reels \(480×640 — min 540×960\)/);
+  assert.match(html, /Too small for Reels \(smaller than 540x960\)/);
 });
 
 test("an ultrawide video disables the Reel chip as the wrong shape", () => {
@@ -170,7 +174,7 @@ test("an ultrawide video disables the Reel chip as the wrong shape", () => {
     assets: [{ width: 2520, height: 1080, duration_ms: 10_000 }],
   });
   assert.match(reelButton(html), /\bdisabled=""/);
-  assert.match(html, /Wrong shape for Reels \(2520×1080\)/);
+  assert.match(html, /Wrong shape for Reels \(aspect ratio 2520x1080\)/);
 });
 
 test("Feed stays enabled even when Reel is disabled for spec reasons", () => {
@@ -220,6 +224,39 @@ test("unknown duration/width/height never disable the Reel chip", () => {
 test("a caller with no assets prop at all leaves Reel enabled", () => {
   const html = render({ channels: [facebook], hasVideo: true });
   assert.doesNotMatch(reelButton(html), /\bdisabled=""/);
+});
+
+// ---- Story chip: gated by the SAME shared limits, closing the owner's original bug
+// report — an over-long video could be sent to an Instagram Story and only fail at Meta,
+// long after the post had already read "scheduled". ------------------------------------
+
+function storyButton(html: string): string {
+  const m = /<button[^>]*>Story<\/button>/.exec(html);
+  assert.ok(m, "expected a Story chip in the markup");
+  return m![0];
+}
+
+test("an over-long video disables the Instagram Story chip", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: true,
+    assets: [{ width: 1080, height: 1920, duration_ms: 600_000 }],
+  });
+  assert.match(html, /Too long for Stories/);
+  assert.match(storyButton(html), /\bdisabled=""/);
+});
+
+test("an in-spec video leaves both Instagram chips enabled", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: true,
+    assets: [{ width: 1080, height: 1920, duration_ms: 20_000 }],
+  });
+  assert.doesNotMatch(html, /Too long/);
+  const feedChip = /<button[^>]*>Feed<\/button>/.exec(html);
+  assert.ok(feedChip);
+  assert.doesNotMatch(feedChip![0], /\bdisabled=""/);
+  assert.doesNotMatch(storyButton(html), /\bdisabled=""/);
 });
 
 test("a multi-slide post says how many Stories it will become, before scheduling", () => {

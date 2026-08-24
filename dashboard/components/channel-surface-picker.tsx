@@ -9,7 +9,7 @@ import {
   videoSurfaces,
 } from "@/lib/platforms";
 import { needsStoryCanvas } from "@/lib/story-geometry";
-import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
+import { destinationDisabledReason } from "@/lib/media-limits";
 import type { PostTarget, Surface } from "@/lib/types";
 
 export interface PickerChannel {
@@ -72,10 +72,11 @@ export function ChannelSurfacePicker({
   /** How many slides the post has — a story target fans out to one Story per slide. */
   slideCount?: number;
   /** The post's assets, so a non-9:16 source can be flagged as "will be reframed" BEFORE
-   *  scheduling, and an out-of-spec video can be flagged as ineligible for a Facebook Reel,
+   *  scheduling, and an out-of-spec asset can be flagged as ineligible for a given
+   *  destination (Instagram Story, Facebook Reel, ...) via destinationDisabledReason,
    *  rather than either being discovered afterwards. Optional: callers without dimensions
    *  (and duration) to hand (the sends panel, schedule-from-library) simply don't get the
-   *  note — and, per facebookReelDisabledReason, an unknown value never disables the chip
+   *  note — and, per destinationDisabledReason, an unknown value never disables the chip
    *  on its own. */
   assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
   postNow?: boolean;
@@ -88,6 +89,16 @@ export function ChannelSurfacePicker({
   const anyNeedsReframing = (assets ?? []).some((a) =>
     needsStoryCanvas(a.width ?? 0, a.height ?? 0)
   );
+  // The one asset the limit checks below are run against — mirrors the old Facebook-Reel-
+  // only check's assumption (a Reel is always a single video, so its first asset is the
+  // one that matters) but generalized to every surface: a carousel's later slides aren't
+  // checked here, same as before. media_kind is derived from `hasVideo` rather than asked
+  // of the caller — every call site already computes it to set this same prop, so asking
+  // for it twice would be a second source of truth to keep in sync.
+  const primaryAsset = assets?.[0];
+  const mediaAsset = primaryAsset
+    ? { media_kind: hasVideo ? "video" : "image", ...primaryAsset }
+    : null;
 
   return (
     <div>
@@ -99,10 +110,18 @@ export function ChannelSurfacePicker({
           // A video post can only use this channel's VIDEO surfaces; an image post is
           // unaffected — surfaces.length === 0 is the same condition supportsVideo checks.
           const videoDisabled = hasVideo && surfaces.length === 0;
-          const feedDisabled = textDisabled || videoDisabled;
+          // EVERY surface chip consults the same shared limits (dashboard/media-limits.json,
+          // via destinationDisabledReason) — Feed included. A platform/surface this file has
+          // no entry for (everything but Instagram/Facebook, for now) gets null back for
+          // every chip, i.e. stays enabled: absent means not enforced, not "refuse everything".
+          const feedLimitReason = mediaAsset ? destinationDisabledReason(c.platform, "feed", mediaAsset) : null;
+          const feedDisabled = textDisabled || videoDisabled || !!feedLimitReason;
           // A Story needs something to show, so a text-only post has no Story option at
           // all — hidden rather than disabled, since it isn't a limit of the account.
           const offersStory = supportsStory(c.platform) && !textOnly;
+          const storyLimitReason =
+            offersStory && mediaAsset ? destinationDisabledReason(c.platform, "story", mediaAsset) : null;
+          const storyDisabled = videoDisabled || !!storyLimitReason;
           // A Reel is a VIDEO surface, so it only ever appears alongside an actual video —
           // an image post never offers one, and neither does a platform without a "reel"
           // entry in videoSurfaces (Instagram included: its feed video already IS a Reel,
@@ -112,8 +131,9 @@ export function ChannelSurfacePicker({
           // fine), but Reel specifically has its own, tighter limits. offersReel implies
           // videoDisabled is false (a platform with no video surfaces at all never lists
           // "reel"), so this is the only thing that can grey out just the Reel chip.
-          const reelSpecReason = offersReel ? facebookReelDisabledReason(assets?.[0]) : null;
-          const reelDisabled = videoDisabled || !!reelSpecReason;
+          const reelLimitReason =
+            offersReel && mediaAsset ? destinationDisabledReason(c.platform, "reel", mediaAsset) : null;
+          const reelDisabled = videoDisabled || !!reelLimitReason;
           const feedOn = hasTarget(value, c.id, "feed");
           const storyOn = hasTarget(value, c.id, "story");
           const reelOn = hasTarget(value, c.id, "reel");
@@ -123,7 +143,9 @@ export function ChannelSurfacePicker({
             ? `${platformLabel(c.platform)} can't post text-only`
             : videoDisabled
               ? `${platformLabel(c.platform)} can't post video`
-              : platformLabel(c.platform);
+              : feedLimitReason
+                ? feedLimitReason
+                : platformLabel(c.platform);
           const approval =
             !feedDisabled && c.requires_approval
               ? postNow
@@ -193,8 +215,8 @@ export function ChannelSurfacePicker({
                       <SurfaceChip
                         label="Story"
                         on={storyOn}
-                        disabled={videoDisabled}
-                        disabledReason={reason}
+                        disabled={storyDisabled}
+                        disabledReason={storyLimitReason ?? reason}
                         dot={color.dot}
                         onClick={() => onChange(toggleTarget(value, c.id, "story"))}
                       />
@@ -204,7 +226,7 @@ export function ChannelSurfacePicker({
                         label="Reel"
                         on={reelOn}
                         disabled={reelDisabled}
-                        disabledReason={reelSpecReason ?? reason}
+                        disabledReason={reelLimitReason ?? reason}
                         dot={color.dot}
                         onClick={() => onChange(toggleTarget(value, c.id, "reel"))}
                       />
@@ -212,9 +234,15 @@ export function ChannelSurfacePicker({
                   </span>
                 </div>
                 {/* Shown inline, not just on hover — the limit should explain itself the
-                    moment it matters, same spirit as the reframing/fan-out notes below. */}
-                {reelSpecReason ? (
-                  <p className="mt-1.5 pl-8 text-[11px] text-muted">{reelSpecReason}</p>
+                    moment it matters, same spirit as the reframing/fan-out notes below.
+                    Story and Reel are never both offered on the same channel today (one
+                    needs Instagram, the other Facebook), but each gets its own line rather
+                    than joining them, so this still reads cleanly if that ever changes. */}
+                {storyLimitReason ? (
+                  <p className="mt-1.5 pl-8 text-[11px] text-muted">{storyLimitReason}</p>
+                ) : null}
+                {reelLimitReason ? (
+                  <p className="mt-1.5 pl-8 text-[11px] text-muted">{reelLimitReason}</p>
                 ) : null}
               </div>
             );
