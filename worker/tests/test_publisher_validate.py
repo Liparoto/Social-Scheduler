@@ -23,3 +23,69 @@ def test_video_needs_exactly_one_video_asset():
             [{"media_kind": "image", "id": 1}],
             dry_run=True, asset_base_url=None, platform="facebook",
         )
+
+
+# Task 10: Facebook Reels format validation. A Reel is 3-90 seconds and at least
+# 540x960 (verified 2026-08-23, see reference.md); the Facebook feed video surface has
+# no such check — its ceiling (20 minutes) is far looser, which is the whole reason a
+# "feed" vs "reel" surface distinction exists.
+
+def test_a_too_long_reel_is_refused_before_publishing():
+    with pytest.raises(_NonRetryable, match="90 seconds"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 95_000,
+              "width": 1080, "height": 1920}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_too_short_reel_is_refused():
+    with pytest.raises(_NonRetryable, match="3 seconds"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 1_500,
+              "width": 1080, "height": 1920}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_the_same_clip_is_fine_on_the_facebook_feed():
+    """95 seconds is over the Reels ceiling but far under the feed's 20 minutes. This is
+    the whole reason surface exists."""
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 95_000,
+          "width": 1920, "height": 1080}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="feed",
+    )
+
+
+def test_unknown_duration_does_not_block_a_reel():
+    """duration_ms is NULL for assets imported before the video pipeline existed.
+    Refusing on unknown would block a clip that is probably fine; Meta is the backstop."""
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": None,
+          "width": 1080, "height": 1920}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+def test_a_too_small_reel_is_refused():
+    with pytest.raises(_NonRetryable, match="540x960"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 10_000,
+              "width": 480, "height": 852}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_reel_missing_width_and_height_is_not_blocked_on_dimensions():
+    """Same rationale as unknown duration: legacy rows may not carry width/height."""
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 10_000}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )

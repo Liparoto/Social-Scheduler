@@ -285,6 +285,39 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             raise _NonRetryable(
                 f"a video post needs a video asset, got media_kind='{assets[0]['media_kind']}'"
             )
+        # Facebook Reels limits, checked here rather than left to Meta: an over-length
+        # clip comes back as a generic OAuthException that says nothing about duration,
+        # and by then the send has already read "scheduled" to the owner. Verified
+        # 2026-08-23: 3-90 seconds, at least 540x960. See reference.md. The feed video
+        # surface gets no such check — its ceiling (20 minutes) is far looser, and that
+        # looseness is the whole reason a "feed" vs "reel" surface distinction exists
+        # (see _needs_conformed / _resolve_rel above).
+        if platform == "facebook" and surface == "reel":
+            asset = assets[0]
+            # .keys() guard: legacy rows imported before the video pipeline existed (or
+            # test fixtures) may not carry duration_ms/width/height at all.
+            duration_ms = asset["duration_ms"] if "duration_ms" in asset.keys() else None
+            # Unknown duration must NOT block the send — Meta is the backstop. Refusing
+            # here would wrongly reject a clip that is probably fine just because it
+            # predates duration tracking.
+            if duration_ms is not None:
+                if duration_ms < 3_000:
+                    raise _NonRetryable(
+                        "a Facebook Reel must be at least 3 seconds, this is "
+                        f"{duration_ms / 1000:.1f}s"
+                    )
+                if duration_ms > 90_000:
+                    raise _NonRetryable(
+                        "a Facebook Reel can be at most 90 seconds, this is "
+                        f"{duration_ms / 1000:.1f}s — send it to the Facebook feed "
+                        "instead, which allows up to 20 minutes"
+                    )
+            width = asset["width"] if "width" in asset.keys() else None
+            height = asset["height"] if "height" in asset.keys() else None
+            if width and height and (width < 540 or height < 960):
+                raise _NonRetryable(
+                    f"a Facebook Reel needs at least 540x960, this is {width}x{height}"
+                )
     # Video-only platforms. Caught here rather than left to the adapter for the same
     # reason as the video and carousel rules below: an unpublishable combination that gets
     # scheduled first dies terminally later, long after the composer could have said so.
