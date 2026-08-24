@@ -307,12 +307,17 @@ def test_reels_are_eligible_for_autofill(conn):
 
 def test_reels_not_selected_for_channel_with_no_video_publish_path(conn):
     """Mirrors test_text_post_not_selected_for_instagram_channel, but for the OTHER
-    capability-gated post_type: a channel on a platform with no publish path for
-    post_type='reel' (everything but Instagram — worker/publisher.py's
-    _publish_instagram is the only adapter with a 'reel' branch) must never have a reel
-    auto-queued to it. Without this gate the worker would fail it terminally every
-    autofill cycle forever, since 'failed' isn't in ACTIVE_QUEUE_STATUSES."""
-    ch = make_channel(conn, platform="facebook")
+    capability-gated post_type: a channel on a platform whose PLATFORM_CAPS declares no
+    video capability (video_surfaces=frozenset(), so supports_video is False) must never
+    have a reel auto-queued to it. Without this gate the worker would fail it terminally
+    every autofill cycle forever, since 'failed' isn't in ACTIVE_QUEUE_STATUSES.
+
+    Uses 'threads' rather than 'facebook' as the example: Facebook now DOES declare a
+    'reel' video_surface (it has two real video destinations, feed and Reels — see
+    worker/clients.py PLATFORM_CAPS), so facebook.supports_video is True and it no longer
+    demonstrates a platform with none. Threads genuinely has neither a video surface nor
+    a publish path (_publish_threads has no video branch), so it still does."""
+    ch = make_channel(conn, platform="threads")
     p = make_reel_post(conn, ch)
     rows = select_candidates(conn, ch, NOW)
     assert [r["post_type"] for r in rows] == []
