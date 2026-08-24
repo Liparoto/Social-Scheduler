@@ -1,0 +1,17 @@
+{
+  "_comment": "Shared test matrix for the cross-language agreement test. Read by BOTH dashboard/lib/media-limits.test.ts and worker/tests/test_media_limits_agreement.py — a case added here is automatically covered on both sides. Every asset/expect pair below was verified against worker/media_limits.py's actual behavior against dashboard/media-limits.json as committed by Task 1; do not hand-edit an `expect` without re-checking it runs.",
+  "cases": [
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1080, "height": 1920}, "expect": []},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 3000, "width": 1080, "height": 1920}, "expect": []},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 90000, "width": 1080, "height": 1920}, "expect": []},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 2999, "width": 1080, "height": 1920}, "expect": ["too_short"]},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 90001, "width": 1080, "height": 1920}, "expect": ["too_long"]},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1920, "height": 1080}, "expect": []},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 2520, "height": 1080}, "expect": ["wrong_aspect"]},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 400, "height": 1200}, "expect": ["too_small", "wrong_aspect"]},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": null, "width": null, "height": null}, "expect": []},
+    {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 1080000, "width": 1920, "height": 1080}, "expect": []},
+    {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 1200001, "width": 1920, "height": 1080}, "expect": ["too_long"]},
+    {"platform": "myspace", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1080, "height": 1920}, "expect": []}
+  ]
+}
