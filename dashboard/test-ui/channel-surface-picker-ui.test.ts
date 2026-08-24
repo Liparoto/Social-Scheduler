@@ -31,6 +31,14 @@ const telegram: PickerChannel = {
   color_hue: 40,
   avatar_path: null,
 };
+const facebook: PickerChannel = {
+  id: 4,
+  platform: "facebook",
+  account_name: "APT",
+  requires_approval: false,
+  color_hue: 120,
+  avatar_path: null,
+};
 
 function render(props: Partial<Parameters<typeof ChannelSurfacePicker>[0]> = {}) {
   return renderToStaticMarkup(
@@ -76,6 +84,41 @@ test("a video post disables Story with the reason, rather than hiding it", () =>
   assert.match(html, />Story</, "Instagram can take a video Story");
   // renderToStaticMarkup escapes the apostrophe, so match the escaped form.
   assert.match(html, /can&#x27;t post video/, "the blocked channel must say why");
+});
+
+// ---- Reel chip: Facebook only, video posts only ----------------------------------
+test("a video post offers Facebook a Reel toggle", () => {
+  const html = render({ channels: [facebook], hasVideo: true });
+  assert.match(html, />Reel</);
+});
+
+test("an image post offers no Reel toggle", () => {
+  const html = render({ channels: [facebook], hasVideo: false });
+  assert.doesNotMatch(html, />Reel</);
+});
+
+test("instagram never offers a Reel toggle", () => {
+  const html = render({ channels: [ig], hasVideo: true });
+  assert.doesNotMatch(html, />Reel</);
+});
+
+test("a video post still offers Facebook Feed alongside Reel", () => {
+  const html = render({ channels: [facebook], hasVideo: true });
+  assert.match(html, />Feed</);
+  assert.match(html, /aria-label="APT destinations"/);
+});
+
+test("selecting Reel alone marks Reel pressed and Feed not", () => {
+  const html = render({
+    channels: [facebook],
+    hasVideo: true,
+    value: [{ channel_id: 4, surface: "reel" }],
+  });
+  const chips = html.match(/aria-pressed="(true|false)"[^>]*>(Feed|Reel)</g) ?? [];
+  const feed = chips.find((c) => c.endsWith(">Feed<"));
+  const reel = chips.find((c) => c.endsWith(">Reel<"));
+  assert.match(String(feed), /aria-pressed="false"/);
+  assert.match(String(reel), /aria-pressed="true"/);
 });
 
 test("a multi-slide post says how many Stories it will become, before scheduling", () => {

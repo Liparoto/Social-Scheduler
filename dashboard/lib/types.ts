@@ -15,9 +15,17 @@ export interface Tag {
 export type PostType = "single" | "carousel" | "video" | "story" | "text";
 
 // WHERE a send lands, as opposed to what the content IS (PostType, which is INFERRED from
-// the assets). 'story' is an Instagram Story. Kept as a separate axis so one post can be a
-// Story on Instagram AND an ordinary post on Telegram — see docs/design-instagram-stories.md.
-export type Surface = "feed" | "story";
+// the assets). 'story' is an Instagram Story; 'reel' is a Facebook Reel (Instagram has no
+// separate reel surface — its feed video IS a Reel, so it never uses this value). Kept as
+// a separate axis so one post can be a Story on Instagram AND an ordinary post on Telegram
+// — see docs/design-instagram-stories.md.
+//
+// NOTE: this TYPE accepting "reel" does not by itself make the app accept a reel target —
+// the schedule route's own runtime parsing (lib/story-fanout.ts's parseTargets) still
+// rejects it as unrecognised, deliberately: wiring that route up to "reel" is a later task.
+// Widened here only so the surface picker (Task 11) can build a { surface: "reel" }
+// PostTarget without a type error; nothing downstream of the picker currently accepts one.
+export type Surface = "feed" | "story" | "reel";
 
 /** One destination for a post: a channel plus which of its surfaces to publish to. */
 export interface PostTarget {

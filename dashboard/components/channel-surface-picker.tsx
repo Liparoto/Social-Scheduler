@@ -2,7 +2,12 @@
 
 import { channelColor } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
-import { platformLabel, supportsStory, supportsText, supportsVideo } from "@/lib/platforms";
+import {
+  platformLabel,
+  supportsStory,
+  supportsText,
+  videoSurfaces,
+} from "@/lib/platforms";
 import { needsStoryCanvas } from "@/lib/story-geometry";
 import type { PostTarget, Surface } from "@/lib/types";
 
@@ -32,12 +37,16 @@ export function toggleTarget(
 }
 
 /**
- * Pick where a post goes: which accounts, and for Instagram which SURFACE.
+ * Pick where a post goes: which accounts, and for Instagram/Facebook which SURFACE.
  *
- * Non-Instagram channels render exactly as they always have — one row, one checkbox — so
- * no new concept appears where it does not apply. Instagram rows offer Feed and Story as
- * two independent chips, because they are two independent sends: that is what lets one
- * photo be a Story on Instagram and an ordinary post on Telegram.
+ * Channels with only one surface render exactly as they always have — one row, one
+ * checkbox — so no new concept appears where it does not apply. Instagram rows offer Feed
+ * and Story as two independent chips; a Facebook row offered a video offers Feed and Reel
+ * the same way — because each pair is two independent sends: that is what lets one photo
+ * be a Story on Instagram and an ordinary post on Telegram, or one video land in a
+ * Facebook Page's feed as an ordinary video and ALSO as a Reel. Instagram never gets a
+ * Reel chip: its feed video already IS a Reel, so a separate toggle would be a distinction
+ * with no difference.
  *
  * Guards state their reason rather than silently disappearing, so an unavailable
  * destination is explained rather than merely absent.
@@ -82,14 +91,23 @@ export function ChannelSurfacePicker({
         {channels.map((c) => {
           const color = channelColor(c.id, c.color_hue);
           const textDisabled = textOnly && !supportsText(c.platform);
-          const videoDisabled = hasVideo && !supportsVideo(c.platform);
+          const surfaces = videoSurfaces(c.platform);
+          // A video post can only use this channel's VIDEO surfaces; an image post is
+          // unaffected — surfaces.length === 0 is the same condition supportsVideo checks.
+          const videoDisabled = hasVideo && surfaces.length === 0;
           const feedDisabled = textDisabled || videoDisabled;
           // A Story needs something to show, so a text-only post has no Story option at
           // all — hidden rather than disabled, since it isn't a limit of the account.
           const offersStory = supportsStory(c.platform) && !textOnly;
+          // A Reel is a VIDEO surface, so it only ever appears alongside an actual video —
+          // an image post never offers one, and neither does a platform without a "reel"
+          // entry in videoSurfaces (Instagram included: its feed video already IS a Reel,
+          // so a separate toggle there would be a distinction with no difference).
+          const offersReel = hasVideo && surfaces.includes("reel");
           const feedOn = hasTarget(value, c.id, "feed");
           const storyOn = hasTarget(value, c.id, "story");
-          const anyOn = feedOn || (offersStory && storyOn);
+          const reelOn = hasTarget(value, c.id, "reel");
+          const anyOn = feedOn || (offersStory && storyOn) || (offersReel && reelOn);
 
           const reason = textDisabled
             ? `${platformLabel(c.platform)} can't post text-only`
@@ -133,8 +151,10 @@ export function ChannelSurfacePicker({
             </>
           );
 
-          // ---- Instagram: two destinations, two chips -----------------------------
-          if (offersStory) {
+          // ---- Instagram (Story) / Facebook (Reel): multiple destinations, multiple
+          // chips. Same row shape either way, so there is one behaviour to learn rather
+          // than two — a channel just shows whichever of Story/Reel it actually has.
+          if (offersStory || offersReel) {
             return (
               <div
                 key={c.id}
@@ -158,14 +178,26 @@ export function ChannelSurfacePicker({
                     dot={color.dot}
                     onClick={() => onChange(toggleTarget(value, c.id, "feed"))}
                   />
-                  <SurfaceChip
-                    label="Story"
-                    on={storyOn}
-                    disabled={videoDisabled}
-                    disabledReason={reason}
-                    dot={color.dot}
-                    onClick={() => onChange(toggleTarget(value, c.id, "story"))}
-                  />
+                  {offersStory ? (
+                    <SurfaceChip
+                      label="Story"
+                      on={storyOn}
+                      disabled={videoDisabled}
+                      disabledReason={reason}
+                      dot={color.dot}
+                      onClick={() => onChange(toggleTarget(value, c.id, "story"))}
+                    />
+                  ) : null}
+                  {offersReel ? (
+                    <SurfaceChip
+                      label="Reel"
+                      on={reelOn}
+                      disabled={videoDisabled}
+                      disabledReason={reason}
+                      dot={color.dot}
+                      onClick={() => onChange(toggleTarget(value, c.id, "reel"))}
+                    />
+                  ) : null}
                 </span>
               </div>
             );

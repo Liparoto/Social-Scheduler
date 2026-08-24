@@ -78,7 +78,10 @@ type PostFormat = "carousel" | "single" | "video" | "text";
 const POST_FORMATS: { value: PostFormat; label: string }[] = [
   { value: "carousel", label: "Carousel" },
   { value: "single", label: "Single image" },
-  { value: "video", label: "Reel" },
+  // Label is "Video", not "Reel": Facebook feed video (Task 11) means a `video` post can
+  // now land as an ordinary feed video rather than a Reel, so "Reel" would misdescribe
+  // what this filter selects for every non-Instagram target.
+  { value: "video", label: "Video" },
   { value: "text", label: "Text-only" },
 ];
 
