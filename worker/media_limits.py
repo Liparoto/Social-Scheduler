@@ -54,6 +54,7 @@ _NUMERIC = (
     "max_bytes",
 )
 _KNOWN = set(_NUMERIC) | {"min_aspect", "max_aspect", "formats", "note", "varies"}
+_KNOWN_TOP_LEVEL = {"schema_version", "platforms", "_comment"}
 
 
 @lru_cache(maxsize=1)
@@ -67,6 +68,19 @@ def load_limits() -> dict:
 
     if raw.get("schema_version") != 1:
         raise MediaLimitsError(f"unsupported schema_version {raw.get('schema_version')!r}")
+
+    # The top level gets the same scrutiny as every entry below it. A typo here (e.g.
+    # "paltforms") would otherwise load with zero exceptions and silently enforce
+    # nothing — exactly the "malformed degrades into allow everything" outcome
+    # Principle #2 forbids. An EMPTY platforms dict is legal (this file starts with
+    # just Facebook and grows); only the wrong TYPE or a missing key is an error.
+    unknown_top = set(raw) - _KNOWN_TOP_LEVEL
+    if unknown_top:
+        raise MediaLimitsError(f"media-limits.json has unrecognised top-level key(s): {sorted(unknown_top)}")
+    if "platforms" not in raw:
+        raise MediaLimitsError("media-limits.json has no 'platforms' key")
+    if not isinstance(raw["platforms"], dict):
+        raise MediaLimitsError("media-limits.json's 'platforms' must be an object")
 
     for platform, surfaces in raw.get("platforms", {}).items():
         for surface, kinds in surfaces.items():

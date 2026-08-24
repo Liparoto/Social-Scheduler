@@ -88,3 +88,98 @@ def test_a_malformed_file_fails_loudly(tmp_path, monkeypatch):
     media_limits.load_limits.cache_clear()
     with pytest.raises(media_limits.MediaLimitsError):
         media_limits.load_limits()
+
+
+# --- Schema validation coverage -------------------------------------------------
+#
+# Finding (review, 2026-08-24): load_limits() validated fields INSIDE each
+# platform.surface.kind entry but never validated the top-level shape. A typo like
+# "paltforms" loaded with zero exceptions and silently enforced nothing — exactly the
+# "malformed degrades into allow everything" outcome Principle #2 forbids. These tests
+# cover that fix, plus the validation branches below it that had no coverage at all
+# (that gap is how the top-level hole went unnoticed in the first place).
+#
+# load_limits() is @lru_cache(maxsize=1), so every test here must call
+# cache_clear() after monkeypatching RAW_PATH — otherwise it silently reuses a
+# previous test's parsed result and passes for the wrong reason.
+
+_VALID_ENTRY = {
+    "schema_version": 1,
+    "platforms": {
+        "testplatform": {
+            "feed": {
+                "video": {"max_duration_ms": 1000, "note": "a test fixture, not a real platform"}
+            }
+        }
+    },
+}
+
+
+def _load(tmp_path, monkeypatch, data):
+    """Write `data` as media-limits.json, point the loader at it, and load it fresh."""
+    path = tmp_path / "media-limits.json"
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(media_limits, "RAW_PATH", path)
+    media_limits.load_limits.cache_clear()
+    return media_limits.load_limits()
+
+
+def test_a_missing_platforms_key_fails_loudly(tmp_path, monkeypatch):
+    """schema_version alone, no platforms key at all — the exact shape of a file that
+    lost its platforms block, not just a typo inside it."""
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, {"schema_version": 1})
+
+
+def test_platforms_that_is_not_a_dict_fails_loudly(tmp_path, monkeypatch):
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, {"schema_version": 1, "platforms": ["not", "a", "dict"]})
+
+
+def test_an_unrecognised_top_level_key_fails_loudly(tmp_path, monkeypatch):
+    """The typo the reviewer actually simulated: 'platforms' misspelled as 'paltforms'.
+    Before this fix, this loaded with ZERO exceptions and enforced nothing."""
+    bad = {"schema_version": 1, "paltforms": _VALID_ENTRY["platforms"]}
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, bad)
+
+
+def test_an_unrecognised_key_inside_an_entry_fails_loudly(tmp_path, monkeypatch):
+    bad = json.loads(json.dumps(_VALID_ENTRY))  # deep copy
+    bad["platforms"]["testplatform"]["feed"]["video"]["not_a_real_field"] = 123
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, bad)
+
+
+def test_an_entry_with_no_note_fails_loudly(tmp_path, monkeypatch):
+    bad = json.loads(json.dumps(_VALID_ENTRY))
+    del bad["platforms"]["testplatform"]["feed"]["video"]["note"]
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, bad)
+
+
+@pytest.mark.parametrize("bad_aspect", [
+    [16],             # not a [w, h] pair
+    ["16", "9"],       # strings, not ints
+    [0, 9],            # zero is not positive
+])
+def test_a_malformed_min_aspect_fails_loudly(tmp_path, monkeypatch, bad_aspect):
+    bad = json.loads(json.dumps(_VALID_ENTRY))
+    bad["platforms"]["testplatform"]["feed"]["video"]["min_aspect"] = bad_aspect
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, bad)
+
+
+def test_a_wrong_schema_version_fails_loudly(tmp_path, monkeypatch):
+    bad = json.loads(json.dumps(_VALID_ENTRY))
+    bad["schema_version"] = 2
+    with pytest.raises(media_limits.MediaLimitsError):
+        _load(tmp_path, monkeypatch, bad)
+
+
+def test_an_empty_platforms_dict_does_not_raise(tmp_path, monkeypatch):
+    """Empty is legal, not malformed — this file legitimately starts with just
+    Facebook and grows platform by platform. Conflating 'nothing recorded yet' with
+    'broken' would make every future addition look like a prior bug."""
+    raw = _load(tmp_path, monkeypatch, {"schema_version": 1, "platforms": {}})
+    assert raw["platforms"] == {}
