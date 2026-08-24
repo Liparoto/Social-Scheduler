@@ -21,7 +21,7 @@ def _channel(conn, platform="tiktok"):
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
-def _publication(conn, channel_id, post_type="reel"):
+def _publication(conn, channel_id, post_type="video"):
     conn.execute("INSERT INTO posts (post_type) VALUES (?)", (post_type,))
     post = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.execute(

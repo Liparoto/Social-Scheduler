@@ -18,6 +18,7 @@ import type {
 import { channelColor } from "@/lib/format";
 import { isPostDirty } from "@/lib/post-editor-dirty";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
+import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
 import { incompatibleChannelsForPostType, platformLabel } from "@/lib/platforms";
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { useAssetOrder } from "@/components/use-asset-order";
@@ -166,7 +167,7 @@ export function PostEditor({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Channels that can't publish this post's type at all (e.g. a 'reel' targeted at a
+  // Channels that can't publish this post's type at all (e.g. a 'video' post targeted at a
   // platform with no publish path for one) — disabled here rather than offered and
   // left to fail terminally at autofill/publish time. Mirrors library-view.tsx,
   // post-sends-panel.tsx and schedule-from-library.tsx, which all gate the same way;
@@ -175,11 +176,22 @@ export function PostEditor({
     () => new Set(incompatibleChannelsForPostType(post.post_type, channels).map((c) => c.id)),
     [channels, post.post_type]
   );
+  // A saved {facebook, reel} target can predate this gate entirely (or predate
+  // duration/dimension tracking on its video) — checked with the SAME limits the picker
+  // itself greys the Reel chip with, so a stale target can't silently survive a save just
+  // because it was already sitting in the database before this check existed.
+  const reelIneligible =
+    post.post_type === "video" && facebookReelDisabledReason(assets[0]) !== null;
   // Derived, not written back into `targets` state — same reasoning as library-view.tsx's
   // effectiveChans: nothing to keep in sync if the incompatible set ever changes.
   const effectiveTargets = useMemo(
-    () => targets.filter((t) => !incompatibleChannelIds.has(t.channel_id)),
-    [targets, incompatibleChannelIds]
+    () =>
+      targets.filter((t) => {
+        if (incompatibleChannelIds.has(t.channel_id)) return false;
+        if (t.surface === "reel" && reelIneligible) return false;
+        return true;
+      }),
+    [targets, incompatibleChannelIds, reelIneligible]
   );
 
   // Post now publishes whatever is currently saved in the database — not whatever is
@@ -544,9 +556,14 @@ export function PostEditor({
           channels={channels}
           value={effectiveTargets}
           onChange={setTargets}
-          hasVideo={post.post_type === "reel"}
+          hasVideo={post.post_type === "video"}
           textOnly={post.post_type === "text"}
           slideCount={assets.length}
+          assets={assets.map((a) => ({
+            width: a.width,
+            height: a.height,
+            duration_ms: a.duration_ms,
+          }))}
         />
       </section>
 
@@ -564,6 +581,11 @@ export function PostEditor({
         postId={post.id}
         postType={post.post_type}
         slideCount={assets.length}
+        assets={assets.map((a) => ({
+          width: a.width,
+          height: a.height,
+          duration_ms: a.duration_ms,
+        }))}
         sends={sends}
         channels={sendableChannels}
         readiness={readiness}

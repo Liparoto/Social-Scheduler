@@ -33,6 +33,11 @@ export default async function ComposePage({
     post_type: p.post_type,
     // Drives the picker's '4 slides → 4 Stories' note before scheduling.
     asset_count: p.asset_count,
+    // First asset's dimensions/duration, so ChannelSurfacePicker can grey out an
+    // out-of-spec Facebook Reel target the same way the composer already does.
+    first_asset_width: p.first_asset_width,
+    first_asset_height: p.first_asset_height,
+    first_asset_duration_ms: p.first_asset_duration_ms,
   }));
   // "Tomorrow" in the INSTALL's timezone, not UTC. toISOString() is UTC, so from ~5pm
   // Pacific onwards this returned the day AFTER tomorrow and the composer opened on the

@@ -117,11 +117,11 @@ def test_reels_poll_budget_is_longer_than_the_image_budget():
 
 
 def test_reel_is_an_allowed_post_type():
-    assert "reel" in publisher.SUPPORTED_POST_TYPES
+    assert "video" in publisher.SUPPORTED_POST_TYPES
 
 
 def test_reel_needs_exactly_one_video_asset():
-    post = {"post_type": "reel", "first_comment": None}
+    post = {"post_type": "video", "first_comment": None}
     caps_ok = [{"id": 1, "media_kind": "video", "storage_path": "a.mp4"}]
     # one video: fine
     publisher._validate(post, caps_ok, True, "https://x", "instagram", caption="hi")
@@ -140,14 +140,16 @@ def test_reel_needs_exactly_one_video_asset():
         )
 
 
-@pytest.mark.parametrize("platform", ["facebook", "threads", "discord", "telegram"])
+@pytest.mark.parametrize("platform", ["threads", "discord", "telegram"])
 def test_reel_fails_terminally_on_every_other_platform(platform):
-    """No platform except Instagram publishes Reels. Each must refuse TERMINALLY with a
-    clear message — never retry forever, never silently drop the video."""
-    plan = {"platform": platform, "post_type": "reel", "account_id": "X",
+    """Instagram and Facebook are the only platforms with a video publish path; every
+    other one must refuse TERMINALLY with a clear message — never retry forever, never
+    silently drop the video. (Facebook's own surface dispatch, and its refusal for
+    surfaces it doesn't support, are covered in test_facebook_video_publishing.py.)"""
+    plan = {"platform": platform, "post_type": "video", "account_id": "X",
             "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
             "caption": "hi", "cover_frame_ms": None}
-    with pytest.raises(publisher._NonRetryable, match="reel"):
+    with pytest.raises(publisher._NonRetryable, match="video"):
         publisher._PUBLISHERS[platform](object(), plan, "TOKEN", object(), lambda _: None)
 
 
@@ -183,7 +185,7 @@ def test_publish_reel_passes_cover_offset_and_uses_the_reels_budget():
         reels_status_poll_interval = 10
         reels_status_poll_max_tries = 90
 
-    plan = {"platform": "instagram", "post_type": "reel", "account_id": "IG1",
+    plan = {"platform": "instagram", "post_type": "video", "account_id": "IG1",
             "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
             "caption": "hello", "cover_frame_ms": 2400}
     got = publisher._publish_instagram(_C(), plan, "TOKEN", _Cfg(), sleeps.append)
@@ -219,7 +221,7 @@ def test_reel_poll_exhaustion_is_retryable_not_terminal():
         reels_status_poll_interval = 0
         reels_status_poll_max_tries = 2
 
-    plan = {"platform": "instagram", "post_type": "reel", "account_id": "IG1",
+    plan = {"platform": "instagram", "post_type": "video", "account_id": "IG1",
             "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
             "caption": None, "cover_frame_ms": None}
     with pytest.raises(RuntimeError) as exc:
@@ -257,7 +259,7 @@ def test_publish_reel_sends_cover_url_and_omits_thumb_offset_when_cover_set():
         reels_status_poll_max_tries = 1
 
     plan = {
-        "platform": "instagram", "post_type": "reel", "account_id": "IG1",
+        "platform": "instagram", "post_type": "video", "account_id": "IG1",
         "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
         "caption": "hi", "cover_frame_ms": None, "cover_url": "https://img.example/cover.jpg",
     }
@@ -291,7 +293,7 @@ def test_publish_reel_still_sends_thumb_offset_when_no_cover_url_in_plan():
         reels_status_poll_max_tries = 1
 
     plan = {
-        "platform": "instagram", "post_type": "reel", "account_id": "IG1",
+        "platform": "instagram", "post_type": "video", "account_id": "IG1",
         "asset_urls": ["https://x/v.mp4"], "asset_paths": [None],
         "caption": "hi", "cover_frame_ms": 0,
     }
@@ -326,7 +328,7 @@ def _set_dangling_cover(conn, video_id, cover_frame_ms, missing_cover_id=999999)
 
 
 def test_build_plan_with_cover_asset_id_carries_cover_url_and_no_frame(conn, config, make_publication):
-    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    pub = make_publication(post_type="video", media_kind="video", public_url=None)
     video_id = _reel_video_asset_id(conn, pub["post_id"])
     cover_id = conn.execute(
         """INSERT INTO assets (content_hash, media_kind, storage_path, public_url)
@@ -362,7 +364,7 @@ def test_build_plan_cover_url_ignores_publish_path_and_uses_the_original(conn, c
     NULL, but content-hash dedup can return a row that was ALSO uploaded as a feed image,
     so the resolution must not depend on that being NULL.
     """
-    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    pub = make_publication(post_type="video", media_kind="video", public_url=None)
     video_id = _reel_video_asset_id(conn, pub["post_id"])
     cover_id = conn.execute(
         """INSERT INTO assets (content_hash, media_kind, storage_path, publish_path, public_url)
@@ -388,7 +390,7 @@ def test_build_plan_cover_url_ignores_publish_path_and_uses_the_original(conn, c
 
 
 def test_build_plan_without_cover_asset_id_uses_thumb_offset_as_before(conn, config, make_publication):
-    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    pub = make_publication(post_type="video", media_kind="video", public_url=None)
     video_id = _reel_video_asset_id(conn, pub["post_id"])
     conn.execute("UPDATE assets SET cover_frame_ms = ? WHERE id = ?", (777, video_id))
     conn.commit()
@@ -407,7 +409,7 @@ def test_build_plan_without_cover_asset_id_uses_thumb_offset_as_before(conn, con
 def test_build_plan_dangling_cover_asset_id_falls_back_to_thumb_offset(conn, config, make_publication):
     """cover_asset_id points at a row that no longer exists (deleted out from under it).
     A missing cover is cosmetic -> fall back to the frame offset, never raise."""
-    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    pub = make_publication(post_type="video", media_kind="video", public_url=None)
     video_id = _reel_video_asset_id(conn, pub["post_id"])
     _set_dangling_cover(conn, video_id, cover_frame_ms=2400)
 
@@ -449,7 +451,7 @@ class FakeReelsClient:
 
 
 def test_publish_one_sends_cover_url_end_to_end(conn, config, make_publication):
-    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    pub = make_publication(post_type="video", media_kind="video", public_url=None)
     video_id = _reel_video_asset_id(conn, pub["post_id"])
     cover_id = conn.execute(
         """INSERT INTO assets (content_hash, media_kind, storage_path, public_url)
@@ -481,7 +483,7 @@ def test_publish_one_dangling_cover_asset_id_falls_back_and_still_publishes(
     """The trap this test exists to catch: a dangling cover_asset_id must not raise and
     must not block the publish. A missing cover is cosmetic; refusing to publish a
     Reel over it would be far worse."""
-    pub = make_publication(post_type="reel", media_kind="video", public_url=None)
+    pub = make_publication(post_type="video", media_kind="video", public_url=None)
     video_id = _reel_video_asset_id(conn, pub["post_id"])
     _set_dangling_cover(conn, video_id, cover_frame_ms=2400)
 

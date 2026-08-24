@@ -66,7 +66,7 @@ _TYPE_CAPABILITY_SQL = """
           (
             (p.post_type IN ('single','carousel')
                AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
-            OR (p.post_type = 'reel' AND :supports_video = 1
+            OR (p.post_type = 'video' AND :supports_video = 1
                AND EXISTS (SELECT 1 FROM post_assets pa WHERE pa.post_id = p.id))
             OR (p.post_type = 'text' AND :supports_text = 1)
           )
@@ -166,15 +166,16 @@ def select_candidates(conn, channel_id: int, now):
 
     Type eligibility is capability-driven, not a hardcoded type list: a single/carousel
     post is eligible if it has at least one asset (unchanged); a text post is eligible
-    only if the channel's platform declares supports_text in PLATFORM_CAPS, and a reel
-    only if it declares supports_video — a platform PLATFORM_CAPS doesn't recognize
-    excludes both (the safe direction) rather than guessing. Reels are asset-gated the
-    same as single/carousel here — the stricter "exactly one video asset" rule is the
+    only if the channel's platform declares supports_text in PLATFORM_CAPS, and a video
+    post only if it declares supports_video — a platform PLATFORM_CAPS doesn't recognize
+    excludes both (the safe direction) rather than guessing. Video posts are asset-gated
+    the same as single/carousel here — the stricter "exactly one video asset" rule is the
     publisher's job (worker/publisher.py), not autofill's; autofill only needs to know a
-    reel is a candidate at all. Without the supports_video gate, a reel targeted at a
-    platform with no publish path for it (everything but Instagram today) would get
-    selected, queued, and fail terminally every autofill cycle forever — 'failed' isn't
-    in ACTIVE_QUEUE_STATUSES, so the "already queued" guard below never excludes it.
+    video post is a candidate at all. Without the supports_video gate, a video post
+    targeted at a platform with no publish path for it (everything but Instagram today)
+    would get selected, queued, and fail terminally every autofill cycle forever —
+    'failed' isn't in ACTIVE_QUEUE_STATUSES, so the "already queued" guard below never
+    excludes it.
     """
     platform_row = conn.execute(
         "SELECT platform FROM channels WHERE id = ?", (channel_id,)

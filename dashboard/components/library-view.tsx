@@ -74,11 +74,14 @@ interface ChannelLite {
 
 // The post_type values the Library can filter by, with the label each one gets. Ordered
 // the way they're offered in the Format dropdown and counted in the summary line.
-type PostFormat = "carousel" | "single" | "reel" | "text";
+type PostFormat = "carousel" | "single" | "video" | "text";
 const POST_FORMATS: { value: PostFormat; label: string }[] = [
   { value: "carousel", label: "Carousel" },
   { value: "single", label: "Single image" },
-  { value: "reel", label: "Reel" },
+  // Label is "Video", not "Reel": Facebook feed video (Task 11) means a `video` post can
+  // now land as an ordinary feed video rather than a Reel, so "Reel" would misdescribe
+  // what this filter selects for every non-Instagram target.
+  { value: "video", label: "Video" },
   { value: "text", label: "Text-only" },
 ];
 
@@ -707,7 +710,7 @@ export function LibraryView({
                   className="hover:underline"
                 >
                   {p.first_asset_id ? (
-                    p.post_type === "reel" ? (
+                    p.post_type === "video" ? (
                       // No thumbnail file exists for video (no ffmpeg dependency by
                       // design) — render the real file with preload="metadata" so the
                       // browser decodes just the first frame, same approach as

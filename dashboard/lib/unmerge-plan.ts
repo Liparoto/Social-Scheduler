@@ -58,7 +58,7 @@ function problem(code: string, message: string, status: 400 | 404 | 409): Unmerg
  * (post_targets.surface), not a post_type. See docs/design-instagram-stories.md.
  */
 export function derivePostType(mediaKind: string): PostType {
-  return mediaKind === "video" ? "reel" : "single";
+  return mediaKind === "video" ? "video" : "single";
 }
 
 /**

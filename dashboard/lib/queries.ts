@@ -1153,7 +1153,7 @@ export interface CreateDraftInput extends ContentModelInput {
  *
  * Asset COUNT alone is not enough, which is what this used to use: a lone video became
  * "single", so a bulk import of a video produced a post the publisher cannot send as a
- * Reel. `/api/posts/draft` had already worked around it by passing post_type explicitly,
+ * video post. `/api/posts/draft` had already worked around it by passing post_type explicitly,
  * but createDraftPostsBulk does not — that path is where the wrong type actually reached
  * the database.
  *
@@ -1737,7 +1737,7 @@ function spawnPostsFromSlides(
  * created, changed, or deleted by this function.
  *
  * **Each post's `post_type` is derived from its OWN asset's media_kind** (a video slide
- * becomes a 'reel'), never from asset count. This deliberately does NOT go through
+ * becomes 'video'), never from asset count. This deliberately does NOT go through
  * createDraftPost, which derives post_type from count alone and would leave a video slide as
  * an unpublishable 'single'.
  *
@@ -1918,6 +1918,10 @@ export interface PostLibraryRow extends Post {
   first_asset_cover_frame_ms: number | null;
   first_asset_width: number | null;
   first_asset_height: number | null;
+  // NULL for images and for anything predating migration 0011_video_assets.sql. Together
+  // with width/height, this is what lets the Library flow gate a Facebook Reel target the
+  // same way the composer and post editor already do — see facebook-reel-spec.ts.
+  first_asset_duration_ms: number | null;
   asset_count: number;
   // Every asset this post holds, in slide order, as a comma-joined string of ids —
   // GROUP_CONCAT can't return an array, so the caller (app/library/page.tsx) splits it.
@@ -2001,6 +2005,8 @@ export function listPosts(limit?: number, scope: LibraryScope = "active"): PostL
             WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_width,
          (SELECT a.height FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
             WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_height,
+         (SELECT a.duration_ms FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_duration_ms,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT GROUP_CONCAT(sub.asset_id) FROM (
             SELECT asset_id FROM post_assets WHERE post_id = p.id ORDER BY sort_order ASC

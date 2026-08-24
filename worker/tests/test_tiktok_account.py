@@ -52,7 +52,7 @@ class Budget:
 
 @pytest.fixture
 def tiktok_channel(conn, make_publication):
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None, now=NOW)
     return conn.execute(
         "SELECT * FROM channels WHERE id = ?", (pub["channel_id"],)

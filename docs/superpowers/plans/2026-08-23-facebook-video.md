@@ -588,7 +588,17 @@ git commit -m "refactor(dashboard): post_type 'video'; declare per-platform vide
 
 ---
 
-**PHASE 1 CHECKPOINT.** Apply migration `0027` to the live DB (`.venv/bin/python worker/migrate.py`), restart the worker, and confirm the dashboard still loads the queue and the existing video post. Do not start Phase 2 until this is confirmed by looking at the running app.
+**PHASE 1 CHECKPOINT.** Verify against the **worktree's** database copy only — apply `0027`
+there, start the dashboard, and confirm it still loads the queue and the existing video post.
+
+**Do NOT apply the migration to the live install at this point.** Task 2 makes Facebook declare
+video support, but the Facebook video publish path does not exist until Task 8. In that window
+the invariant "a platform that declares video support has a working publish path" is false, and
+auto-fill would happily queue a video post to a Facebook channel that cannot publish it — failing
+it terminally every cycle, since `failed` is not in `ACTIVE_QUEUE_STATUSES`. This install runs
+auto-fill through a channel GROUP, so the Facebook channel is genuinely reachable that way.
+
+The live migration moves to the **Phase 2 checkpoint**, after Task 8 closes the gap.
 
 ---
 
@@ -1138,7 +1148,7 @@ resolve the feed post id metrics actually read against."
 - Test: **create** `worker/tests/test_publisher_media_resolution.py` (media resolution is currently covered only incidentally, by `test_delivery.py`)
 
 **Interfaces:**
-- Consumes: `PlatformCaps.needs_conformed_media`, `PlatformCaps.video_surfaces` (Task 2), `surface`.
+- Consumes: `PlatformCaps.needs_conformed_media`, the new `feed_video_is_constrained`, `surface`, and the asset's `media_kind`. (It does NOT read `video_surfaces` — an earlier draft said so.)
 - Produces: `PlatformCaps.feed_video_is_constrained: bool = True`, and a module-level
   `_needs_conformed(caps: PlatformCaps, surface: str, media_kind: str | None) -> bool` in
   `worker/publisher.py`. `_resolve_rel(asset, surface="feed", needs_conformed=True)` gains a
@@ -1339,7 +1349,19 @@ git commit -m "feat(publisher): refuse an out-of-spec Facebook Reel before sched
 
 ---
 
-**PHASE 2 CHECKPOINT.** Full worker suite green. Restart the worker and confirm the heartbeat. Do not start Phase 3 until confirmed.
+**PHASE 2 CHECKPOINT.** Full worker suite green. Verify against the worktree copy only.
+
+**Still do NOT migrate the live install here.** The earlier amendment moved the live migration
+from Phase 1 to Phase 2, which was not far enough. The live install runs the code on `main`,
+where `SUPPORTED_POST_TYPES` is still `(..., "reel")` and `PostType` has no `"video"`. Migrating
+the live database while the live code is the OLD code renames the owner's existing post to a
+value their running worker refuses and their running dashboard does not know — breaking a post
+that works today, for the whole window until the branch merges.
+
+Schema and the code that understands it must move TOGETHER. The live migration therefore belongs
+**after the merge**, immediately before the live verification in Tasks 12-13, and it is an
+outward-facing change to the owner's working install: ASK before running it, and back up first
+(`sqlite3 data/socialscheduler.db ".backup 'data/pre-0027-backup.db'"`).
 
 ---
 
@@ -1466,11 +1488,11 @@ Expected: `is_dry_run = 1`, `remote_post_id` NULL.
 ```bash
 cd "/Users/kelanliparoto/Documents/Claude Projects/Apps/SocialScheduler"
 .venv/bin/python -c "
-from worker.config import load_config
+from worker.config import Config
 from worker.db import connect
 from worker.exchange_token import debug_token
 
-cfg = load_config()
+cfg = Config.from_env()
 conn = connect(cfg.database_path)
 row = conn.execute(
     \"SELECT access_token FROM channels WHERE platform='facebook' AND is_active=1 LIMIT 1\"
@@ -1497,10 +1519,12 @@ This is the step that settles the id-resolution risk. For each published id:
 
 ```bash
 .venv/bin/python -c "
-from worker.config import load_config
-from worker.clients import client_for
-cfg = load_config()
-client = client_for('facebook', cfg)
+from worker.config import Config
+from worker.graph_api import GraphClient
+cfg = Config.from_env()
+# Facebook Pages always live on graph.facebook.com (clients.FACEBOOK_BASE), independent
+# of whatever host this install configured for Instagram.
+client = GraphClient(cfg.graph_version, base_url='https://graph.facebook.com')
 token = '<page token>'
 for pid in ('<stored remote_post_id 1>', '<stored remote_post_id 2>'):
     print(pid, client.get_page_post_summary(pid, token))

@@ -103,7 +103,7 @@ test("a video slide becomes a reel, including when it is slide one", async () =>
   assert.equal(res.ok, true);
   if (!res.ok) return;
 
-  assert.equal(q.getPost(res.post_ids[0])?.post_type, "reel", "the ORIGINAL was retyped");
+  assert.equal(q.getPost(res.post_ids[0])?.post_type, "video", "the ORIGINAL was retyped");
   assert.equal(q.getPost(res.post_ids[1])?.post_type, "single");
 });
 

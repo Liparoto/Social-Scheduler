@@ -46,13 +46,14 @@ function isEditable(status: PublicationStatus): boolean {
  * Is THIS send's thumbnail a video?
  *
  * Prefers the asset's own media_kind over the post's type. post_type describes the
- * source, and a story send carries one slide of it — a story cut from a Reel is a video
- * whose post_type is 'story', and a Reel row is a video whose asset says so anyway. The
- * post_type fallback only matters for a row loaded before the query carried media_kind.
+ * source, and a story send carries one slide of it — a story cut from a video post is a
+ * video whose post_type is 'story', and a post_type 'video' row is a video whose asset
+ * says so anyway. The post_type fallback only matters for a row loaded before the query
+ * carried media_kind.
  */
 function isVideoRow(p: PublicationRow): boolean {
   if (p.first_asset_media_kind) return p.first_asset_media_kind === "video";
-  return p.post_type === "reel";
+  return p.post_type === "video";
 }
 
 function viewerLabel(p: PublicationRow): string {
@@ -214,7 +215,7 @@ export function PublicationQueue({
   const [status, setStatus] = useState<StatusFilter>("all");
   // DESTINATION, not platform: an Instagram channel has both surfaces, so this is a
   // separate axis from the platform filter above. Matches the Library's filter.
-  const [destination, setDestination] = useState<"all" | "story" | "feed">("all");
+  const [destination, setDestination] = useState<"all" | "story" | "reel" | "feed">("all");
 
   const shown = pubs.filter((p) => {
     // An empty set means no account filter at all, not "no accounts".
@@ -268,6 +269,7 @@ export function PublicationQueue({
         >
           <option value="all">All destinations</option>
           <option value="story">Stories</option>
+          <option value="reel">Reels</option>
           <option value="feed">Feed only</option>
         </select>
         <span className="data ml-auto text-[11px] text-muted">
@@ -402,6 +404,14 @@ export function PublicationQueue({
                               Story
                             </span>
                           ) : null}
+                          {p.surface === "reel" ? (
+                            <span
+                              className="mr-1.5 rounded-full border border-border-strong px-1.5 py-px align-middle text-[10px] font-medium text-ink-soft"
+                              title="Publishes to Facebook Reels, not the feed"
+                            >
+                              Reel
+                            </span>
+                          ) : null}
                           {p.post_caption || (
                             <span className="text-faint italic">
                               {p.surface === "story" ? "Stories carry no caption" : "No caption"}
@@ -411,12 +421,16 @@ export function PublicationQueue({
                         <p className="data mt-0.5 text-[11px] text-faint">
                           {/* post_type describes the SOURCE post. For a story send it would
                               read "carousel · 4 imgs" while this row publishes exactly one
-                              slide — so say what THIS send actually does instead. */}
+                              slide — so say what THIS send actually does instead. Same
+                              reasoning for a reel send: post_type reads "video" either way,
+                              which doesn't say WHICH Facebook surface it's headed to. */}
                           {p.surface === "story"
                             ? p.story_slide_no && p.asset_count > 1
                               ? `Story · slide ${p.story_slide_no} of ${p.asset_count}`
                               : "Story"
-                            : `${p.post_type}${p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}`}
+                            : p.surface === "reel"
+                              ? "Reel"
+                              : `${p.post_type}${p.asset_count > 1 ? ` · ${p.asset_count} imgs` : ""}`}
                           {p.remote_post_id && p.remote_post_id !== "DRYRUN"
                             ? ` · ${p.remote_post_id}`
                             : ""}

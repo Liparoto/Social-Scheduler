@@ -9,6 +9,7 @@ import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelAvatar } from "@/components/ui";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
+import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
 import type { PostTarget } from "@/lib/types";
 
 export type LibraryPickItem = {
@@ -20,6 +21,12 @@ export type LibraryPickItem = {
   post_type: string;
   // Needed so the picker can say '4 slides → 4 Stories' BEFORE scheduling.
   asset_count: number;
+  // First asset's dimensions/duration, so the picker can grey out an out-of-spec
+  // Facebook Reel target — see facebook-reel-spec.ts. NULL for text posts and for
+  // anything predating duration/dimension tracking; a null value never disables the chip.
+  first_asset_width: number | null;
+  first_asset_height: number | null;
+  first_asset_duration_ms: number | null;
 };
 export type ChannelLite = {
   id: number;
@@ -36,6 +43,45 @@ const segBtn = (active: boolean) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
     active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
+
+/**
+ * The targets actually eligible to submit, derived from `targets` + whichever post is
+ * selected — never written back into state, so there's nothing to keep in sync when the
+ * selected post (and therefore what's compatible) changes.
+ *
+ * Two independent reasons a saved target can go stale here:
+ *  - the channel can't take this post's type at all (e.g. picking a Threads target, then
+ *    switching to a different, incompatible post);
+ *  - a {facebook, reel} target whose video is (or has become, after a re-select) out of
+ *    Facebook Reels' own spec — checked with the SAME limits the picker itself greys the
+ *    Reel chip with, so a stale target can't silently survive a switch just because it was
+ *    already sitting in `targets` before this check existed. Mirrors post-editor.tsx's
+ *    reelIneligible.
+ *
+ * Pulled out as its own export, like toggleTarget/hasTarget in channel-surface-picker.tsx,
+ * so this is unit-testable without driving the "pick a post" click through the component.
+ */
+export function effectiveLibraryTargets(
+  targets: PostTarget[],
+  selected: LibraryPickItem | null,
+  channels: ChannelLite[]
+): PostTarget[] {
+  const incompatibleIds = new Set(
+    selected ? incompatibleChannelsForPostType(selected.post_type, channels).map((c) => c.id) : []
+  );
+  const reelIneligible =
+    selected?.post_type === "video" &&
+    facebookReelDisabledReason({
+      width: selected.first_asset_width,
+      height: selected.first_asset_height,
+      duration_ms: selected.first_asset_duration_ms,
+    }) !== null;
+  return targets.filter((t) => {
+    if (incompatibleIds.has(t.channel_id)) return false;
+    if (t.surface === "reel" && reelIneligible) return false;
+    return true;
+  });
+}
 
 export function ScheduleFromLibrary({
   posts,
@@ -66,20 +112,13 @@ export function ScheduleFromLibrary({
   const shown = posts.filter((p) =>
     query.trim() ? (p.caption ?? "").toLowerCase().includes(query.trim().toLowerCase()) : true
   );
-  const incompatibleIds = useMemo(
-    () =>
-      new Set(
-        selected ? incompatibleChannelsForPostType(selected.post_type, channels).map((c) => c.id) : []
-      ),
-    [selected, channels]
-  );
   // Changing which post is selected can make a previously-picked target incompatible
   // (e.g. switching from a Threads text post to an Instagram image post's target
   // selection carrying over) — derive the effective set instead of writing it back into
-  // state, so there's nothing to keep in sync.
+  // state, so there's nothing to keep in sync. See effectiveLibraryTargets above.
   const effectiveTargets = useMemo(
-    () => targets.filter((t) => !incompatibleIds.has(t.channel_id)),
-    [targets, incompatibleIds]
+    () => effectiveLibraryTargets(targets, selected, channels),
+    [targets, selected, channels]
   );
   // Per-ACCOUNT count for the button label: one Instagram account picked for both
   // Feed and Story is two sends but still one account.
@@ -138,7 +177,7 @@ export function ScheduleFromLibrary({
                 className="flex gap-3 rounded-lg border border-border p-2 text-left hover:bg-surface-sunken"
               >
                 {p.first_asset_id ? (
-                  p.post_type === "reel" ? (
+                  p.post_type === "video" ? (
                     // No thumbnail file exists for video (no ffmpeg dependency by
                     // design) — render the real file with preload="metadata" so the
                     // browser decodes just the first frame, same approach as
@@ -186,7 +225,7 @@ export function ScheduleFromLibrary({
         <div className="flex items-start justify-between gap-3">
           <div className="flex gap-3">
             {selected.first_asset_id ? (
-              selected.post_type === "reel" ? (
+              selected.post_type === "video" ? (
                 // videoPreviewSrc's #t= fragment forces Safari to paint a frame for a
                 // preload="metadata" video (Chrome already does this for free). No
                 // cover_frame_ms on this row (would need a new query), so it falls
@@ -260,9 +299,25 @@ export function ScheduleFromLibrary({
             channels={channels}
             value={effectiveTargets}
             onChange={setTargets}
-            hasVideo={selected?.post_type === "reel"}
+            hasVideo={selected?.post_type === "video"}
             textOnly={selected?.post_type === "text"}
             slideCount={selected?.asset_count ?? 0}
+            // Only the FIRST asset — the picker's `assets` prop is a list because a post
+            // can have several slides, but this Library item only carries its first
+            // asset's dimensions/duration (see LibraryPickItem). That's fine here: a
+            // Facebook Reel is always a single video, so the first asset is the one that
+            // matters, not a truncated list.
+            assets={
+              selected
+                ? [
+                    {
+                      width: selected.first_asset_width,
+                      height: selected.first_asset_height,
+                      duration_ms: selected.first_asset_duration_ms,
+                    },
+                  ]
+                : undefined
+            }
             postNow={postNow}
           />
         </div>

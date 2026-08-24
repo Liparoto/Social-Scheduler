@@ -12,12 +12,21 @@ export interface Tag {
 // NOTE: 'story' here is VESTIGIAL and unused — see migration 0014's header. A Story is a
 // DESTINATION, not a content shape, and lives on Surface below. Nothing creates a post with
 // post_type 'story' and the worker refuses it.
-export type PostType = "single" | "carousel" | "reel" | "story" | "text";
+export type PostType = "single" | "carousel" | "video" | "story" | "text";
 
 // WHERE a send lands, as opposed to what the content IS (PostType, which is INFERRED from
-// the assets). 'story' is an Instagram Story. Kept as a separate axis so one post can be a
-// Story on Instagram AND an ordinary post on Telegram — see docs/design-instagram-stories.md.
-export type Surface = "feed" | "story";
+// the assets). 'story' is an Instagram Story; 'reel' is a Facebook Reel (Instagram has no
+// separate reel surface — its feed video IS a Reel, so it never uses this value). Kept as
+// a separate axis so one post can be a Story on Instagram AND an ordinary post on Telegram
+// — see docs/design-instagram-stories.md.
+//
+// NOTE: "reel" is a fully wired target, not merely a type-level placeholder. The schedule
+// route's runtime parsing (lib/story-fanout.ts's parseTargets) accepts it, and the worker
+// (worker/publisher.py's _publish_facebook / _publish_fb_video) publishes it to a Facebook
+// Page's Reels edge. _validate additionally enforces, terminally, that a 'reel' surface
+// target has post_type='video' on a platform whose caps declare a Reels surface — so a
+// stale/malformed target can't reach the create call and publish the wrong media.
+export type Surface = "feed" | "story" | "reel";
 
 /** One destination for a post: a channel plus which of its surfaces to publish to. */
 export interface PostTarget {

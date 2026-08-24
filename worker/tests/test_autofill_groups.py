@@ -76,12 +76,12 @@ def test_capable_post_ids_ignores_targeting_and_cooldown(conn):
     assert [r["post_id"] for r in eligible_candidates(conn, ch(conn, ig), NOW, None)] == []
 
 
-def test_reel_is_capable_for_instagram_but_not_threads(conn):
+def test_video_post_is_capable_for_instagram_but_not_threads(conn):
     ig = make_channel(conn, platform="instagram", name="IG")
     th = make_channel(conn, platform="threads", name="TH")
-    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
-    assert reel in capable_post_ids(conn, ch(conn, ig))
-    assert reel not in capable_post_ids(conn, ch(conn, th))
+    video_post = make_post(conn, post_type="video", media_kind="video", targets=(ig, th))
+    assert video_post in capable_post_ids(conn, ch(conn, ig))
+    assert video_post not in capable_post_ids(conn, ch(conn, th))
 
 
 def test_long_caption_is_capable_for_instagram_but_not_threads(conn):
@@ -151,12 +151,12 @@ def test_image_targeted_at_both_goes_to_both(conn):
     assert picked(conn, gid) == [(p, sorted([ig, th]))]
 
 
-def test_reel_goes_to_instagram_only_capability_is_an_exception(conn):
-    """Threads declares supports_video=False. The Reel must still queue to Instagram —
-    this is the rule that keeps evergreen video recycling alive."""
+def test_video_post_goes_to_instagram_only_capability_is_an_exception(conn):
+    """Threads declares supports_video=False. The video post must still queue to
+    Instagram — this is the rule that keeps evergreen video recycling alive."""
     gid, ig, th = pair(conn)
-    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
-    assert picked(conn, gid) == [(reel, [ig])]
+    video_post = make_post(conn, post_type="video", media_kind="video", targets=(ig, th))
+    assert picked(conn, gid) == [(video_post, [ig])]
 
 
 def test_long_caption_goes_to_instagram_only(conn):
@@ -374,7 +374,7 @@ def test_group_queue_depth_counts_slots_not_rows(conn, config):
 
 def test_group_reel_queues_instagram_only_and_does_not_stall_the_slot(conn, config):
     gid, ig, th = pair(conn, min_depth=1, target=1)
-    reel = make_post(conn, post_type="reel", media_kind="video", targets=(ig, th))
+    reel = make_post(conn, post_type="video", media_kind="video", targets=(ig, th))
 
     run_autofill(conn, config, NOW)
 

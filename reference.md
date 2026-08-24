@@ -208,6 +208,47 @@ document whether it is possible, and this project does not assume undocumented b
   (reach/impressions moving to "views"/"unique media viewers"), so reach is fetched best-effort
   via `FB_POST_INSIGHT_METRICS` and stored null when the name is rejected.
 
+### Facebook Pages VIDEO publishing (read from Meta's docs 2026-08-23 — NOT yet live-verified)
+
+⚠️ Everything in this section comes from Meta's published documentation, not from a real
+publish. The rest of this file records facts confirmed against live API calls; these have not
+been. Confirm and re-date this section after the first real Facebook video and Reel go out.
+
+- **Feed video:** `POST /{page-id}/videos` with `file_url` + `description`. One call, no upload
+  session — Meta fetches the URL server-side, exactly like the photo path. ≤1 GB, ≤20 minutes
+  via URL, and **any aspect ratio**. That looseness is the whole reason a `feed` vs `reel`
+  surface distinction exists: a landscape clip reaches the feed untouched.
+- **Reels:** `POST /{page-id}/video_reels` in THREE phases —
+  1. `upload_phase=start` → returns `video_id` and `upload_url`
+  2. `POST` to that `upload_url` (host `rupload.facebook.com`, NOT the Graph base) with headers
+     `Authorization: OAuth <token>` and `file_url: <url>`, and **no request body**. The hosted
+     and local-file forms are alternatives, not one shape with optional parts: the local form
+     sends `offset` + `file_size` with the bytes. Sending both shapes together fails obscurely.
+     **Prefer the returned `upload_url` over reconstructing it** — Meta returns it so the host
+     can shard or move.
+  3. `upload_phase=finish` with `video_id`, `video_state=PUBLISHED`, `description`
+- **Reels limits:** 3–90 seconds, aspect ratio **between 16:9 and 9:16** (so ordinary 16:9
+  landscape IS permitted — only something more extreme is refused), ≥540×960, 24–60 fps.
+  Mirrored in `worker/publisher.py`'s `_validate` and `dashboard/lib/facebook-reel-spec.ts`.
+- **Status is NOT Instagram's `status_code`.** `GET /{video-id}?fields=status` returns a nested
+  object whose `video_status` is lowercase: `ready` / `processing` / `uploading` /
+  `upload_complete` / `error` / `upload_failed` / `expired`. `graph_api.get_page_video_status`
+  normalizes these into the poll loop's FINISHED/ERROR/EXPIRED vocabulary.
+- **Both endpoints PUBLISH BEFORE polling begins** — the opposite of Instagram, where the poll
+  precedes `media_publish`. This is why nothing after a successful create call may raise into
+  the retry machinery: a retry re-posts. See the governing principle in `_publish_fb_video`.
+- **Permissions:** `pages_manage_posts`, `pages_read_engagement`, `pages_show_list`, plus
+  `CREATE_CONTENT` on the Page.
+- **Rate limit:** Meta documents 30 API-published Reels per rolling 24h. Pages expose no
+  `content_publishing_limit` endpoint to read it from, so this is recorded and NOT enforced —
+  the project rule against hardcoding a publishing limit still applies.
+- **UNVERIFIED, and the highest-risk assumption in the design:** these endpoints return a
+  VIDEO id, while metrics read against a FEED POST id (`get_page_post_summary`). The code
+  resolves it best-source-first: `post_id` in the publish response → `GET /{video-id}?fields=post_id`
+  → falling back to the video id. Whether Meta actually returns a usable `post_id` for a video
+  node has NOT been confirmed. If it does not, Facebook video metrics read ZERO — which looks
+  identical to a post nobody engaged with. Confirm on the first real publish.
+
 ### Threads publishing (verified 2026-07-25)
 - **Base host:** `https://graph.threads.net`. Endpoints below are relative to
   `{base}/{version}/...` the same way IG/FB are — see the ⚠ note below on which version

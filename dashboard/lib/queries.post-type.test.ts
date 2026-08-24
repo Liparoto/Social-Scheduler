@@ -54,7 +54,7 @@ function draft(assetIds: number[], postType?: string): number {
 }
 
 test("a lone video becomes a reel, not a single", () => {
-  assert.equal(postTypeOf(draft([asset("video")])), "reel");
+  assert.equal(postTypeOf(draft([asset("video")])), "video");
 });
 
 test("a lone image is still a single", () => {
@@ -72,7 +72,7 @@ test("a carousel containing a video is still a carousel", () => {
 });
 
 test("an explicit post_type always wins over the derivation", () => {
-  // /api/posts/draft passes 'text' and 'reel' explicitly; the derivation must never
+  // /api/posts/draft passes 'text' and 'video' explicitly; the derivation must never
   // second-guess a caller that stated its intent.
   assert.equal(postTypeOf(draft([asset("video")], "single")), "single");
   assert.equal(postTypeOf(draft([], "text")), "text");
@@ -97,6 +97,6 @@ test("bulk import gives a video the right type without being told", () => {
     { targets: [], content_kind: "evergreen", content_status: "ready" } as never
   );
 
-  assert.equal(postTypeOf(ids[0]), "reel");
+  assert.equal(postTypeOf(ids[0]), "video");
   assert.equal(postTypeOf(ids[1]), "single");
 });

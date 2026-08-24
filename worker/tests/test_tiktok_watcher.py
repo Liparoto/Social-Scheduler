@@ -55,7 +55,7 @@ def tiktok_config(config):
 @pytest.fixture
 def delivered(conn, make_publication):
     """A TikTok send that reached the creator's inbox, as publish_one leaves it."""
-    pub = make_publication(platform="tiktok", post_type="reel", n_assets=1,
+    pub = make_publication(platform="tiktok", post_type="video", n_assets=1,
                            media_kind="video", public_url=None, now=NOW)
     conn.execute(
         "UPDATE publications SET status='posted', delivery_state='inbox', "

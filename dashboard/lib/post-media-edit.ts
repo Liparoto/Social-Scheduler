@@ -147,7 +147,7 @@ export function derivePostTypeFromKinds(kinds: string[]): PostType {
   // this replaced: a text post always states its type explicitly.
   if (kinds.length === 0) return "single";
   if (kinds.length > 1) return "carousel";
-  return kinds[0] === "video" ? "reel" : "single";
+  return kinds[0] === "video" ? "video" : "single";
 }
 
 /**

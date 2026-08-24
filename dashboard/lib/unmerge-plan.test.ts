@@ -70,7 +70,7 @@ test("a video slide becomes a reel, not a single", () => {
   if (!r.ok) return;
   assert.deepEqual(
     r.parts.map((p) => p.post_type),
-    ["single", "reel", "single"]
+    ["single", "video", "single"]
   );
 });
 
@@ -85,7 +85,7 @@ test("a video in slot ONE retypes the original post, not a new one", () => {
   );
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.equal(r.parts[0].post_type, "reel", "parts[0] is the ORIGINAL post's new type");
+  assert.equal(r.parts[0].post_type, "video", "parts[0] is the ORIGINAL post's new type");
 });
 
 test("a ten-slide carousel splits into ten parts", () => {
@@ -116,7 +116,7 @@ test("a single-image post cannot be split", () => {
 });
 
 test("a reel cannot be split", () => {
-  const r = planUnmerge(cand({ post_type: "reel", slides: [{ asset_id: 10, media_kind: "video" }] }));
+  const r = planUnmerge(cand({ post_type: "video", slides: [{ asset_id: 10, media_kind: "video" }] }));
   assert.equal(r.ok, false);
   if (r.ok) return;
   assert.equal(r.problem.code, "not_a_carousel");
@@ -173,7 +173,7 @@ test("guards run before type derivation — a bad post is rejected, not describe
 });
 
 test("derivePostType maps media_kind, never asset count", () => {
-  assert.equal(derivePostType("video"), "reel");
+  assert.equal(derivePostType("video"), "video");
   assert.equal(derivePostType("image"), "single");
 });
 
@@ -245,7 +245,7 @@ test("leaving exactly one VIDEO slide retypes the original as a reel", () => {
   const r = planExtractSlides(c, [20, 30]);
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.equal(r.originalType, "reel");
+  assert.equal(r.originalType, "video");
 });
 
 test("an extracted video slide becomes a reel", () => {
@@ -259,7 +259,7 @@ test("an extracted video slide becomes a reel", () => {
   const r = planExtractSlides(c, [20]);
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.deepEqual(r.extracted, [{ asset_id: 20, post_type: "reel" }]);
+  assert.deepEqual(r.extracted, [{ asset_id: 20, post_type: "video" }]);
 });
 
 test("a slide ticked twice is extracted once", () => {
