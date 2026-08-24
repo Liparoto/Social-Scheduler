@@ -1,6 +1,6 @@
 import pytest
 
-from worker.clients import FACEBOOK_BASE, ClientRegistry, base_url_for
+from worker.clients import FACEBOOK_BASE, PLATFORM_CAPS, ClientRegistry, base_url_for
 
 
 def test_facebook_always_uses_facebook_base_even_on_an_ig_login_install(config):
@@ -103,3 +103,22 @@ def test_same_base_url_different_version_yields_different_client_instances(confi
     assert ig_client is not threads_client   # same base, different version -> different client
     assert ig_client is ig_client_again      # same platform, repeated call -> identical instance
     assert len(built) == 2                   # threads was NOT served from instagram's cache slot
+
+
+def test_facebook_declares_both_video_surfaces():
+    caps = PLATFORM_CAPS["facebook"]
+    assert caps.video_surfaces == frozenset({"feed", "reel"})
+
+
+def test_instagram_has_no_reel_surface():
+    """All Instagram feed video IS Reels, so a separate 'reel' surface would mean the
+    same thing as 'feed' — two values that can never differ. Facebook-only by design."""
+    assert PLATFORM_CAPS["instagram"].video_surfaces == frozenset({"feed", "story"})
+
+
+def test_supports_video_is_derived_not_stored():
+    """autofill's SQL binding still reads caps.supports_video; it must keep working
+    without autofill knowing surfaces exist."""
+    assert PLATFORM_CAPS["facebook"].supports_video is True
+    assert PLATFORM_CAPS["threads"].supports_video is False
+    assert PLATFORM_CAPS["threads"].video_surfaces == frozenset()

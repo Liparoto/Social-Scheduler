@@ -97,14 +97,12 @@ class PlatformCaps:
     # from a public URL (which is why publishing opens a tunnel); these platforms do not, so
     # they need neither a public URL nor cloudflared.
     uploads_media_bytes: bool = False
-    # True when this platform has an actual publish path for post_type='reel'. Only
-    # Instagram does today (worker/publisher.py's _publish_instagram has a 'reel'
-    # branch; every other adapter falls through to its `else` and fails terminally).
-    # Defaults False — the safe direction for a future platform, same reasoning as
-    # supports_text: worst case autofill under-selects rather than queuing a reel a
-    # channel can never actually publish (which fails terminally forever — see
-    # autofill.select_candidates).
-    supports_video: bool = False
+    # WHICH video destinations this platform has, not merely whether it has any. A bool
+    # cannot express Facebook, where the same clip goes to the feed as an ordinary video
+    # OR to Reels — two different endpoints with different rules. Empty = no video path,
+    # the safe default: worst case autofill under-selects rather than queuing a video a
+    # channel can never publish (which fails terminally forever — see select_candidates).
+    video_surfaces: frozenset[str] = frozenset()
     # False when the credential alone identifies the destination, so there is no separate
     # account id to store or ask for (Discord's webhook URL is both address and secret).
     uses_account_id: bool = True
@@ -123,17 +121,28 @@ class PlatformCaps:
     def caption_limit(self, post_type: str) -> int | None:
         return self.caption_chars.get(post_type)
 
+    @property
+    def supports_video(self) -> bool:
+        """Kept so autofill's :supports_video binding needs no knowledge of surfaces."""
+        return bool(self.video_surfaces)
+
 
 PLATFORM_CAPS: dict[str, PlatformCaps] = {
     # Instagram: feed carousels cap at 10 (see reference.md). No text-only format.
-    # The only platform with a publish path for post_type='reel' (see supports_video's
-    # docstring above).
+    # All Instagram feed video IS Reels, so there is no separate "reel" surface — it
+    # would mean the same thing as "feed", two values that can never differ.
     "instagram": PlatformCaps(
-        supports_text=False, max_carousel=10, caption_chars={}, supports_video=True
+        supports_text=False, max_carousel=10, caption_chars={},
+        video_surfaces=frozenset({"feed", "story"}),
     ),
     # Facebook Pages: attached_media multi-photo posts cap at 10. No text-only format
     # here either — a Page status update is a different product surface we don't publish.
-    "facebook": PlatformCaps(supports_text=False, max_carousel=10, caption_chars={}),
+    # Video has two genuinely different destinations: feed video (POST /{page}/videos,
+    # any aspect ratio, <=20 min) and Reels (POST /{page}/video_reels, vertical, 3-90s).
+    "facebook": PlatformCaps(
+        supports_text=False, max_carousel=10, caption_chars={},
+        video_surfaces=frozenset({"feed", "reel"}),
+    ),
     # Threads: text-first. 500-character text limit, 2-20 carousel children,
     # 250 API-published posts per rolling 24h (verified 2026-07-25).
     "threads": PlatformCaps(
@@ -167,7 +176,7 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
     # creator's content.
     "tiktok": PlatformCaps(
         supports_text=False, max_carousel=0, caption_chars={},
-        uploads_media_bytes=True, supports_video=True, supports_images=False,
+        uploads_media_bytes=True, video_surfaces=frozenset({"feed"}), supports_images=False,
         uses_account_id=True, needs_conformed_media=False,
     ),
 }
