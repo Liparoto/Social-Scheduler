@@ -12,7 +12,7 @@ export interface Tag {
 // NOTE: 'story' here is VESTIGIAL and unused — see migration 0014's header. A Story is a
 // DESTINATION, not a content shape, and lives on Surface below. Nothing creates a post with
 // post_type 'story' and the worker refuses it.
-export type PostType = "single" | "carousel" | "reel" | "story" | "text";
+export type PostType = "single" | "carousel" | "video" | "story" | "text";
 
 // WHERE a send lands, as opposed to what the content IS (PostType, which is INFERRED from
 // the assets). 'story' is an Instagram Story. Kept as a separate axis so one post can be a

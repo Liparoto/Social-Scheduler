@@ -76,13 +76,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // A single VIDEO asset is a reel, not a "single". Everything else is unchanged.
-  const isReel =
+  // A single VIDEO asset is post_type "video", not a "single". Everything else is unchanged.
+  const isVideo =
     !isText && chosenAssets.length === 1 && chosenAssets[0].media_kind === "video";
   const postType: PostType = isText
     ? "text"
-    : isReel
-      ? "reel"
+    : isVideo
+      ? "video"
       : assetIds.length > 1
         ? "carousel"
         : "single";

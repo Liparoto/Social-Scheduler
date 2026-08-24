@@ -20,12 +20,12 @@
 // DESTINATION, not a post type — see docs/design-instagram-stories.md.
 // supportsImages mirrors PlatformCaps.supports_images: TikTok is the only platform that
 // cannot publish a still image, and the worker's _validate is the real gate.
-// supportsVideo mirrors the worker's actual publish paths — worker/publisher.py's
-// _publish_instagram is the authority (it has a 'reel' branch; _publish_facebook,
-// _publish_threads, _publish_discord, _publish_telegram do not, and fall through to
-// "adapter has no publish path for post_type 'reel'"). Unlike the nine worker
-// registries, THIS copy has no assert guarding it against drifting out of sync — if a
-// future adapter grows a reel path, this flag has to be updated here by hand too.
+// videoSurfaces mirrors worker/clients.py's PlatformCaps.video_surfaces: the list of
+// destinations (feed, story, reel, ...) a platform's publish path accepts a post_type
+// 'video' post for. An empty list means that adapter has no video publish path at all.
+// Unlike the nine worker registries, THIS copy has no assert guarding it against
+// drifting out of sync — a future adapter that grows a video surface has to be updated
+// here by hand too.
 export const PLATFORMS = [
   {
     value: "instagram",
@@ -36,7 +36,7 @@ export const PLATFORMS = [
     usesLinkedPage: true,
     usesAccountId: true,
     supportsText: false,
-    supportsVideo: true,
+    videoSurfaces: ["feed", "story"],
     supportsImages: true,
     supportsStory: true,
     maxCarousel: 10,
@@ -52,7 +52,7 @@ export const PLATFORMS = [
     usesLinkedPage: false,
     usesAccountId: true,
     supportsText: false,
-    supportsVideo: false,
+    videoSurfaces: ["feed", "reel"],
     supportsImages: true,
     supportsStory: false,
     maxCarousel: 10,
@@ -68,7 +68,7 @@ export const PLATFORMS = [
     usesLinkedPage: false,
     usesAccountId: true,
     supportsText: true,
-    supportsVideo: false,
+    videoSurfaces: [],
     supportsImages: true,
     supportsStory: false,
     maxCarousel: 20,
@@ -85,7 +85,7 @@ export const PLATFORMS = [
     // Its only credential is a webhook URL — no separate account id field at all.
     usesAccountId: false,
     supportsText: true,
-    supportsVideo: false,
+    videoSurfaces: [],
     supportsImages: true,
     supportsStory: false,
     maxCarousel: 10,
@@ -102,7 +102,7 @@ export const PLATFORMS = [
     usesLinkedPage: false,
     usesAccountId: true,
     supportsText: true,
-    supportsVideo: false,
+    videoSurfaces: [],
     supportsImages: true,
     supportsStory: false,
     maxCarousel: 10,
@@ -119,7 +119,7 @@ export const PLATFORMS = [
     usesLinkedPage: false,
     usesAccountId: true,
     supportsText: false,
-    supportsVideo: true,
+    videoSurfaces: ["feed"],
     // The only platform here that cannot take a still image. TikTok's photo endpoint
     // accepts PULL_FROM_URL only, from a DNS-verified domain — and this install serves
     // assets from an ephemeral trycloudflare URL it does not own.
@@ -189,11 +189,18 @@ export function supportsText(value: string): boolean {
   return BY_VALUE.get(value)?.supportsText ?? false;
 }
 
+// Mirrors worker/clients.py's PlatformCaps.video_surfaces. As the comment at the top of
+// this file warns, THIS copy has no assert guarding it against drift — it must be updated
+// by hand whenever the worker's set changes.
+export function videoSurfaces(value: string): string[] {
+  return [...(BY_VALUE.get(value)?.videoSurfaces ?? [])];
+}
+
 // Default false is the safe direction: worst case the composer is over-cautious about an
-// unrecognised platform, rather than offering a Reel to something that can't publish video
-// (worker/publisher.py's _publish_instagram is the only adapter with a 'reel' branch).
+// unrecognised platform, rather than offering a video post to something that can't publish
+// one on any surface.
 export function supportsVideo(value: string): boolean {
-  return BY_VALUE.get(value)?.supportsVideo ?? false;
+  return videoSurfaces(value).length > 0;
 }
 
 // Default TRUE for an unrecognised platform — and note this is the OPPOSITE direction to
@@ -319,7 +326,7 @@ export function isAwaitingPublication(deliveryState: string | null | undefined):
 
 // ---- Post-type / channel compatibility -------------------------------------------
 // The single place that decides "can this post_type go to this channel" client- and
-// server-side. 'text' (caption, no media) is gated on supportsText, 'reel' is gated on
+// server-side. 'text' (caption, no media) is gated on supportsText, 'video' is gated on
 // supportsVideo — every other post_type carries assets and every platform we know about
 // accepts images/carousels. The worker (worker/publisher.py's _validate) is the real
 // gate and re-checks this at publish time; this exists purely so the UI/API can reject
@@ -336,7 +343,7 @@ export function incompatibleChannelsForPostType<T extends ChannelLikeForCompat>(
   channels: T[]
 ): T[] {
   if (postType === "text") return channels.filter((c) => !supportsText(c.platform));
-  if (postType === "reel") return channels.filter((c) => !supportsVideo(c.platform));
+  if (postType === "video") return channels.filter((c) => !supportsVideo(c.platform));
   return [];
 }
 
@@ -370,11 +377,11 @@ export function incompatibleChannelsForPost<T extends ChannelLikeForCompat>(
       if (!supportsText(c.platform)) out.push({ channel: c, reason: "text" });
       continue;
     }
-    // A reel is caught here rather than left to the worker (same reasoning as
-    // carousel below): only Instagram has a publish path for post_type='reel'
-    // (worker/publisher.py's _publish_instagram) — everything else would die
-    // terminally after being "scheduled".
-    if (postType === "reel") {
+    // A video post is caught here rather than left to the worker (same reasoning as
+    // carousel below): only platforms with a non-empty videoSurfaces list have a
+    // publish path for post_type='video' — everything else would die terminally
+    // after being "scheduled".
+    if (postType === "video") {
       if (!supportsVideo(c.platform)) out.push({ channel: c, reason: "video" });
       continue;
     }

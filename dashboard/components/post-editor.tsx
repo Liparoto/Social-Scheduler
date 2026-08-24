@@ -166,7 +166,7 @@ export function PostEditor({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Channels that can't publish this post's type at all (e.g. a 'reel' targeted at a
+  // Channels that can't publish this post's type at all (e.g. a 'video' post targeted at a
   // platform with no publish path for one) — disabled here rather than offered and
   // left to fail terminally at autofill/publish time. Mirrors library-view.tsx,
   // post-sends-panel.tsx and schedule-from-library.tsx, which all gate the same way;
@@ -544,7 +544,7 @@ export function PostEditor({
           channels={channels}
           value={effectiveTargets}
           onChange={setTargets}
-          hasVideo={post.post_type === "reel"}
+          hasVideo={post.post_type === "video"}
           textOnly={post.post_type === "text"}
           slideCount={assets.length}
         />

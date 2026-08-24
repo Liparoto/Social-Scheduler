@@ -1153,7 +1153,7 @@ export interface CreateDraftInput extends ContentModelInput {
  *
  * Asset COUNT alone is not enough, which is what this used to use: a lone video became
  * "single", so a bulk import of a video produced a post the publisher cannot send as a
- * Reel. `/api/posts/draft` had already worked around it by passing post_type explicitly,
+ * video post. `/api/posts/draft` had already worked around it by passing post_type explicitly,
  * but createDraftPostsBulk does not — that path is where the wrong type actually reached
  * the database.
  *
@@ -1737,7 +1737,7 @@ function spawnPostsFromSlides(
  * created, changed, or deleted by this function.
  *
  * **Each post's `post_type` is derived from its OWN asset's media_kind** (a video slide
- * becomes a 'reel'), never from asset count. This deliberately does NOT go through
+ * becomes 'video'), never from asset count. This deliberately does NOT go through
  * createDraftPost, which derives post_type from count alone and would leave a video slide as
  * an unpublishable 'single'.
  *

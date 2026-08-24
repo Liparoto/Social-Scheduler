@@ -138,7 +138,7 @@ export function ScheduleFromLibrary({
                 className="flex gap-3 rounded-lg border border-border p-2 text-left hover:bg-surface-sunken"
               >
                 {p.first_asset_id ? (
-                  p.post_type === "reel" ? (
+                  p.post_type === "video" ? (
                     // No thumbnail file exists for video (no ffmpeg dependency by
                     // design) — render the real file with preload="metadata" so the
                     // browser decodes just the first frame, same approach as
@@ -186,7 +186,7 @@ export function ScheduleFromLibrary({
         <div className="flex items-start justify-between gap-3">
           <div className="flex gap-3">
             {selected.first_asset_id ? (
-              selected.post_type === "reel" ? (
+              selected.post_type === "video" ? (
                 // videoPreviewSrc's #t= fragment forces Safari to paint a frame for a
                 // preload="metadata" video (Chrome already does this for free). No
                 // cover_frame_ms on this row (would need a new query), so it falls
@@ -260,7 +260,7 @@ export function ScheduleFromLibrary({
             channels={channels}
             value={effectiveTargets}
             onChange={setTargets}
-            hasVideo={selected?.post_type === "reel"}
+            hasVideo={selected?.post_type === "video"}
             textOnly={selected?.post_type === "text"}
             slideCount={selected?.asset_count ?? 0}
             postNow={postNow}

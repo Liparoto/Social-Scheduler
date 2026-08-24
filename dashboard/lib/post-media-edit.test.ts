@@ -33,7 +33,7 @@ function ctx(over: Partial<MediaEditContext> = {}): MediaEditContext {
 test("derivePostTypeFromKinds matches the rules the composer uses", () => {
   assert.equal(derivePostTypeFromKinds([]), "single");
   assert.equal(derivePostTypeFromKinds(["image"]), "single");
-  assert.equal(derivePostTypeFromKinds(["video"]), "reel");
+  assert.equal(derivePostTypeFromKinds(["video"]), "video");
   assert.equal(derivePostTypeFromKinds(["image", "image"]), "carousel");
 });
 
@@ -108,7 +108,7 @@ test("a lone video on an empty post becomes a reel", () => {
   const res = checkAddAssets(ctx({ slides: [] }), [vid(9)], 0);
   assert.equal(res.ok, true);
   if (!res.ok) return;
-  assert.equal(res.post_type, "reel");
+  assert.equal(res.post_type, "video");
 });
 
 test("an 11th slide is refused with Instagram's real limit named", () => {
@@ -304,8 +304,8 @@ test("every rule the pre-flight knows gives checkAddAssets the identical refusal
 test("checkCanAddMedia does not pretend to judge the asset-dependent rules", () => {
   // A post that already holds a video: adding anything to it is a video_mix refusal, but
   // that is only knowable once you know what is being added.
-  assert.deepEqual(checkCanAddMedia({ postType: "reel", hasLiveSend: false }, 0), { ok: true });
-  const full = checkAddAssets(ctx({ slides: [vid(1)], postType: "reel" }), [img(9)], 0);
+  assert.deepEqual(checkCanAddMedia({ postType: "video", hasLiveSend: false }, 0), { ok: true });
+  const full = checkAddAssets(ctx({ slides: [vid(1)], postType: "video" }), [img(9)], 0);
   assert.equal(full.ok, false);
   if (full.ok) return;
   assert.equal(full.code, "video_mix");

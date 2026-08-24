@@ -42,7 +42,7 @@ test("an unknown platform is assumed to accept images", () => {
 });
 
 test("tiktok enforces no caption limit because it sends no caption", () => {
-  assert.equal(captionLimit("tiktok", "reel"), null);
+  assert.equal(captionLimit("tiktok", "video"), null);
 });
 
 test("an image post targeted at tiktok is refused, naming the channel", () => {
@@ -64,7 +64,7 @@ test("a carousel targeted at tiktok is refused as images, not as too many images
 
 test("a reel targeted at tiktok is allowed", () => {
   assert.equal(
-    incompatiblePostError("reel", 1, [{ id: 1, platform: "tiktok", account_name: "L" }]),
+    incompatiblePostError("video", 1, [{ id: 1, platform: "tiktok", account_name: "L" }]),
     null,
   );
 });

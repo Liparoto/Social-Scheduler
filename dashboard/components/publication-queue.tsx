@@ -46,13 +46,14 @@ function isEditable(status: PublicationStatus): boolean {
  * Is THIS send's thumbnail a video?
  *
  * Prefers the asset's own media_kind over the post's type. post_type describes the
- * source, and a story send carries one slide of it — a story cut from a Reel is a video
- * whose post_type is 'story', and a Reel row is a video whose asset says so anyway. The
- * post_type fallback only matters for a row loaded before the query carried media_kind.
+ * source, and a story send carries one slide of it — a story cut from a video post is a
+ * video whose post_type is 'story', and a post_type 'video' row is a video whose asset
+ * says so anyway. The post_type fallback only matters for a row loaded before the query
+ * carried media_kind.
  */
 function isVideoRow(p: PublicationRow): boolean {
   if (p.first_asset_media_kind) return p.first_asset_media_kind === "video";
-  return p.post_type === "reel";
+  return p.post_type === "video";
 }
 
 function viewerLabel(p: PublicationRow): string {

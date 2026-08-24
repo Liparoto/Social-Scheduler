@@ -593,7 +593,7 @@ export function PostSendsPanel({
               channels={pickable}
               value={effectiveTargets}
               onChange={setTargets}
-              hasVideo={postType === "reel"}
+              hasVideo={postType === "video"}
               textOnly={postType === "text"}
               slideCount={slideCount}
             />

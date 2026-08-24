@@ -83,13 +83,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // A single VIDEO asset is a reel, not a "single". Everything else is unchanged.
-  const isReel =
+  // A single VIDEO asset is post_type "video", not a "single". Everything else is unchanged.
+  const isVideo =
     !isText && chosenAssets.length === 1 && chosenAssets[0].media_kind === "video";
   const postType = isText
     ? "text"
-    : isReel
-      ? "reel"
+    : isVideo
+      ? "video"
       : assetIds.length > 1
         ? "carousel"
         : "single";
@@ -143,9 +143,9 @@ export async function POST(req: NextRequest) {
     caption,
     first_comment: (body.first_comment || "").trim(),
     // undefined (not "carousel"/"single") falls through to createDraftPost's own
-    // asset-count derivation — but that derivation doesn't know about video, so a reel
-    // must be passed explicitly or it would be saved as "single" edit-time.
-    post_type: isText ? "text" : isReel ? "reel" : undefined,
+    // asset-count derivation — but that derivation doesn't know about video, so a video
+    // post must be passed explicitly or it would be saved as "single" edit-time.
+    post_type: isText ? "text" : isVideo ? "video" : undefined,
     asset_ids: assetIds,
     created_by: body.created_by,
     content_kind: contentKind,

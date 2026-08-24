@@ -159,9 +159,9 @@ export function Composer({
     mode,
   }));
 
-  // A reel is always exactly one video asset — mixing video with anything else, or more
-  // than one video, is rejected up front in onFiles below, so "the one asset present is
-  // a video" is equivalent to "this is a reel". Gated on !textOnly too: switching Text
+  // A video post is always exactly one video asset — mixing video with anything else, or
+  // more than one video, is rejected up front in onFiles below, so "the one asset present
+  // is a video" is equivalent to "this is a video post". Gated on !textOnly too: switching Text
   // only on always submits asset_ids: [] regardless of what's still sitting in `assets`
   // (see submit below), so a leftover video asset must not keep disabling every
   // text-capable channel or blocking channel selection once the post is really text-only.
@@ -170,7 +170,7 @@ export function Composer({
   const postType = textOnly
     ? "text"
     : hasVideo
-    ? "reel"
+    ? "video"
     : assets.length > 1
     ? "carousel"
     : assets.length === 1

@@ -123,7 +123,7 @@ test("leaving exactly one VIDEO slide retypes the original as a reel", async () 
   const res = q.extractSlidesFromCarousel(original, [a[1], a[2]]);
   assert.equal(res.ok, true);
   if (!res.ok) return;
-  assert.equal(q.getPost(original)?.post_type, "reel");
+  assert.equal(q.getPost(original)?.post_type, "video");
 });
 
 test("an extracted video slide becomes a reel, not a single", async () => {
@@ -134,7 +134,7 @@ test("an extracted video slide becomes a reel, not a single", async () => {
   const res = q.extractSlidesFromCarousel(original, [a[1]]);
   assert.equal(res.ok, true);
   if (!res.ok) return;
-  assert.equal(q.getPost(res.post_ids[1])?.post_type, "reel");
+  assert.equal(q.getPost(res.post_ids[1])?.post_type, "video");
 });
 
 test("no asset is created, deleted, or orphaned", async () => {
