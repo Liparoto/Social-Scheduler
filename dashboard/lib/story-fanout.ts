@@ -1,6 +1,13 @@
 import type Database from "better-sqlite3";
 import type { PostTarget, Surface } from "./types";
 
+// Kept as a runtime mirror of the Surface union in ./types — an unlisted value must fail
+// loudly here rather than be guessed on a route that publishes (see parseTargets below).
+const VALID_SURFACES: readonly Surface[] = ["feed", "story", "reel"];
+function isSurface(value: unknown): value is Surface {
+  return VALID_SURFACES.includes(value as Surface);
+}
+
 /**
  * Treat a bare list of channel ids as feed targets.
  *
@@ -32,7 +39,7 @@ export function parseTargets(
       if (!t || typeof t !== "object") return "invalid";
       const { channel_id, surface } = t as { channel_id?: unknown; surface?: unknown };
       if (!Number.isInteger(channel_id)) return "invalid";
-      if (surface !== "feed" && surface !== "story") return "invalid";
+      if (!isSurface(surface)) return "invalid";
       out.push({ channel_id: channel_id as number, surface });
     }
     return out;

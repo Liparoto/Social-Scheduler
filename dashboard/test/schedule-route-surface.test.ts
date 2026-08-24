@@ -85,10 +85,24 @@ test("a feed target still schedules one feed publication covering all assets", a
   assert.deepEqual(pubs(postId), [{ surface: "feed", asset_id: null }]);
 });
 
-test("an unknown surface is rejected rather than defaulted", async () => {
+test("a reel target schedules one feed-shaped publication covering all assets", async () => {
   const { ig, postId } = fixture();
   const res = await schedule(postId, {
     targets: [{ channel_id: ig, surface: "reel" }],
+    post_now: true,
+  });
+
+  assert.equal(res.status, 201);
+  assert.deepEqual(pubs(postId), [{ surface: "reel", asset_id: null }]);
+});
+
+test("an unknown surface is rejected rather than defaulted", async () => {
+  const { ig, postId } = fixture();
+  // "reel" used to be this test's example of an unknown surface, but migration 0027 and the
+  // facebook-video work made it a real one — using "bogus" for a value that will never be
+  // valid, per this project's convention (see worker/tests/test_migration_0027.py).
+  const res = await schedule(postId, {
+    targets: [{ channel_id: ig, surface: "bogus" }],
     post_now: true,
   });
 
