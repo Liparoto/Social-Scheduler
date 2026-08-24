@@ -96,6 +96,19 @@ test("a reel target schedules one feed-shaped publication covering all assets", 
   assert.deepEqual(pubs(postId), [{ surface: "reel", asset_id: null }]);
 });
 
+test("a target with no surface key is refused rather than guessed", async () => {
+  // parseTargets' own comment: an unlisted (here, absent) value must fail loudly rather
+  // than be guessed on a route that publishes.
+  const { ig, postId } = fixture();
+  const res = await schedule(postId, {
+    targets: [{ channel_id: ig }],
+    post_now: true,
+  });
+
+  assert.equal(res.status, 400);
+  assert.equal(pubs(postId).length, 0);
+});
+
 test("an unknown surface is rejected rather than defaulted", async () => {
   const { ig, postId } = fixture();
   // "reel" used to be this test's example of an unknown surface, but migration 0027 and the

@@ -124,7 +124,7 @@ def test_validate_refuses_a_text_post_to_tiktok():
         _validate(post, [], True, None, "tiktok", "just words")
 
 
-def test_validate_accepts_a_reel_to_tiktok():
+def test_validate_accepts_a_video_post_to_tiktok():
     post = {"post_type": "video", "first_comment": None}
     assets = [{"id": 1, "media_kind": "video", "storage_path": "a.mp4", "publish_path": None}]
     _validate(post, assets, True, None, "tiktok", None)   # must not raise

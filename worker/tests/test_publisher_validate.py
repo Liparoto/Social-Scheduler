@@ -82,6 +82,56 @@ def test_a_too_small_reel_is_refused():
         )
 
 
+# -- Task 10 boundary values: 3-90 seconds and 540x960 are inclusive on both ends -------
+
+
+def test_a_reel_at_exactly_3000ms_is_accepted():
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 3_000,
+          "width": 1080, "height": 1920}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+def test_a_reel_at_exactly_90000ms_is_accepted():
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 90_000,
+          "width": 1080, "height": 1920}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
+def test_a_reel_at_2999ms_is_refused():
+    with pytest.raises(_NonRetryable, match="3 seconds"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 2_999,
+              "width": 1080, "height": 1920}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_reel_at_90001ms_is_refused():
+    with pytest.raises(_NonRetryable, match="90 seconds"):
+        _validate(
+            {"post_type": "video"},
+            [{"media_kind": "video", "id": 1, "duration_ms": 90_001,
+              "width": 1080, "height": 1920}],
+            dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+        )
+
+
+def test_a_reel_at_exactly_540x960_is_accepted():
+    _validate(
+        {"post_type": "video"},
+        [{"media_kind": "video", "id": 1, "duration_ms": 10_000,
+          "width": 540, "height": 960}],
+        dry_run=True, asset_base_url=None, platform="facebook", surface="reel",
+    )
+
+
 def test_a_reel_missing_width_and_height_is_not_blocked_on_dimensions():
     """Same rationale as unknown duration: legacy rows may not carry width/height."""
     _validate(

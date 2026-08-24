@@ -57,7 +57,7 @@ def make_video_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00
     validator from Task 3 requires to publish)."""
     pid = conn.execute(
         "INSERT INTO posts (caption, post_type, status, content_status, content_kind, created_at) "
-        "VALUES ('reel caption','video','draft','ready',?,?)",
+        "VALUES ('video caption','video','draft','ready',?,?)",
         (content_kind, created_at),
     ).lastrowid
     aid = conn.execute(
@@ -294,9 +294,9 @@ def test_text_post_not_selected_for_instagram_channel(conn):
     assert p not in picks(conn, ch, 10)
 
 
-def test_reels_are_eligible_for_autofill(conn):
+def test_video_posts_are_eligible_for_autofill(conn):
     """Recycling evergreen demo videos is a primary goal. Left out of the candidate
-    query, a reel is publishable but never auto-queued — it just silently never
+    query, a video post is publishable but never auto-queued — it just silently never
     appears, with no error anywhere."""
     ch = make_channel(conn)
     p = make_video_post(conn, ch)
@@ -305,7 +305,7 @@ def test_reels_are_eligible_for_autofill(conn):
     assert p in picks(conn, ch, 10)
 
 
-def test_reels_not_selected_for_channel_with_no_video_publish_path(conn):
+def test_video_posts_not_selected_for_channel_with_no_video_publish_path(conn):
     """Mirrors test_text_post_not_selected_for_instagram_channel, but for the OTHER
     capability-gated post_type: a channel on a platform whose PLATFORM_CAPS declares no
     video capability (video_surfaces=frozenset(), so supports_video is False) must never
