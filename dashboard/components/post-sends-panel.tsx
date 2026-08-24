@@ -15,6 +15,7 @@ import {
 import type { PublishReadiness } from "@/lib/publish-readiness";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
+import { facebookReelDisabledReason } from "@/lib/facebook-reel-spec";
 import { splitInTz } from "@/lib/time";
 
 const READ_ONLY_STATUSES = new Set(["posted", "publishing"]);
@@ -24,6 +25,62 @@ const segBtn = (active: boolean) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
     active ? "bg-brand-weak font-medium text-brand-strong" : "text-muted hover:text-ink"
   }`;
+
+/**
+ * Which channels can still be picked, and which of `targets` are still actually valid,
+ * given the post's type, its current sends, and (when available) its assets. Returned
+ * together because `pickable` feeds both the picker's channel list AND effectiveTargets —
+ * re-deriving it twice would risk the two falling out of sync.
+ *
+ * Three independent reasons a channel drops out of `pickable`, or a target drops out of
+ * `effectiveTargets`:
+ *  - the channel can't publish this post's type at all (incompatibleChannelsForPostType);
+ *  - every surface it offers already has a live (non-read-only, non-canceled, non-failed)
+ *    send queued (busyKeys);
+ *  - a {facebook, reel} target whose video is out of Facebook Reels' own spec — checked
+ *    with the SAME limits the picker itself greys the Reel chip with, so a stale target
+ *    can't silently survive just because it was already sitting in `targets` before this
+ *    check existed. Mirrors post-editor.tsx's reelIneligible and schedule-from-library.tsx's
+ *    effectiveLibraryTargets. With no `assets` supplied, facebookReelDisabledReason(undefined)
+ *    is null and nothing is pruned on that account — Meta is the backstop either way.
+ *
+ * Pulled out as its own export, like toggleTarget/hasTarget in channel-surface-picker.tsx,
+ * so this is unit-testable without driving the panel's own state through a full render.
+ */
+export function computeSendTargets({
+  targets,
+  postType,
+  channels,
+  sends,
+  assets,
+}: {
+  targets: PostTarget[];
+  postType: PostType;
+  channels: Channel[];
+  sends: PostPublicationRow[];
+  assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
+}): { pickable: Channel[]; effectiveTargets: PostTarget[] } {
+  const busyKeys = new Set(
+    sends
+      .filter((s) => !READ_ONLY_STATUSES.has(s.status) && s.status !== "canceled" && s.status !== "failed")
+      .map((s) => `${s.channel_id}:${s.surface ?? "feed"}`)
+  );
+  const incompatibleIds = new Set(incompatibleChannelsForPostType(postType, channels).map((c) => c.id));
+  const pickable = channels.filter(
+    (c) =>
+      !incompatibleIds.has(c.id) &&
+      !(busyKeys.has(`${c.id}:feed`) && busyKeys.has(`${c.id}:story`))
+  );
+  const pickableIds = new Set(pickable.map((c) => c.id));
+  const reelIneligible = postType === "video" && facebookReelDisabledReason(assets?.[0]) !== null;
+  const effectiveTargets = targets.filter((t) => {
+    if (!pickableIds.has(t.channel_id)) return false;
+    if (busyKeys.has(`${t.channel_id}:${t.surface}`)) return false;
+    if (t.surface === "reel" && reelIneligible) return false;
+    return true;
+  });
+  return { pickable, effectiveTargets };
+}
 
 /**
  * The metric line for one run, in that platform's own vocabulary.
@@ -440,6 +497,7 @@ export function PostSendsPanel({
   postId,
   postType,
   slideCount,
+  assets,
   sends,
   channels,
   readiness,
@@ -449,6 +507,12 @@ export function PostSendsPanel({
   postType: PostType;
   /** Slide count, so the picker can warn '4 slides -> 4 Stories' before publishing. */
   slideCount: number;
+  // First asset's dimensions/duration, so a Facebook Reel target can be greyed out (and a
+  // stale one pruned below) the same way post-editor.tsx's own picker already is — see
+  // facebook-reel-spec.ts. Optional: the editor already has the post's assets loaded, so
+  // this is threaded through as a prop rather than a new query; a caller with nothing to
+  // hand just gets an unfiltered picker, same as before this prop existed.
+  assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
   sends: PostPublicationRow[];
   channels: Channel[];
   readiness: PublishReadiness;
@@ -467,37 +531,14 @@ export function PostSendsPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Exclude destinations that already have a non-posted (still-live-in-queue) send, when
-  // easy. Keyed by channel AND surface: an account with a live feed send can still take a
-  // Story, so keying on channel alone would wrongly hide the Story option.
-  const busyKeys = new Set(
-    sends.filter((s) => !READ_ONLY_STATUSES.has(s.status) && s.status !== "canceled" && s.status !== "failed")
-      .map((s) => `${s.channel_id}:${s.surface ?? "feed"}`)
-  );
-  // ...and channels that can't publish this post's type at all — offering them would
-  // schedule a send the worker is guaranteed to fail terminally.
-  const incompatibleIds = new Set(incompatibleChannelsForPostType(postType, channels).map((c) => c.id));
-  // A channel is offered when it isn't type-incompatible and still has at least one free
-  // surface. Which of its surfaces are free is decided per-chip below via busyKeys.
-  const pickable = channels.filter(
-    (c) =>
-      !incompatibleIds.has(c.id) &&
-      !(busyKeys.has(`${c.id}:feed`) && busyKeys.has(`${c.id}:story`))
-  );
-
-  // Adding a send makes that channel un-pickable (it now has a live send), so a previously
-  // ticked channel can go stale the moment the list refreshes. Derive the usable set from
-  // `pickable` instead of writing it back into state — same "derive, don't sync" approach
-  // as schedule-from-library.tsx's effectiveTargets and library-view.tsx's effectiveChans.
-  const pickableIds = useMemo(() => new Set(pickable.map((c) => c.id)), [pickable]);
-  const effectiveTargets = useMemo(
-    () =>
-      targets.filter(
-        (t) => pickableIds.has(t.channel_id) && !busyKeys.has(`${t.channel_id}:${t.surface}`)
-      ),
-    // busyKeys is rebuilt each render from `sends`; keying the memo on its size is enough
-    // to re-derive when a send is added or removed.
-    [targets, pickableIds, busyKeys.size]
+  // Adding a send makes a channel/surface un-pickable (it now has a live send), so a
+  // previously-ticked target can go stale the moment the list refreshes. Derive both from
+  // `targets`/`sends`/`channels` instead of writing back into state — same "derive, don't
+  // sync" approach as schedule-from-library.tsx's effectiveTargets and library-view.tsx's
+  // effectiveChans. See computeSendTargets above.
+  const { pickable, effectiveTargets } = useMemo(
+    () => computeSendTargets({ targets, postType, channels, sends, assets }),
+    [targets, postType, channels, sends, assets]
   );
 
   // The count is what makes a multi-target send legible before it fires — "Post now to 2
@@ -610,6 +651,7 @@ export function PostSendsPanel({
               hasVideo={postType === "video"}
               textOnly={postType === "text"}
               slideCount={slideCount}
+              assets={assets}
             />
           )}
         </div>

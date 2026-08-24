@@ -581,6 +581,11 @@ export function PostEditor({
         postId={post.id}
         postType={post.post_type}
         slideCount={assets.length}
+        assets={assets.map((a) => ({
+          width: a.width,
+          height: a.height,
+          duration_ms: a.duration_ms,
+        }))}
         sends={sends}
         channels={sendableChannels}
         readiness={readiness}

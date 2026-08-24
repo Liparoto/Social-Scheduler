@@ -217,7 +217,7 @@ test("unknown duration/width/height never disable the Reel chip", () => {
   }
 });
 
-test("a caller with no assets prop at all (e.g. schedule-from-library) leaves Reel enabled", () => {
+test("a caller with no assets prop at all leaves Reel enabled", () => {
   const html = render({ channels: [facebook], hasVideo: true });
   assert.doesNotMatch(reelButton(html), /\bdisabled=""/);
 });
