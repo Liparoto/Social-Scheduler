@@ -93,6 +93,7 @@ class GraphClient:
         base_url: str = "https://graph.facebook.com",
         timeout: int = 60,
     ) -> None:
+        self.graph_version = graph_version
         self.base = f"{base_url.rstrip('/')}/{graph_version}"
         self.session = session or requests.Session()
         self.timeout = timeout
@@ -176,6 +177,30 @@ class GraphClient:
         if not resp.ok:
             raise GraphAPIError(
                 f"GET {path} -> {resp.status_code}: {redact(resp.text)}",
+                status_code=resp.status_code,
+                **_error_fields(resp.text),
+            )
+        return resp.json()
+
+    RUPLOAD_BASE = "https://rupload.facebook.com/video-upload"
+
+    def _post_rupload(self, video_id: str, token: str, file_url: str) -> dict:
+        """The Reels upload phase, which does NOT go through _post.
+
+        Different host, headers instead of form fields, and no body at all: Meta fetches
+        file_url itself. The token rides in an Authorization header rather than the URL,
+        so unlike _post there is no token in the request line — but the response is still
+        redacted, because a Meta error body can echo request context back.
+        """
+        url = f"{self.RUPLOAD_BASE}/{self.graph_version}/{video_id}"
+        headers = {"Authorization": f"OAuth {token}", "file_url": file_url}
+        try:
+            resp = self.session.post(url, headers=headers, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise GraphAPIError(f"POST rupload -> request failed: {redact(str(exc))}") from None
+        if not resp.ok:
+            raise GraphAPIError(
+                f"POST rupload -> {resp.status_code}: {redact(resp.text)}",
                 status_code=resp.status_code,
                 **_error_fields(resp.text),
             )
@@ -633,6 +658,85 @@ class GraphClient:
             # Form-encoded requests take attached_media as indexed JSON objects.
             data[f"attached_media[{i}]"] = json.dumps({"media_fbid": str(media_fbid)})
         return self._post(f"{page_id}/feed", data)["id"]
+
+    def create_page_video(
+        self,
+        page_id: str,
+        file_url: str,
+        token: str,
+        description: str | None = None,
+    ) -> str:
+        """Publish an ordinary video to a Page's feed. Returns the VIDEO id.
+
+        One call, no upload session: Meta fetches file_url server-side, exactly as the
+        photo path does. Accepts any aspect ratio and up to 20 minutes via URL, which is
+        why the feed surface sends the untouched original rather than the 9:16 derivative.
+
+        The returned id is the VIDEO node, NOT the feed post. Metrics read against the
+        post, so the caller must resolve it (see publisher._resolve_fb_post_id).
+        """
+        data = {"file_url": file_url, "access_token": token}
+        if description:
+            data["description"] = description
+        return self._post(f"{page_id}/videos", data)["id"]
+
+    def create_page_reel(
+        self,
+        page_id: str,
+        file_url: str,
+        token: str,
+        description: str | None = None,
+    ) -> str:
+        """Publish a Reel to a Page in Meta's three phases. Returns the VIDEO id.
+
+        start  -> Meta allocates a video id and an upload URL
+        upload -> we hand it a public file_url; Meta fetches the bytes itself
+        finish -> video_state=PUBLISHED, with the caption as `description`
+
+        Like create_page_video, the id returned is the VIDEO node and not the feed post.
+        """
+        started = self._post(f"{page_id}/video_reels", {
+            "upload_phase": "start",
+            "access_token": token,
+        })
+        video_id = started.get("video_id")
+        if not video_id:
+            raise GraphAPIError(f"video_reels start returned no video_id: {redact(str(started))}")
+
+        self._post_rupload(video_id, token, file_url)
+
+        data = {
+            "upload_phase": "finish",
+            "video_id": video_id,
+            "video_state": "PUBLISHED",
+            "access_token": token,
+        }
+        if description:
+            data["description"] = description
+        self._post(f"{page_id}/video_reels", data)
+        return video_id
+
+    # Facebook's video status is a nested object of lowercase values; Instagram's is a
+    # flat status_code of SCREAMING ones. Mapping here — at the client boundary — lets
+    # publisher._poll_until_finished stay exactly as it is, the same way Threads reuses
+    # it through get_threads_container_status.
+    _FB_VIDEO_STATUS = {
+        "ready": "FINISHED",
+        "error": "ERROR",
+        "upload_failed": "ERROR",
+        "expired": "EXPIRED",
+    }
+
+    def get_page_video_status(self, video_id: str, token: str) -> str:
+        """Poll a Page video/Reel until it is done, in the poll loop's own vocabulary.
+
+        Anything unrecognised passes through unchanged, which the loop treats as "keep
+        polling" — the safe direction. A status we cannot read must never resolve as
+        FINISHED: that would publish on a guess.
+        """
+        payload = self._get(video_id, {"fields": "status", "access_token": token})
+        raw = (payload.get("status") or {}).get("video_status") or "unknown"
+        return self._FB_VIDEO_STATUS.get(raw, raw)
 
     def get_page_post_summary(self, post_id: str, token: str) -> dict:
         """Stable engagement counts for a Page post.
