@@ -1,0 +1,26 @@
+{
+  "_comment": "Lives under dashboard/, not the repo root, even though it is READ BY BOTH the Python worker (worker/media_limits.py, one directory up) and the dashboard. Turbopack cannot bundle a client-component import from outside its own project root — proven 2026-08-24 by widening turbopack.root, which built successfully but pulled the 1.6GB data/ asset store into the build's file-trace manifest, an unacceptable cost for a tidier file location. A checked-in generated copy was also rejected: two files that must be kept in sync is the exact drift risk this design exists to eliminate. One awkwardly-placed file beats either alternative.",
+  "schema_version": 1,
+  "platforms": {
+    "facebook": {
+      "feed": {
+        "video": {
+          "max_duration_ms": 1200000,
+          "max_bytes": 1073741824,
+          "note": "Meta Page video docs read 2026-08-23: <=1GB, <=20 min via file_url, any aspect ratio. Not yet confirmed by a live publish."
+        }
+      },
+      "reel": {
+        "video": {
+          "min_duration_ms": 3000,
+          "max_duration_ms": 90000,
+          "min_width": 540,
+          "min_height": 960,
+          "min_aspect": [9, 16],
+          "max_aspect": [16, 9],
+          "note": "Meta Reels publishing docs read 2026-08-23. Aspect range INCLUSIVE both ends - 16:9 landscape IS permitted. Mirrors worker/publisher.py's _validate. Not yet confirmed by a live publish."
+        }
+      }
+    }
+  }
+}
