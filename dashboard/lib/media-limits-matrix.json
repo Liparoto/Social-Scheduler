@@ -8,7 +8,7 @@
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 90001, "width": 1080, "height": 1920}, "expect": ["too_long"]},
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1920, "height": 1080}, "expect": []},
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 2520, "height": 1080}, "expect": ["wrong_aspect"]},
-    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 400, "height": 1200}, "expect": ["too_small", "wrong_aspect"]},
+    {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 400, "height": 1200}, "_note": "ratio 400:1200 = 1:3 = 0.333, outside [9/16, 16/9] = [0.5625, 1.778] on the low side, AND width 400 < min_width 540 — deliberately trips too_small AND wrong_aspect together. Don't round to nicer numbers without re-checking both still fire.", "expect": ["too_small", "wrong_aspect"]},
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": null, "width": null, "height": null}, "expect": []},
     {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 1080000, "width": 1920, "height": 1080}, "expect": []},
     {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 1200001, "width": 1920, "height": 1080}, "expect": ["too_long"]},

@@ -11,6 +11,17 @@ import pytest
 from worker import media_limits
 
 
+@pytest.fixture(autouse=True)
+def _reset_limits_cache():
+    """load_limits is lru_cache'd, and monkeypatch can restore RAW_PATH but not a cache.
+    Without this, a test that deliberately loads a MALFORMED file leaves that parse in the
+    cache for every later caller in the suite — which surfaces as unrelated tests failing
+    only when run together. Clearing after each test keeps the pollution inside the test
+    that created it."""
+    yield
+    media_limits.load_limits.cache_clear()
+
+
 def test_facebook_reel_limits_are_loaded():
     lim = media_limits.limits_for("facebook", "reel", "video")
     assert lim is not None
