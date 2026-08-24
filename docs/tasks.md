@@ -18,11 +18,11 @@ Facebook's own feed independently handed that same post id back through `media_s
 
 | # | Open item | Priority | Time | Difficulty | Why it matters |
 |---|---|---|---|---|---|
-**The table is empty. Nothing is open.**
+| 1 | **Channel sort / reorder** — let the owner set an explicit channel order, honoured on the Channels, Insights and Overview pages | Low | ~half a day | Low | Channels render in whatever order the DB hands back (insertion order by `id`). With six channels across five platforms that is already arbitrary, and it differs from how the owner thinks about them. Needs a `sort_order` column on `channels` and one shared ordering helper so the three pages cannot disagree. Requested by the owner 2026-08-23. |
 
-That has not been true before on this project, so it is worth stating plainly rather than
-leaving a stale row behind: the last large item was scrapped by the owner during this audit,
-and everything else closed with evidence the same day.
+Added 2026-08-23: the table was empty at audit time; the row above is a new request, not a
+survivor. The last large item was scrapped by the owner during that audit, and everything
+else closed with evidence the same day.
 
 **Overview account filter — DONE 2026-08-23.** The channel cards at the top of the Overview
 are now buttons: click one or several and the publications below narrow to them. They drive
