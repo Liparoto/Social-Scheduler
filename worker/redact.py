@@ -48,8 +48,13 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Meta: the Reels upload phase (_post_rupload) sends the token in an
     # `Authorization: OAuth <token>` header rather than the URL. If a Meta error body
     # ever echoed that header back, this catches it by the "OAuth " prefix — kept in the
-    # output for context, same as the Discord id is kept below.
-    (re.compile(r"\bOAuth\s+\S{20,}"), "OAuth <redacted>"),
+    # output for context, same as the Discord id is kept below. The token body is
+    # constrained to the same EAA-prefixed shape as the bare-token pattern below (rather
+    # than a bare `\S{20,}`) for two reasons: it stops the match from swallowing trailing
+    # punctuation that sits hard against the token with no whitespace — e.g. the closing
+    # `'}` of a JSON-repr'd headers dict — and it keeps ordinary prose like "see the OAuth
+    # 2.0-authorization-code-flow docs" from being treated as a credential at all.
+    (re.compile(r"\bOAuth\s+EAA[A-Za-z0-9]{20,}"), "OAuth <redacted>"),
     # Meta: a bare access token by its own shape. EAA is Meta's own prefix for a
     # User/Page access token, so this catches one anywhere it turns up outside the
     # access_token= query param or an OAuth header — e.g. alone in a dict repr. The

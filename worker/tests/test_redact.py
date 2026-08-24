@@ -96,6 +96,22 @@ def test_meta_bare_token_pattern_does_not_eat_ordinary_prose():
     assert redact(text) == text
 
 
+def test_oauth_header_redaction_stops_before_json_closing_delimiters():
+    # The token sits hard against the JSON string's closing quote and the dict's closing
+    # brace, with no whitespace in between. A bare \S{20,} body would swallow both,
+    # corrupting the redacted output; the delimiters must survive untouched.
+    out = redact('headers={"Authorization": "OAuth EAAAbCdEfGh1234567890XYZsecret"}')
+    assert "EAAAbCdEfGh1234567890XYZsecret" not in out
+    assert 'OAuth <redacted>"}' in out
+
+
+def test_oauth_prose_mention_is_not_redacted():
+    # "OAuth " followed by ordinary prose, not a token, must survive untouched — the
+    # pattern requires a plausible Facebook token (EAA-prefixed) after the prefix.
+    text = "see the OAuth 2.0-authorization-code-flow docs"
+    assert redact(text) == text
+
+
 # ---- TikTok ---------------------------------------------------------------------------
 # TikTok's tokens are prefixed (act.* / rft.*) and travel in an Authorization header or a
 # form body rather than the URL, so they leak through a different door than Meta's — but
