@@ -77,20 +77,25 @@ def test_the_same_surface_twice_is_still_rejected(conn):
 
 
 def test_surface_check_rejects_anything_else(conn):
+    """'reel' is not used here: migration 0027 deliberately adds it to this CHECK for
+    Facebook Reels, so it stopped being an example of a rejected value. Any surface
+    nothing has ever defined still must be refused."""
     pid, cid = _post_and_channel(conn)
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?,?,'reel')",
+            "INSERT INTO post_targets (post_id, channel_id, surface) VALUES (?,?,'bogus')",
             (pid, cid),
         )
 
 
 def test_publications_surface_check_rejects_anything_else(conn):
+    """See test_surface_check_rejects_anything_else: 'reel' is now a valid surface
+    (migration 0027), so it can no longer stand in for an invalid one."""
     pid, cid = _post_and_channel(conn)
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO publications (post_id, channel_id, scheduled_at, surface) "
-            "VALUES (?,?,?,'reel')",
+            "VALUES (?,?,?,'bogus')",
             (pid, cid, "2026-08-01T18:00:00+00:00"),
         )
 
