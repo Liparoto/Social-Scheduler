@@ -1138,7 +1138,7 @@ resolve the feed post id metrics actually read against."
 - Test: **create** `worker/tests/test_publisher_media_resolution.py` (media resolution is currently covered only incidentally, by `test_delivery.py`)
 
 **Interfaces:**
-- Consumes: `PlatformCaps.needs_conformed_media`, `PlatformCaps.video_surfaces` (Task 2), `surface`.
+- Consumes: `PlatformCaps.needs_conformed_media`, the new `feed_video_is_constrained`, `surface`, and the asset's `media_kind`. (It does NOT read `video_surfaces` — an earlier draft said so.)
 - Produces: `PlatformCaps.feed_video_is_constrained: bool = True`, and a module-level
   `_needs_conformed(caps: PlatformCaps, surface: str, media_kind: str | None) -> bool` in
   `worker/publisher.py`. `_resolve_rel(asset, surface="feed", needs_conformed=True)` gains a
@@ -1466,11 +1466,11 @@ Expected: `is_dry_run = 1`, `remote_post_id` NULL.
 ```bash
 cd "/Users/kelanliparoto/Documents/Claude Projects/Apps/SocialScheduler"
 .venv/bin/python -c "
-from worker.config import load_config
+from worker.config import Config
 from worker.db import connect
 from worker.exchange_token import debug_token
 
-cfg = load_config()
+cfg = Config.from_env()
 conn = connect(cfg.database_path)
 row = conn.execute(
     \"SELECT access_token FROM channels WHERE platform='facebook' AND is_active=1 LIMIT 1\"
@@ -1497,10 +1497,12 @@ This is the step that settles the id-resolution risk. For each published id:
 
 ```bash
 .venv/bin/python -c "
-from worker.config import load_config
-from worker.clients import client_for
-cfg = load_config()
-client = client_for('facebook', cfg)
+from worker.config import Config
+from worker.graph_api import GraphClient
+cfg = Config.from_env()
+# Facebook Pages always live on graph.facebook.com (clients.FACEBOOK_BASE), independent
+# of whatever host this install configured for Instagram.
+client = GraphClient(cfg.graph_version, base_url='https://graph.facebook.com')
 token = '<page token>'
 for pid in ('<stored remote_post_id 1>', '<stored remote_post_id 2>'):
     print(pid, client.get_page_post_summary(pid, token))
