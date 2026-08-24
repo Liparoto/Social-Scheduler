@@ -143,7 +143,11 @@ def check(platform: str, surface: str, asset) -> list[Violation]:
         if hi is not None and duration > hi:
             out.append(Violation("too_long", f"longer than {hi / 1000:g}s", severity))
 
-    if width and height:
+    # `is not None`, not truthiness: this file's whole purpose is that the two
+    # languages cannot diverge, and the TypeScript side already guards on `!= null`.
+    # A cosmetic `if width and height:` here would be a guard-style mismatch sitting
+    # inside the one file that exists to prevent exactly that kind of drift.
+    if width is not None and height is not None:
         mw, mh = entry.get("min_width"), entry.get("min_height")
         if (mw is not None and width < mw) or (mh is not None and height < mh):
             out.append(Violation(

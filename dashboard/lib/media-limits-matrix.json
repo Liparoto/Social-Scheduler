@@ -1,5 +1,6 @@
 {
   "_comment": "Shared test matrix for the cross-language agreement test. Read by BOTH dashboard/lib/media-limits.test.ts and worker/tests/test_media_limits_agreement.py — a case added here is automatically covered on both sides. Every asset/expect pair below was verified against worker/media_limits.py's actual behavior against dashboard/media-limits.json as committed by Task 1; do not hand-edit an `expect` without re-checking it runs.",
+  "_coverage_note": "max_width/max_height are NOT yet exercised anywhere below — no entry in dashboard/media-limits.json defines them yet, and inventing one just to test against would be a guessed limit, which this design forbids. Add too_large (dimension) cases here as soon as the first entry that defines max_width/max_height lands (expected: Instagram, Task 3, which caps width).",
   "cases": [
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1080, "height": 1920}, "expect": []},
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": 3000, "width": 1080, "height": 1920}, "expect": []},
@@ -12,6 +13,10 @@
     {"platform": "facebook", "surface": "reel", "asset": {"media_kind": "video", "duration_ms": null, "width": null, "height": null}, "expect": []},
     {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 1080000, "width": 1920, "height": 1080}, "expect": []},
     {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 1200001, "width": 1920, "height": 1080}, "expect": ["too_long"]},
-    {"platform": "myspace", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1080, "height": 1920}, "expect": []}
+    {"platform": "myspace", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 30000, "width": 1080, "height": 1920}, "expect": []},
+    {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 60000, "byte_size": 500000000}, "_note": "well under facebook.feed.video's max_bytes (1073741824)", "expect": []},
+    {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 60000, "byte_size": 1073741824}, "_note": "exactly AT max_bytes — bounds are inclusive everywhere; a careless `>=` would wrongly refuse this", "expect": []},
+    {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 60000, "byte_size": 1073741825}, "_note": "one byte over max_bytes", "expect": ["too_large"]},
+    {"platform": "facebook", "surface": "feed", "asset": {"media_kind": "video", "duration_ms": 60000, "byte_size": null}, "_note": "unknown byte_size must never refuse, same as unknown duration/width/height", "expect": []}
   ]
 }
