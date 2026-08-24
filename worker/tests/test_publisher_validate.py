@@ -204,7 +204,7 @@ def test_a_reel_missing_dimensions_is_not_blocked_on_aspect_ratio():
 # failing at Meta with an error that says nothing about duration. ----------------------
 
 def test_an_over_long_instagram_story_is_refused_terminally():
-    with pytest.raises(_NonRetryable, match="Stor"):
+    with pytest.raises(_NonRetryable, match="longer than 60s"):
         _validate(
             {"post_type": "video"},
             [{"media_kind": "video", "id": 1, "duration_ms": 600_000,

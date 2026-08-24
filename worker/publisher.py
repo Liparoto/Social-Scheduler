@@ -272,7 +272,7 @@ def _check_media_limits(assets, platform: str, surface: str) -> None:
     for violation in media_limits.check(platform, surface, assets[0]):
         if violation.severity == "refuse":
             raise _NonRetryable(
-                f"{platform} {surface.capitalize()} cannot publish this media: {violation.message}"
+                f"{platform} {surface} cannot publish this media: {violation.message}"
             )
 
 
