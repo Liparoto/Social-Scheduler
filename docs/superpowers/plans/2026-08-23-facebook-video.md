@@ -1349,12 +1349,19 @@ git commit -m "feat(publisher): refuse an out-of-spec Facebook Reel before sched
 
 ---
 
-**PHASE 2 CHECKPOINT.** Full worker suite green. Now — and not before — apply migration `0027`
-to the LIVE install (`.venv/bin/python worker/migrate.py` from the main checkout), because Task 8
-has closed the declare-without-a-path gap described at the Phase 1 checkpoint. Back up first
-(`sqlite3 data/socialscheduler.db ".backup 'data/pre-0027-backup.db'"`), restart the worker, and
-confirm the heartbeat and that the dashboard still loads the queue. Do not start Phase 3 until
-confirmed by looking at the running app.
+**PHASE 2 CHECKPOINT.** Full worker suite green. Verify against the worktree copy only.
+
+**Still do NOT migrate the live install here.** The earlier amendment moved the live migration
+from Phase 1 to Phase 2, which was not far enough. The live install runs the code on `main`,
+where `SUPPORTED_POST_TYPES` is still `(..., "reel")` and `PostType` has no `"video"`. Migrating
+the live database while the live code is the OLD code renames the owner's existing post to a
+value their running worker refuses and their running dashboard does not know — breaking a post
+that works today, for the whole window until the branch merges.
+
+Schema and the code that understands it must move TOGETHER. The live migration therefore belongs
+**after the merge**, immediately before the live verification in Tasks 12-13, and it is an
+outward-facing change to the owner's working install: ASK before running it, and back up first
+(`sqlite3 data/socialscheduler.db ".backup 'data/pre-0027-backup.db'"`).
 
 ---
 
