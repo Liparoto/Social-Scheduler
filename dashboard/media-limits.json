@@ -21,6 +21,44 @@
           "note": "Meta Reels publishing docs read 2026-08-23. Aspect range INCLUSIVE both ends - 16:9 landscape IS permitted. Mirrors worker/publisher.py's _validate. Not yet confirmed by a live publish."
         }
       }
+    },
+    "instagram": {
+      "feed": {
+        "video": {
+          "min_duration_ms": 3000,
+          "max_duration_ms": 900000,
+          "max_bytes": 314572800,
+          "max_width": 1920,
+          "min_aspect": [1, 100],
+          "max_aspect": [10, 1],
+          "formats": ["mp4", "mov"],
+          "note": "Meta IG User Media reference ('Reel Specifications' section, #reels-specs), read 2026-08-24: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/ (page shows 'Updated: Aug 12, 2026'). Verbatim: 'Duration: 15 mins maximum, 3 seconds minimum'; 'File size: 300MB maximum'; 'Maximum columns (horizontal pixels): 1920'; 'Required aspect ratio is between 0.01:1 and 10:1 but we recommend 9:16'. Instagram feed video publishes through the Reels container (media_type=REELS shared to feed), so this IS the Reels spec - re-read independently today and it AGREES with dashboard/lib/video-spec.ts's REEL_SPEC (verified 2026-07-28): 300MB, 3s-15min, 1920px max width all match exactly. No discrepancy found. Frame rate (23-60 FPS), codec (MOV/MP4, H264/HEVC, AAC), bitrate (25Mbps video / 128kbps audio) and the moov-atom-at-front requirement are also documented but have no field in this schema - see reference.md for the full text."
+        },
+        "image": {
+          "max_bytes": 8388608,
+          "min_aspect": [4, 5],
+          "max_aspect": [191, 100],
+          "formats": ["jpeg"],
+          "note": "Meta IG User Media reference ('Image Specifications' section), read 2026-08-24: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/. Verbatim: 'File size: 8 MB maximum'; 'Aspect ratio: Must be within a 4:5 to 1.91:1 range'. Matches reference.md's existing 2026-07-23 note. width is DELIBERATELY OMITTED: the same doc says 'Minimum width: 320 (will be scaled up to the minimum if necessary)' and 'Maximum width: 1440 (will be scaled down to the maximum if necessary)' - Meta auto-scales an out-of-range width rather than refusing it, and this schema has only one severity per field (refuse), so encoding min_width/max_width here would refuse media Meta actually accepts. That is the exact failure mode this task exists to avoid."
+        }
+      },
+      "story": {
+        "video": {
+          "min_duration_ms": 3000,
+          "max_duration_ms": 60000,
+          "max_bytes": 104857600,
+          "max_width": 1920,
+          "min_aspect": [1, 10],
+          "max_aspect": [10, 1],
+          "formats": ["mp4", "mov"],
+          "note": "Meta IG User Media reference ('Story Video Specifications' section), read 2026-08-24: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/. Verbatim: 'Duration: 60 seconds maximum, 3 seconds minimum'; 'File size: 100MB maximum'; 'Maximum columns (horizontal pixels): 1920'; 'Required aspect ratio is between 0.1:1 and 10:1 but we recommend 9:16'. This is the number behind the owner's original bug report: a Story video now has a verified 60s ceiling to check against. Not wired into the composer or worker yet - that is Task 4."
+        },
+        "image": {
+          "max_bytes": 8388608,
+          "formats": ["jpeg"],
+          "note": "Meta IG User Media reference ('Story Image Specifications' section), read 2026-08-24: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/. Verbatim: 'File size: 8 MB maximum'. Aspect ratio DELIBERATELY OMITTED: unlike feed images ('Must be within a 4:5 to 1.91:1 range'), this section only says 'We recommended 9:16 to avoid cropping or blank space' - a recommendation, not a stated range, so there is no verified bound to enforce."
+        }
+      }
     }
   }
 }

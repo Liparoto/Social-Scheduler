@@ -191,6 +191,78 @@ derivative would be the cropped version.
 **Changing the cover of an already-published Reel is out of scope** — Meta does not
 document whether it is possible, and this project does not assume undocumented behaviour.
 
+### Instagram media limits — feed and Stories (verified 2026-08-24, IG User Media reference)
+
+Read directly against the live page today: `GET https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/`
+(the page's own header reads "Updated: Aug 12, 2026"; request-syntax examples on it show
+`v26.0`, one version ahead of the `v25.0` this file's other sections were checked against —
+worth re-noting next time any Meta section here gets re-verified). Fetched both through an
+AI-summarized read and independently confirmed against the raw HTML text (`grep`-able
+strings like `300MB`, `100MB`, `moov atom`, `1.91:1` all present verbatim), so this is not a
+single-source read. This is the research behind the owner's original bug report: an
+Instagram **Story** video had no duration check anywhere in the app.
+
+| Surface | Kind | Limit | Value (verbatim from the page) |
+|---|---|---|---|
+| Feed ("Reel Specifications") | video | Duration | "15 mins maximum, 3 seconds minimum" |
+| Feed | video | File size | "300MB maximum" |
+| Feed | video | Max width | "Maximum columns (horizontal pixels): 1920" |
+| Feed | video | Aspect ratio | "between 0.01:1 and 10:1 but we recommend 9:16" |
+| Feed | video | Frame rate | "23-60 FPS" |
+| Feed | video | Container/codec | "MOV or MP4 ... moov atom at the front of the file"; "HEVC or H264"; audio "AAC, 48khz sample rate maximum" |
+| Feed ("Image Specifications") | image | File size | "8 MB maximum" |
+| Feed | image | Aspect ratio | "Must be within a 4:5 to 1.91:1 range" |
+| Feed | image | Format | "JPEG" |
+| Story ("Story Video Specifications") | video | Duration | "60 seconds maximum, 3 seconds minimum" |
+| Story | video | File size | "100MB maximum" |
+| Story | video | Max width | "Maximum columns (horizontal pixels): 1920" |
+| Story | video | Aspect ratio | "between 0.1:1 and 10:1 but we recommend 9:16" |
+| Story ("Story Image Specifications") | image | File size | "8 MB maximum" |
+
+**Feed video IS the Reels spec.** Instagram publishes feed video through the Reels
+container (`media_type=REELS` shared to feed) — there is no separate "classic feed video"
+spec on this page. This re-read independently confirms `dashboard/lib/video-spec.ts`'s
+`REEL_SPEC` (verified 2026-07-28): 300 MB, 3 s minimum, 15 minutes maximum, 1920 px max
+width all match exactly, letter for letter. **No discrepancy found** — the file's warning
+about widely-circulated "90 second / 4 GB" third-party guides being wrong is itself
+confirmed correct by this independent read.
+
+**Deliberately NOT recorded in `dashboard/media-limits.json`, and why:**
+- **Feed image width (320–1440 px).** The page states *"Minimum width: 320 (will be scaled
+  up to the minimum if necessary)"* and *"Maximum width: 1440 (will be scaled down to the
+  maximum if necessary)"* — Meta **auto-scales** an out-of-range width rather than refusing
+  the upload. `media-limits.json`'s schema has only one severity per field (refuse), so
+  encoding this as `min_width`/`max_width` would make the app refuse images Meta would
+  have happily accepted and rescaled — the exact failure mode (a wrong number refusing
+  valid media) this whole task exists to prevent. Recorded here as prose instead.
+- **Story image aspect ratio.** Unlike the feed image section's explicit *"Must be within a
+  4:5 to 1.91:1 range"*, the Story Image Specifications section only says *"We recommended
+  9:16 to avoid cropping or blank space"* — a recommendation, not a stated range. There is
+  nothing to enforce, so nothing is recorded.
+- **Frame rate, codec, bitrate, color space, and the `moov`-atom-at-front container rule.**
+  All documented (see table above) but `media-limits.json`'s schema has no field for any of
+  them — it only understands duration, dimensions, aspect ratio, and byte size. These stay
+  prose-only, here and in `video-spec.ts`'s own comments.
+- **General container limits** (not surface-specific, so out of scope for this file): the
+  page also states an Instagram account can create at most 400 containers within a rolling
+  24-hour period, and containers expire after 24 hours if never published — informational,
+  not a per-asset limit.
+
+**Could NOT verify (searched for, not found on this page or its adjacent sections):**
+- A **minimum** width or resolution for video (Reels or Story) — only a maximum (1920 px)
+  is documented; no floor is stated.
+- Any **height** cap or floor for video, feed image, or Story image — the page only ever
+  documents width; height is described as "varies, depending on width and aspect ratio."
+- A byte-size or resolution cap for **carousel** items specifically (the carousel section
+  elsewhere on this page documents item *count* — up to 10 — not per-item media specs
+  beyond pointing back to the image/video specs above).
+- Whether the Reels **300 MB** and Story **100 MB** figures are decimal MB (10⁶ bytes) or
+  binary MiB (2²⁰ bytes) — Meta's page just says "300MB"/"100MB" with no base stated. This
+  file follows `video-spec.ts`'s existing precedent (binary: `300 * 1024 * 1024`) for
+  consistency rather than introducing a second, unverifiable interpretation; treat the
+  exact byte counts in `media-limits.json` as reflecting that same assumption, not a
+  literal Meta-stated byte count.
+
 ### Facebook Pages publishing (verified 2026-07-23)
 - Single photo: `POST /{page-id}/photos` with `url`, `caption`, `published=true`. The response
   carries both `id` (photo) and **`post_id`** (the feed post) — store `post_id`, since insights
