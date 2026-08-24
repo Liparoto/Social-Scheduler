@@ -623,7 +623,16 @@ def _resolve_fb_post_id(client, response, video_id, token) -> str:
     Three-step fallback, best (cheapest, most trustworthy) source first:
       1. `post_id` already present in the publish response dict — free, no extra
          request, and Meta returned it directly rather than us inferring it.
-      2. otherwise GET /{video-id}?fields=post_id via the client.
+      2. otherwise GET /{video-id}?fields=post_id via the client — wrapped in
+         try/except. get_page_video_post_id's underlying _get RAISES GraphAPIError
+         on any non-2xx response or network error; it only returns None when Meta's
+         response is otherwise successful but simply omits the field. By the time
+         this runs the video is ALREADY LIVE (create_page_video/create_page_reel
+         already returned), so letting that exception escape here would mark the
+         whole publish retryable — and publish_one's retry would call
+         create_page_video/create_page_reel AGAIN against a Page where the video
+         is already published. A metrics-id lookup failing must never re-publish
+         a post that already succeeded.
       3. otherwise the video id itself. A publish that actually succeeded must
          never be recorded as failed just because its metrics id could not be
          resolved — a video id still lets a human find the post.
@@ -631,31 +640,91 @@ def _resolve_fb_post_id(client, response, video_id, token) -> str:
     post_id = response.get("post_id")
     if post_id:
         return post_id
-    return client.get_page_video_post_id(video_id, token) or video_id
+    try:
+        post_id = client.get_page_video_post_id(video_id, token)
+    except Exception as exc:  # noqa: BLE001 — see docstring: the post is live, never re-publish over this
+        logging.getLogger(LOGGER_NAME).warning(
+            "facebook post-id lookup failed for video %s, falling back to the video "
+            "id (post is live and unaffected): %s", video_id, redact(str(exc)),
+        )
+        return video_id
+    return post_id or video_id
+
+
+def _poll_fb_video(client, video_id, token, config, sleep_fn) -> bool:
+    """Poll a Facebook Page video's transcode status until FINISHED or the Reels
+    budget runs out. Returns True once Meta confirms FINISHED, False otherwise —
+    never raises except for a definitive processing failure. See the governing
+    principle in _publish_fb_video's docstring for why this is NOT built on the
+    shared _poll_until_finished (which is never modified, per project rule): that
+    loop raises on both a definitive failure AND on budget exhaustion, and here
+    those two cases must be handled completely differently.
+
+      - status ERROR/EXPIRED: the video genuinely failed processing and never
+        went live. Raise — a retry is correct and safe, because nothing was
+        published.
+      - budget exhausted (still processing/uploading after max_tries): the video
+        IS live, Meta is just slow. Return False rather than raising, so the
+        caller can still record the publication as posted.
+      - status_fn itself raises (network error, malformed response): we know the
+        video was published but not its processing state. Treat exactly like
+        budget exhaustion, never like ERROR — return False, never re-raise.
+    """
+    interval = config.reels_status_poll_interval
+    max_tries = config.reels_status_poll_max_tries
+    for _ in range(max_tries):
+        try:
+            status = client.get_page_video_status(video_id, token)
+        except Exception as exc:  # noqa: BLE001 — unknown state, not a failure; see docstring
+            logging.getLogger(LOGGER_NAME).warning(
+                "facebook video %s status check failed, treating processing state "
+                "as unconfirmed (post is live and unaffected): %s",
+                video_id, redact(str(exc)),
+            )
+            return False
+        if status == "FINISHED":
+            return True
+        if status in ("ERROR", "EXPIRED"):
+            raise RuntimeError(f"facebook video {video_id} status={status}")
+        sleep_fn(interval)
+    logging.getLogger(LOGGER_NAME).warning(
+        "facebook video %s still processing after %d polls (post is live); "
+        "recording as posted with its processing state unconfirmed",
+        video_id, max_tries,
+    )
+    return False
 
 
 def _publish_fb_video(client, plan, token, config, sleep_fn, *, as_reel: bool) -> str:
     """Publish a Page video, to the feed or to Reels, and return the FEED POST id.
 
-    Both endpoints are asynchronous — Meta transcodes server-side — so both poll
-    before the publish is treated as done, using the Reels budget: the image
-    path's shorter ceiling is too short for video, and running out is retryable,
-    never terminal (see _poll_until_finished).
+    GOVERNING PRINCIPLE: once the create call below returns successfully, the
+    post EXISTS on Facebook — video/reel creation publishes immediately; polling
+    afterwards only confirms Meta finished transcoding it, it does not gate
+    publication. This is the opposite of Instagram, whose container flow polls
+    BEFORE publish_container and can safely raise/retry on any poll outcome,
+    because nothing has been published yet there. Here, nothing after the create
+    call may cause a re-publish. Only a DEFINITIVE "processing failed" signal
+    (_poll_fb_video raising on ERROR/EXPIRED) is allowed to fail the send; budget
+    exhaustion and unexpected poll exceptions both fall through to a normal
+    'posted' result instead, with a visible (non-fatal) warning logged.
     """
     page = plan["account_id"]
     url = plan["asset_urls"][0]
     create = client.create_page_reel if as_reel else client.create_page_video
     response = create(page, url, token, description=plan["caption"])
     # create_page_reel guarantees video_id; create_page_video only has id (the
-    # video node, same convention as create_page_photo before it).
-    video_id = response.get("video_id") or response["id"]
+    # video node, same convention as create_page_photo before it). Guarded rather
+    # than response["id"] outright: an unhandled KeyError here would be caught as
+    # a generic retryable failure by publish_one, and the video is already live.
+    video_id = response.get("video_id") or response.get("id")
+    if not video_id:
+        raise RuntimeError(
+            f"facebook {'reel' if as_reel else 'video'} publish response had no "
+            f"id: {redact(str(response))}"
+        )
 
-    _poll_until_finished(
-        client, video_id, token, config, sleep_fn,
-        status_fn=client.get_page_video_status,
-        interval=config.reels_status_poll_interval,
-        max_tries=config.reels_status_poll_max_tries,
-    )
+    _poll_fb_video(client, video_id, token, config, sleep_fn)
 
     return _resolve_fb_post_id(client, response, video_id, token)
 
