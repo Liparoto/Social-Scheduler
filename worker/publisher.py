@@ -112,10 +112,35 @@ def _load_targets(conn, pub):
     return channel, post, assets
 
 
-def _resolve_rel(asset, surface: str = "feed") -> str | None:
+def _asset_media_kind(asset) -> str | None:
+    """asset['media_kind'], .keys()-guarded — plain-dict fixtures across many existing
+    tests don't all carry this column."""
+    return asset["media_kind"] if "media_kind" in asset.keys() else None
+
+
+def _needs_conformed(caps: PlatformCaps, surface: str, media_kind: str | None) -> bool:
+    """Whether this send should get the Instagram-shaped derivative.
+
+    Conformance is a per-SURFACE question, not only a per-platform one. A video headed for
+    a feed that accepts any aspect ratio (Facebook's /videos edge) should arrive untouched;
+    the same clip headed for Reels gets the 9:16 derivative. Images are unaffected and keep
+    the platform-wide answer (caps.needs_conformed_media), which is what every existing
+    caller already relies on.
+    """
+    if media_kind == "video" and surface == "feed" and not caps.feed_video_is_constrained:
+        return False
+    return caps.needs_conformed_media
+
+
+def _resolve_rel(asset, surface: str = "feed", needs_conformed: bool = True) -> str | None:
     """Which stored file this SURFACE should publish, relative to the asset store.
 
-      * feed  — the Meta-conformed derivative at publish_path, else the original.
+      * feed/reel — needs_conformed=True: the Meta-conformed derivative at publish_path,
+                else the original. needs_conformed=False (a Facebook feed video, whose
+                endpoint accepts any aspect ratio): the untouched original, falling back to
+                the conformed copy only if the original is somehow missing. The caller
+                decides needs_conformed via _needs_conformed — this function is about file
+                precedence only, not policy.
       * story — the 9:16 canvas at story_path, else the UNTOUCHED original. story_path
                 exists only when the source was not already story-shaped (migration 0015);
                 NULL means the original is already the right shape. The conformed copy is
@@ -144,21 +169,33 @@ def _resolve_rel(asset, surface: str = "feed") -> str | None:
         return canvas or original or conformed
     if surface == "cover":
         return original
-    return conformed or original
+    if needs_conformed:
+        return conformed or original
+    return original or conformed
 
 
-def _resolve_url(asset, asset_base_url: str | None, surface: str = "feed") -> str | None:
+def _resolve_url(asset, asset_base_url: str | None, surface: str = "feed",
+                  caps: PlatformCaps | None = None) -> str | None:
     """The public URL Meta will download from.
 
     An explicit external public_url (the manual/paste escape hatch) always wins; otherwise
-    the surface decides which stored file to serve (see _resolve_rel). None means the asset
-    can't currently be served publicly.
+    the surface (and, for video, the platform's caps) decides which stored file to serve —
+    see _resolve_rel and _needs_conformed. None means the asset can't currently be served
+    publicly.
+
+    caps is optional because one caller (the cover-image resolution in _build_plan) always
+    passes surface="cover", whose answer never depends on needs_conformed — see
+    _resolve_rel. Every other caller should pass its platform's caps.
     """
     external = asset["public_url"]
     if external:
         return external
     if asset_base_url:
-        rel = _resolve_rel(asset, surface)
+        needs_conformed = (
+            _needs_conformed(caps, surface, _asset_media_kind(asset))
+            if caps is not None else True
+        )
+        rel = _resolve_rel(asset, surface, needs_conformed)
         if rel:
             return f"{asset_base_url.rstrip('/')}/{rel}"
     return None
@@ -172,20 +209,23 @@ def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed"
     range and a story is 9:16, outside it, so the conformed derivative is the wrong image
     for that surface — the same rule _resolve_url applies.
 
-    Otherwise it depends on caps: when needs_conformed_media is True (Meta platforms,
-    which constrain aspect ratio), prefer the Meta-conformed derivative at publish_path,
-    falling back to the original. When needs_conformed_media is False (Discord, Telegram —
-    no aspect-ratio rules at all), prefer the untouched original at storage_path, falling
-    back to publish_path only if the original is missing. The fallback is existence-aware
-    — it checks the file is actually on disk, not just that the DB column is non-empty —
-    since storage_path is always populated at upload time and would otherwise make the
-    fallback unreachable. Returns None when neither candidate exists, so validation can
-    fail loudly instead of the publish blowing up mid-request.
+    Otherwise it depends on _needs_conformed(caps, surface, media_kind) — the same policy
+    _resolve_url and _resolve_rel use, kept in one place. When True (Meta platforms, which
+    constrain aspect ratio), prefer the Meta-conformed derivative at publish_path, falling
+    back to the original. When False (Discord, Telegram — no aspect-ratio rules at all, or
+    a Facebook feed video, whose endpoint accepts any ratio), prefer the untouched original
+    at storage_path, falling back to publish_path only if the original is missing. The
+    fallback is existence-aware — it checks the file is actually on disk, not just that the
+    DB column is non-empty — since storage_path is always populated at upload time and
+    would otherwise make the fallback unreachable. Returns None when neither candidate
+    exists, so validation can fail loudly instead of the publish blowing up mid-request.
 
     No byte-upload platform has a Stories surface today, so the story branch changes no
     real publish. It exists so the DRY-RUN plan doesn't advertise the cropped derivative
     for a story — the plan's job is to be legible — and so this can't quietly become a
-    real bug if one ever does.
+    real bug if one ever does. Likewise, no byte-upload platform has a constrained-feed
+    exception today (only Facebook, which publishes by URL, does) — the helper is shared
+    anyway so there is exactly one rule, not two that could drift.
     """
 
     def _candidate(rel) -> Path | None:
@@ -203,7 +243,7 @@ def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed"
     canvas = _candidate(asset["story_path"] if has_story_path else None)
     if surface == "story":
         return canvas or original or conformed
-    if caps.needs_conformed_media:
+    if _needs_conformed(caps, surface, _asset_media_kind(asset)):
         return conformed or original
     return original or conformed
 
@@ -292,7 +332,7 @@ def _validate_media_available(assets, dry_run: bool, asset_base_url: str | None,
             raise _NonRetryable(f"asset files missing from the local store: {missing}")
     else:
         missing = [
-            a["id"] for a in assets if not _resolve_url(a, asset_base_url, surface)
+            a["id"] for a in assets if not _resolve_url(a, asset_base_url, surface, caps)
         ]
         if missing:
             raise _NonRetryable(
@@ -389,18 +429,21 @@ def _normalise_comment(raw: str | None) -> str | None:
 
 def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None,
                  config=None, surface: str = "feed", conn=None) -> dict:
+    caps = PLATFORM_CAPS[channel["platform"]]
     # For real publishes every asset resolves (validated above). In dry-run there is no
-    # tunnel, so show a readable local marker instead of a live URL.
+    # tunnel, so show a readable local marker instead of a live URL. The marker must use
+    # the SAME needs_conformed decision as _resolve_url, computed the same way (via
+    # _needs_conformed), or the dry run can show a different file than a real publish
+    # would send — this already happened once for stories (see _resolve_rel).
     asset_urls = [
         # The marker names the file a REAL publish would send, not just the original —
         # a dry run that shows the wrong file is worse than no dry run.
-        _resolve_url(a, asset_base_url, surface)
-        or f"(local:{_resolve_rel(a, surface) or a['storage_path']})"
+        _resolve_url(a, asset_base_url, surface, caps)
+        or f"(local:{_resolve_rel(a, surface, _needs_conformed(caps, surface, _asset_media_kind(a))) or a['storage_path']})"
         for a in assets
     ]
     # Local on-disk paths, for byte-upload platforms (Discord/Telegram). None entries are
     # expected in dry-run or when the platform doesn't use them.
-    caps = PLATFORM_CAPS[channel["platform"]]
     asset_paths = [
         _resolve_local_path(a, caps, config, surface) if config is not None else None
         for a in assets

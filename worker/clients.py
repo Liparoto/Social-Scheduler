@@ -117,6 +117,13 @@ class PlatformCaps:
     # original. Defaults True so every platform keeps today's behaviour unless it
     # explicitly opts out below.
     needs_conformed_media: bool = True
+    # Whether this platform's FEED video has aspect-ratio rules of its own. True keeps
+    # today's behaviour everywhere. False only for Facebook, whose /videos edge accepts
+    # any ratio up to 20 minutes — Instagram's feed video IS Reels and genuinely is
+    # constrained, so the two cannot share one platform-wide answer. Only meaningful for
+    # the "feed" surface; a platform's Reels/Story surfaces are governed by
+    # needs_conformed_media as before (see _needs_conformed in publisher.py).
+    feed_video_is_constrained: bool = True
 
     def caption_limit(self, post_type: str) -> int | None:
         return self.caption_chars.get(post_type)
@@ -141,7 +148,7 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
     # any aspect ratio, <=20 min) and Reels (POST /{page}/video_reels, vertical, 3-90s).
     "facebook": PlatformCaps(
         supports_text=False, max_carousel=10, caption_chars={},
-        video_surfaces=frozenset({"feed", "reel"}),
+        video_surfaces=frozenset({"feed", "reel"}), feed_video_is_constrained=False,
     ),
     # Threads: text-first. 500-character text limit, 2-20 carousel children,
     # 250 API-published posts per rolling 24h (verified 2026-07-25).
