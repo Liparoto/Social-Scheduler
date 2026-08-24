@@ -22,6 +22,7 @@ def _apply_through(conn, last: str) -> None:
 def db(tmp_path):
     conn = sqlite3.connect(tmp_path / "t.db")
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     _apply_through(conn, "0026_tiktok_account_stats.sql")
     return conn
 
@@ -64,11 +65,19 @@ def test_children_survive_the_rebuild(db):
     db.execute("INSERT INTO post_metrics (publication_id, fetched_at) VALUES (9, '2026-01-01T00:00:00Z')")
     db.commit()
 
+    # The test only proves anything if enforcement is genuinely ON before the rebuild —
+    # it currently gets there by luck (0008 and 0014 each end with PRAGMA foreign_keys =
+    # ON, and this fixture connection inherits that). Assert the precondition explicitly
+    # so the test fails loudly instead of going quiet if that ever stops being true.
+    assert db.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
     db.executescript((MIGRATIONS / "0027_video_surface.sql").read_text())
 
     assert db.execute("SELECT COUNT(*) FROM post_metrics").fetchone()[0] == 1
     assert db.execute("SELECT COUNT(*) FROM publications WHERE id = 9").fetchone()[0] == 1
     assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+    # Enforcement must also be restored afterwards, not just left off for convenience.
+    assert db.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
 def test_indexes_survive_the_rebuild(db):
