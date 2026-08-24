@@ -756,7 +756,16 @@ class GraphClient:
         FINISHED: that would publish on a guess.
         """
         payload = self._get(video_id, {"fields": "status", "access_token": token})
-        raw = (payload.get("status") or {}).get("video_status") or "unknown"
+        status = payload.get("status")
+        if status is not None and not isinstance(status, dict):
+            # Never seen from Meta, but if `status` ever came back as a string or list
+            # instead of an object, `.get("video_status")` below would raise a bare
+            # AttributeError — the wrong type of error to escape here. Callers pattern-
+            # match on GraphAPIError, so surface it as one instead.
+            raise GraphAPIError(
+                f"video status field was not an object: {redact(str(status))}"
+            )
+        raw = (status or {}).get("video_status") or "unknown"
         return self._FB_VIDEO_STATUS.get(raw, raw)
 
     def get_page_video_post_id(self, video_id: str, token: str) -> str | None:

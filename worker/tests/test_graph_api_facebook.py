@@ -140,9 +140,10 @@ def test_create_page_video_posts_file_url_to_videos_edge():
 
     assert out == {"id": "v123"}
     url, data, _headers = session.posts[0]
-    assert url.endswith("/PAGE/videos")
+    assert url == "https://graph.facebook.com/v25.0/PAGE/videos"
     assert data["file_url"] == "https://x.test/a.mp4"
     assert data["description"] == "hi"
+    assert data["access_token"] == "TOK"
 
 
 def test_create_page_video_returns_the_full_response_including_post_id():
@@ -186,8 +187,9 @@ def test_create_page_reel_runs_all_three_phases():
     assert len(session.posts) == 3
 
     start_url, start_data, _ = session.posts[0]
-    assert start_url.endswith("/PAGE/video_reels")
+    assert start_url == "https://graph.facebook.com/v25.0/PAGE/video_reels"
     assert start_data["upload_phase"] == "start"
+    assert start_data["access_token"] == "TOK"
 
     up_url, up_data, up_headers = session.posts[1]
     assert up_url == "https://rupload-shard7.facebook.com/video-upload/v25.0/v9"
@@ -198,11 +200,12 @@ def test_create_page_reel_runs_all_three_phases():
     assert "offset" not in up_headers and "file_size" not in up_headers
 
     fin_url, fin_data, _ = session.posts[2]
-    assert fin_url.endswith("/PAGE/video_reels")
+    assert fin_url == "https://graph.facebook.com/v25.0/PAGE/video_reels"
     assert fin_data["upload_phase"] == "finish"
     assert fin_data["video_id"] == "v9"
     assert fin_data["video_state"] == "PUBLISHED"
     assert fin_data["description"] == "hi"
+    assert fin_data["access_token"] == "TOK"
 
 
 def test_create_page_reel_uploads_to_the_url_meta_returns_not_a_constructed_one():
@@ -232,6 +235,21 @@ def test_create_page_reel_falls_back_to_constructed_url_when_upload_url_is_absen
     assert up_url == "https://rupload.facebook.com/video-upload/v25.0/v9"
 
 
+def test_create_page_reel_omits_empty_description():
+    """Same convention as create_page_video: an empty description must be absent from
+    the finish phase's body, not sent as "" — Meta treats present-but-empty differently
+    from absent."""
+    session = FakeSession([
+        FakeResponse({"video_id": "v9", "upload_url": "https://rupload-shard3.facebook.com/video-upload/v25.0/v9"}),
+        FakeResponse({"success": True}),
+        FakeResponse({"success": True}),
+    ])
+    client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
+    client_.create_page_reel("PAGE", "https://x.test/a.mp4", "TOK", description=None)
+    _fin_url, fin_data, _fin_headers = session.posts[2]
+    assert "description" not in fin_data
+
+
 def test_create_page_reel_raises_when_start_returns_no_video_id():
     """Without this the upload phase would POST to .../None and fail somewhere far away
     from the actual cause."""
@@ -257,6 +275,25 @@ def test_status_is_normalized_to_the_instagram_vocabulary(video_status, expected
     session = FakeSession([FakeResponse({"status": {"video_status": video_status}})])
     client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
     assert client_.get_page_video_status("v1", "TOK") == expected
+
+
+def test_status_poll_requests_the_status_field():
+    session = FakeSession([FakeResponse({"status": {"video_status": "ready"}})])
+    client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
+    client_.get_page_video_status("v1", "TOK")
+    _url, params = session.gets[0]
+    assert params["fields"] == "status"
+    assert params["access_token"] == "TOK"
+
+
+def test_non_dict_status_raises_graph_api_error_not_attribute_error():
+    """If Meta ever returned `status` as a string or list instead of an object,
+    (payload.get("status") or {}).get("video_status") would raise a bare AttributeError
+    — the wrong type of error to escape here. Callers pattern-match on GraphAPIError."""
+    session = FakeSession([FakeResponse({"status": "not-an-object"})])
+    client_ = GraphClient("v25.0", session=session, base_url="https://graph.facebook.com")
+    with pytest.raises(GraphAPIError):
+        client_.get_page_video_status("v1", "TOK")
 
 
 def test_missing_status_is_not_mistaken_for_finished():
