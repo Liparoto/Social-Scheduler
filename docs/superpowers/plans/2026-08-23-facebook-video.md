@@ -588,7 +588,17 @@ git commit -m "refactor(dashboard): post_type 'video'; declare per-platform vide
 
 ---
 
-**PHASE 1 CHECKPOINT.** Apply migration `0027` to the live DB (`.venv/bin/python worker/migrate.py`), restart the worker, and confirm the dashboard still loads the queue and the existing video post. Do not start Phase 2 until this is confirmed by looking at the running app.
+**PHASE 1 CHECKPOINT.** Verify against the **worktree's** database copy only — apply `0027`
+there, start the dashboard, and confirm it still loads the queue and the existing video post.
+
+**Do NOT apply the migration to the live install at this point.** Task 2 makes Facebook declare
+video support, but the Facebook video publish path does not exist until Task 8. In that window
+the invariant "a platform that declares video support has a working publish path" is false, and
+auto-fill would happily queue a video post to a Facebook channel that cannot publish it — failing
+it terminally every cycle, since `failed` is not in `ACTIVE_QUEUE_STATUSES`. This install runs
+auto-fill through a channel GROUP, so the Facebook channel is genuinely reachable that way.
+
+The live migration moves to the **Phase 2 checkpoint**, after Task 8 closes the gap.
 
 ---
 
@@ -1339,7 +1349,12 @@ git commit -m "feat(publisher): refuse an out-of-spec Facebook Reel before sched
 
 ---
 
-**PHASE 2 CHECKPOINT.** Full worker suite green. Restart the worker and confirm the heartbeat. Do not start Phase 3 until confirmed.
+**PHASE 2 CHECKPOINT.** Full worker suite green. Now — and not before — apply migration `0027`
+to the LIVE install (`.venv/bin/python worker/migrate.py` from the main checkout), because Task 8
+has closed the declare-without-a-path gap described at the Phase 1 checkpoint. Back up first
+(`sqlite3 data/socialscheduler.db ".backup 'data/pre-0027-backup.db'"`), restart the worker, and
+confirm the heartbeat and that the dashboard still loads the queue. Do not start Phase 3 until
+confirmed by looking at the running app.
 
 ---
 
