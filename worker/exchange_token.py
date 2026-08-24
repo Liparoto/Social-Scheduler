@@ -3,6 +3,9 @@
     python3 -m worker.exchange_token          # interactive: exchange and save
     python3 -m worker.exchange_token --check  # report what each stored token IS
 
+    # when a hidden prompt will not accept a paste (some Windows terminals):
+    python3 -m worker.exchange_token --platform facebook --token-file ../token.txt
+
 WHY THIS EXISTS
 ---------------
 Both Meta paths hand you a token that expires in about an hour, and neither says so.
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import getpass
 import sys
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -116,10 +120,24 @@ def list_pages(config: Config, user_token: str) -> list[dict[str, Any]]:
     Derived from whatever user token is passed in, so the Page tokens inherit that
     token's lifetime — pass the EXTENDED user token to get permanent ones.
     """
-    data = _get(
-        f"{FACEBOOK_BASE}/{config.graph_version}/me/accounts",
-        {"access_token": user_token, "fields": "id,name,access_token,tasks"},
-    )
+    try:
+        data = _get(
+            f"{FACEBOOK_BASE}/{config.graph_version}/me/accounts",
+            {"access_token": user_token, "fields": "id,name,access_token,tasks"},
+        )
+    except ExchangeError as exc:
+        # `me` resolves to whoever the token identifies. For a PAGE token that is the
+        # Page itself, and a Page has no `accounts` edge — so this exact error is the
+        # signature of pasting a Page token where a USER token belongs. Meta's own
+        # wording ("nonexisting field") gives no hint of that, so translate it.
+        if "nonexisting field (accounts)" in str(exc):
+            raise ExchangeError(
+                "That looks like a PAGE token, not a USER token. A Page token cannot "
+                "list Pages, which is why this step failed. In the Graph API Explorer, "
+                "copy what is in the 'Access Token' box WITHOUT switching the dropdown "
+                "to your Page."
+            ) from exc
+        raise
     return data.get("data", [])
 
 
@@ -226,6 +244,47 @@ def _prompt_secret(label: str) -> str:
     return token
 
 
+# Real Meta tokens run roughly 150-250 characters. Anything far below that never
+# reached the prompt — worth catching here, because Meta answers a truncated token
+# with a code 190 that reads like the token was wrong rather than missing.
+MIN_TOKEN_LEN = 50
+
+
+def _read_token(label: str, token_file: str | None) -> str:
+    """Get a token from --token-file if given, otherwise from the hidden prompt.
+
+    The file path exists because a hidden prompt is not reliably pastable everywhere:
+    some Windows terminals drop a Ctrl+V into getpass silently, which surfaces as a
+    1-character "token" and a baffling code 190. Pasting into an editor always works.
+    The file is only ever read — deleting it afterwards is the caller's job, and the
+    caller should keep it outside the repo.
+    """
+    if token_file:
+        try:
+            # utf-8-sig: Notepad and PowerShell redirection both like to prepend a BOM,
+            # which Meta would see as part of the token.
+            token = Path(token_file).read_text(encoding="utf-8-sig").strip()
+        except OSError as exc:
+            raise ExchangeError(f"Could not read {token_file}: {exc}") from exc
+        print(f"  Read {len(token)} characters from {token_file}.")
+    else:
+        token = _prompt_secret(label)
+
+    if not token:
+        raise ExchangeError("The token is empty. Copy it again and re-run.")
+    if any(ch.isspace() for ch in token):
+        raise ExchangeError(
+            "That token contains a space or line break, so the copy picked up "
+            "surrounding text or wrapped. Re-copy just the token."
+        )
+    if len(token) < MIN_TOKEN_LEN:
+        raise ExchangeError(
+            f"That is only {len(token)} characters, far short of a real Meta token. "
+            "The paste did not land — use --token-file instead of pasting."
+        )
+    return token
+
+
 def _choose(prompt: str, options: list[str]) -> int:
     """Numbered menu. Returns a 0-based index."""
     for i, opt in enumerate(options, 1):
@@ -284,13 +343,13 @@ def _save_to_channel(conn, config: Config, platform: str, token: str, remote_id:
     print(f"\nSaved to channel {ch['id']} ({ch['account_name']}).")
 
 
-def run_facebook(conn, config: Config) -> int:
+def run_facebook(conn, config: Config, token_file: str | None = None) -> int:
     print(
         "\nFacebook Page — you need the USER token from the Graph API Explorer\n"
         "(developers.facebook.com/tools/explorer), generated with pages_show_list,\n"
         "pages_read_engagement and pages_manage_posts. Not a Page token."
     )
-    user_token = _prompt_secret("Paste the USER token:")
+    user_token = _read_token("Paste the USER token:", token_file)
 
     print("\n1/4  Extending the user token...")
     long_lived = extend_user_token(config, user_token)
@@ -328,12 +387,12 @@ def run_facebook(conn, config: Config) -> int:
     return 0
 
 
-def run_instagram(conn, config: Config) -> int:
+def run_instagram(conn, config: Config, token_file: str | None = None) -> int:
     print(
         "\nInstagram — you need the short-lived token from your app's\n"
         "Instagram -> API setup with Instagram login panel ('Generate token')."
     )
-    short = _prompt_secret("Paste the short-lived Instagram token:")
+    short = _read_token("Paste the short-lived Instagram token:", token_file)
 
     print("\n1/3  Exchanging for a 60-day token...")
     token, expires_in = exchange_instagram_token(config, short)
@@ -410,6 +469,16 @@ def run_check(conn, config: Config) -> int:
     return 1 if problems else 0
 
 
+def _arg_value(flag: str) -> str | None:
+    """Read `--flag value` or `--flag=value` out of argv. None if absent."""
+    for i, arg in enumerate(sys.argv):
+        if arg == flag and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith(f"{flag}="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def main() -> int:
     config = Config.from_env()
     if not config.meta_app_id or not config.meta_app_secret:
@@ -425,9 +494,20 @@ def main() -> int:
         if "--check" in sys.argv:
             return run_check(conn, config)
 
-        print("What are you connecting?")
-        choice = _choose("Choice:", ["Facebook Page", "Instagram"])
-        return run_facebook(conn, config) if choice == 0 else run_instagram(conn, config)
+        token_file = _arg_value("--token-file")
+        platform = _arg_value("--platform")
+
+        if platform not in (None, "facebook", "instagram"):
+            print(f"--platform must be facebook or instagram, not {platform!r}", file=sys.stderr)
+            return 2
+
+        if platform is None:
+            print("What are you connecting?")
+            platform = ["facebook", "instagram"][_choose("Choice:", ["Facebook Page", "Instagram"])]
+
+        if platform == "facebook":
+            return run_facebook(conn, config, token_file)
+        return run_instagram(conn, config, token_file)
     except ExchangeError as exc:
         print(f"\nStopped: {exc}", file=sys.stderr)
         print("Nothing was changed.", file=sys.stderr)
