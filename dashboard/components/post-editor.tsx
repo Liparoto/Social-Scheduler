@@ -565,6 +565,13 @@ export function PostEditor({
             width: a.width,
             height: a.height,
             duration_ms: a.duration_ms,
+            // See composer.tsx's identical map for why: without these the chip checks a
+            // narrower shape than effectiveTargets' prune above (which already reads the
+            // full asset row), and can't tell an already-conformed asset from one that
+            // genuinely is out of spec.
+            byte_size: a.byte_size,
+            publish_path: a.publish_path,
+            conform_mode: a.conform_mode,
           }))}
         />
       </section>
@@ -587,6 +594,13 @@ export function PostEditor({
           width: a.width,
           height: a.height,
           duration_ms: a.duration_ms,
+          // See the picker's identical map above: PostSendsPanel checks this same narrow
+          // shape for both its chip AND its prune (computeSendTargets), and both need to
+          // agree with the worker, which reads byte_size (and conform state) off the real
+          // DB row.
+          byte_size: a.byte_size,
+          publish_path: a.publish_path,
+          conform_mode: a.conform_mode,
         }))}
         sends={sends}
         channels={sendableChannels}

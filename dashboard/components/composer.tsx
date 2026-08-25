@@ -641,6 +641,15 @@ export function Composer({
               width: a.asset.width,
               height: a.asset.height,
               duration_ms: a.asset.duration_ms,
+              // byte_size/publish_path/conform_mode: without these the CHIP checked a
+              // narrower shape than the PRUNE above (effectiveTargets, which already
+              // reads the full asset row) — a 400MB video could render its chip enabled
+              // while every click on it silently did nothing. Also lets
+              // destinationDisabledReason tell an out-of-spec original from one that's
+              // already been conformed for the feed (see lib/media-limits.ts).
+              byte_size: a.asset.byte_size,
+              publish_path: a.asset.publish_path,
+              conform_mode: a.asset.conform_mode,
             }))}
             postNow={postNow}
           />

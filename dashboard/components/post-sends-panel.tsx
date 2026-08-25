@@ -18,6 +18,21 @@ import { ChannelSurfacePicker } from "@/components/channel-surface-picker";
 import { destinationDisabledReason } from "@/lib/media-limits";
 import { splitInTz } from "@/lib/time";
 
+// The narrow asset shape this panel and computeSendTargets both accept — a caller (only
+// post-editor.tsx today) hands the post's real assets down through it. byte_size/
+// publish_path/conform_mode are needed for the SAME reason width/height/duration_ms are:
+// without them, checkMedia (via destinationDisabledReason) can't tell an out-of-spec
+// original from one that's already been conformed for the feed, and disagrees with the
+// worker, which reads byte_size (and conform state) straight off the real DB row.
+type PickerAssetLike = {
+  width: number | null;
+  height: number | null;
+  duration_ms?: number | null;
+  byte_size?: number | null;
+  publish_path?: string | null;
+  conform_mode?: string | null;
+};
+
 const READ_ONLY_STATUSES = new Set(["posted", "publishing"]);
 const dateTimeInputCls =
   "rounded-md border border-border bg-surface px-2 py-1 text-xs text-ink focus:border-brand";
@@ -59,7 +74,7 @@ export function computeSendTargets({
   postType: PostType;
   channels: Channel[];
   sends: PostPublicationRow[];
-  assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
+  assets?: PickerAssetLike[];
 }): { pickable: Channel[]; effectiveTargets: PostTarget[] } {
   const busyKeys = new Set(
     sends
@@ -521,7 +536,7 @@ export function PostSendsPanel({
   // has the post's assets loaded, so this is threaded through as a prop rather than a new
   // query; a caller with nothing to hand just gets an unfiltered picker, same as before
   // this prop existed.
-  assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
+  assets?: PickerAssetLike[];
   sends: PostPublicationRow[];
   channels: Channel[];
   readiness: PublishReadiness;

@@ -28,6 +28,13 @@ export type LibraryPickItem = {
   first_asset_width: number | null;
   first_asset_height: number | null;
   first_asset_duration_ms: number | null;
+  // byte_size/publish_path/conform_mode: without these, checkMedia (via
+  // destinationDisabledReason) can't tell a genuinely out-of-spec original from one
+  // that's already been conformed for the feed, and disagrees with the worker, which
+  // reads byte_size (and conform state) straight off the real DB row.
+  first_asset_byte_size: number | null;
+  first_asset_publish_path: string | null;
+  first_asset_conform_mode: string | null;
 };
 export type ChannelLite = {
   id: number;
@@ -81,6 +88,9 @@ export function effectiveLibraryTargets(
         width: selected.first_asset_width,
         height: selected.first_asset_height,
         duration_ms: selected.first_asset_duration_ms,
+        byte_size: selected.first_asset_byte_size,
+        publish_path: selected.first_asset_publish_path,
+        conform_mode: selected.first_asset_conform_mode,
       }
     : null;
   return targets.filter((t) => {
@@ -323,6 +333,9 @@ export function ScheduleFromLibrary({
                       width: selected.first_asset_width,
                       height: selected.first_asset_height,
                       duration_ms: selected.first_asset_duration_ms,
+                      byte_size: selected.first_asset_byte_size,
+                      publish_path: selected.first_asset_publish_path,
+                      conform_mode: selected.first_asset_conform_mode,
                     },
                   ]
                 : undefined
