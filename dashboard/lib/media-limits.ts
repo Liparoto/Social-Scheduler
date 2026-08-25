@@ -15,6 +15,7 @@
  * reaches one directory up to read it. See that module's docstring for the full story.
  */
 import raw from "@/media-limits.json" with { type: "json" };
+import { PLATFORMS, supportsImages, supportsStory, videoSurfaces } from "@/lib/platforms";
 
 export type Violation = {
   kind: "too_short" | "too_long" | "too_small" | "too_large" | "wrong_aspect" | "wrong_format";
@@ -44,12 +45,22 @@ type RawLimits = {
   platforms: Record<string, Record<string, Record<string, Entry>>>;
 };
 
-export function limitsFor(platform: string, surface: string, mediaKind: string): Entry | null {
-  // Cast through unknown: the imported JSON literal's inferred type (e.g. min_aspect as
-  // number[]) is narrower in shape than the field-by-field Entry type below, but the
-  // actual values are validated at load time by worker/media_limits.py's schema check —
-  // both languages read the identical file.
-  const p = (raw as unknown as RawLimits).platforms?.[platform];
+export type PlatformsData = RawLimits["platforms"];
+
+// Cast through unknown: the imported JSON literal's inferred type (e.g. min_aspect as
+// number[]) is narrower in shape than the field-by-field Entry type below, but the
+// actual values are validated at load time by worker/media_limits.py's schema check —
+// both languages read the identical file.
+const REAL_PLATFORMS: PlatformsData = (raw as unknown as RawLimits).platforms ?? {};
+
+// `data` defaults to the real, on-disk media-limits.json for every production call site.
+// The parameter exists so anyDestinationAccepts's REFUSAL branch (below) can be proven
+// with injected data instead of today's real data — see that function's comment for why
+// the real data can never exercise that branch on this install.
+export function limitsFor(
+  platform: string, surface: string, mediaKind: string, data: PlatformsData = REAL_PLATFORMS,
+): Entry | null {
+  const p = data?.[platform];
   return p?.[surface]?.[mediaKind] ?? null;
 }
 
@@ -62,8 +73,10 @@ function ratioAbove(w: number, h: number, [aw, ah]: [number, number]): boolean {
   return w * ah > aw * h;
 }
 
-export function checkMedia(platform: string, surface: string, asset: AssetLike): Violation[] {
-  const entry = limitsFor(platform, surface, asset.media_kind ?? "");
+export function checkMedia(
+  platform: string, surface: string, asset: AssetLike, data: PlatformsData = REAL_PLATFORMS,
+): Violation[] {
+  const entry = limitsFor(platform, surface, asset.media_kind ?? "", data);
   if (!entry) return [];
   // A limit that VARIES by account can never be enforced honestly — warn, never refuse.
   const severity: Violation["severity"] = entry.varies ? "warn" : "refuse";
@@ -125,4 +138,56 @@ export function destinationDisabledReason(
     : v.kind === "too_large" ? "Too large for"
     : "Wrong shape for";
   return `${lead} ${surfaceLabel} (${v.message})`;
+}
+
+/**
+ * True when SOME destination that can actually PUBLISH this media kind would accept it.
+ * The upload gate's only job: refuse what nothing can take. Which destination a post
+ * actually goes to is the composer's question, and it is the only place the app knows
+ * the answer.
+ *
+ * This only asks a destination about a surface it can genuinely publish that media kind
+ * to — `videoSurfaces(platform)` for video, `supportsImages(platform)` (+ the feed/story
+ * surfaces a platform actually offers) for images. An earlier version of this function
+ * iterated every platform/surface *recorded in media-limits.json* and accepted if any had
+ * zero refusals. That is wrong: Threads has an image entry recorded for "feed" but NO
+ * video publish path at all (`videoSurfaces("threads")` is `[]`, mirroring
+ * `worker/clients.py`'s `PLATFORM_CAPS["threads"].video_surfaces`, an empty frozenset).
+ * Asking `checkMedia("threads", "feed", videoAsset)` about a media kind Threads has no
+ * entry for returns "no violations" — because `limitsFor` found nothing to check, not
+ * because Threads would take the video. A 30-minute video was "accepted via threads/feed"
+ * under that logic, which is nonsense: Threads cannot publish video at all. "No limit
+ * recorded" and "this destination accepts anything" are different claims, and only the
+ * per-platform capability flags (not presence in the JSON file) can tell them apart.
+ *
+ * WHY THIS NEVER REFUSES A VIDEO ON THIS INSTALL TODAY: TikTok can publish video
+ * (`videoSurfaces("tiktok")` is `["feed"]`), but TikTok's limits are deliberately absent
+ * from media-limits.json — they are per-creator and fetched at runtime from TikTok's
+ * `creator_info` endpoint, not a static fact anyone can write down here (verified in an
+ * earlier task; see reference.md). With TikTok in the platform list and its limits
+ * unknown, `checkMedia("tiktok", "feed", asset)` can never report a refusal for ANY
+ * duration — so this function can never prove that *nothing* accepts a given video, and
+ * refuses none. That is the honest consequence of "only refuse what we can verify," not a
+ * bug: it will look like a broken gate to the next reader until they read this comment.
+ * An install without a TikTok channel configured would still see this function refuse an
+ * over-long video normally — TikTok's mere presence in the *platform list* (not a
+ * channel) is what keeps this permissive, since the gate has no way to know at upload
+ * time which platforms the owner has actually connected.
+ *
+ * `data` defaults to the real media-limits.json for every production call. Tests pass a
+ * synthetic `data` to exercise the refusal branch, which today's real data cannot reach.
+ */
+export function anyDestinationAccepts(asset: AssetLike, data: PlatformsData = REAL_PLATFORMS): boolean {
+  const kind = asset.media_kind ?? "";
+  for (const { value: platform } of PLATFORMS) {
+    const surfaces: string[] =
+      kind === "video" ? videoSurfaces(platform)
+      : kind === "image" && supportsImages(platform) ? (supportsStory(platform) ? ["feed", "story"] : ["feed"])
+      : [];
+    for (const surface of surfaces) {
+      const refusals = checkMedia(platform, surface, asset, data).filter((v) => v.severity === "refuse");
+      if (refusals.length === 0) return true;
+    }
+  }
+  return false;
 }

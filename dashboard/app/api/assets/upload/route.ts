@@ -8,10 +8,11 @@ import { config } from "@/lib/config";
 import { getAssetByHash, upsertAssetByHash } from "@/lib/queries";
 import { conformImage, type ConformMode } from "@/lib/conform";
 import { readVideoMeta, VideoParseError } from "@/lib/video-meta";
-import { validateReel, classifyReelErrors, REEL_MIME_TYPES } from "@/lib/video-spec";
+import { validateReel, classifyReelErrors, humanDuration, REEL_MIME_TYPES } from "@/lib/video-spec";
 import { findConverter, convertVideo, ConvertError } from "@/lib/video-convert";
 import { converterAdvice } from "@/lib/converter-advice";
 import { IMAGE_EXT_BY_MIME, resolveUploadMime } from "@/lib/upload-mime";
+import { anyDestinationAccepts, type AssetLike } from "@/lib/media-limits";
 
 export const runtime = "nodejs";
 
@@ -65,9 +66,18 @@ export async function POST(req: NextRequest) {
   // classifyReelErrors splits problems into `fatal` (too short/long — trimming is an
   // editorial call this app must never make, and no re-encode adds footage back) and
   // `convertible` (too wide/large/wrong container — a downscale/re-encode genuinely
-  // fixes these). `fatal` is checked FIRST and returns immediately: a 15-minute 4K
+  // fixes these). `fatal` is checked FIRST and returns immediately: a too-long 4K
   // video must be refused in milliseconds, not after a multi-minute transcode that
   // was always going to be refused anyway.
+  //
+  // The REFUSAL decision itself no longer comes from classifyReelErrors's `fatal` bucket
+  // (that is Instagram's spec, and Instagram's 15-minute cap is not every destination's
+  // cap — an 18-minute video is valid for a Facebook Page feed, which allows 20). The
+  // gate is anyDestinationAccepts: refuse only when NO connected platform's publish path
+  // could take this media, per dashboard/lib/media-limits.ts. classifyReelErrors's fatal
+  // messages (when present) are still reused for the error text — they remain true even
+  // when they aren't the reason for refusal — with a destination-agnostic fallback for
+  // when they're empty.
   if (isVideo) {
     let meta;
     try {
@@ -80,8 +90,19 @@ export async function POST(req: NextRequest) {
     }
 
     const check = classifyReelErrors(meta, buf.length, mime);
-    if (check.fatal.length > 0) {
-      return NextResponse.json({ error: check.fatal.join(" ") }, { status: 422 });
+    const assetLike: AssetLike = {
+      media_kind: "video",
+      duration_ms: meta.duration_ms,
+      width: meta.width,
+      height: meta.height,
+      byte_size: buf.length,
+    };
+    if (!anyDestinationAccepts(assetLike)) {
+      const reason = check.fatal.length > 0
+        ? check.fatal.join(" ")
+        : `This video (${humanDuration(meta.duration_ms)}, ${meta.width}×${meta.height}) ` +
+          `can't be published to any connected destination.`;
+      return NextResponse.json({ error: reason }, { status: 422 });
     }
 
     const storageRel = `${hash}.${ext}`;
