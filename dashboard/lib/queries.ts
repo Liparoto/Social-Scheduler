@@ -1919,9 +1919,17 @@ export interface PostLibraryRow extends Post {
   first_asset_width: number | null;
   first_asset_height: number | null;
   // NULL for images and for anything predating migration 0011_video_assets.sql. Together
-  // with width/height, this is what lets the Library flow gate a Facebook Reel target the
-  // same way the composer and post editor already do — see facebook-reel-spec.ts.
+  // with width/height, this is what lets the Library flow gate a destination (Facebook
+  // Reel, Instagram Story, ...) against the shared limits the same way the composer and
+  // post editor already do — see lib/media-limits.ts's destinationDisabledReason.
   first_asset_duration_ms: number | null;
+  // byte_size/publish_path/conform_mode: without these, checkMedia (via
+  // destinationDisabledReason) can't tell a genuinely out-of-spec original from one
+  // that's already been conformed for the feed — see that function's comment. Threaded
+  // through the SAME way width/height/duration_ms already are, for the same reason.
+  first_asset_byte_size: number | null;
+  first_asset_publish_path: string | null;
+  first_asset_conform_mode: string | null;
   asset_count: number;
   // Every asset this post holds, in slide order, as a comma-joined string of ids —
   // GROUP_CONCAT can't return an array, so the caller (app/library/page.tsx) splits it.
@@ -2007,6 +2015,12 @@ export function listPosts(limit?: number, scope: LibraryScope = "active"): PostL
             WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_height,
          (SELECT a.duration_ms FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
             WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_duration_ms,
+         (SELECT a.byte_size FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_byte_size,
+         (SELECT a.publish_path FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_publish_path,
+         (SELECT a.conform_mode FROM post_assets pa JOIN assets a ON a.id = pa.asset_id
+            WHERE pa.post_id = p.id ORDER BY pa.sort_order LIMIT 1) AS first_asset_conform_mode,
          (SELECT COUNT(*) FROM post_assets pa WHERE pa.post_id = p.id) AS asset_count,
          (SELECT GROUP_CONCAT(sub.asset_id) FROM (
             SELECT asset_id FROM post_assets WHERE post_id = p.id ORDER BY sort_order ASC

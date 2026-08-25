@@ -16,11 +16,10 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from fractions import Fraction
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import db
+from . import db, media_limits
 from .caption_length import caption_length
 from .clients import PLATFORM_CAPS, SUPPORTED_PLATFORMS, PlatformCaps, UnknownPlatform
 from .config import Config
@@ -249,6 +248,38 @@ def _resolve_local_path(asset, caps: PlatformCaps, config, surface: str = "feed"
     return original or conformed
 
 
+def _check_media_limits(assets, platform: str, surface: str) -> None:
+    """Refuse a publish whose media breaks this platform+surface's recorded limits, per
+    dashboard/media-limits.json (worker/media_limits.py) — the SAME file the composer's
+    destinationDisabledReason reads, so the two cannot silently drift apart.
+
+    This is the BACKSTOP, not the first line of defense: the composer greys the
+    destination out before scheduling ever gets here. It still matters, because it
+    catches post_targets rows the UI can no longer reach (a stale row, a direct API
+    call, an asset swapped after scheduling) — the same reasoning as the reel/post_type
+    guard just above. ABSENT MEANS NOT ENFORCED: check() returns [] for any
+    platform/surface this file has no entry for yet, and only "refuse" severity blocks
+    the send — a "warn" (a limit that varies by account) is left for the platform itself
+    to enforce.
+
+    Checked against assets[0] only, same as the picker. That was once safe by
+    construction — every gated surface (Facebook Reels, then Instagram Story) was
+    single-asset (a video post is exactly one asset; a story row is narrowed to one slide
+    by _load_targets) — but it no longer is: instagram.feed.image, added after that
+    reasoning was first written, can be a 10-slide carousel, and this checks slide 1
+    only. Slides 2-10 are simply UNCHECKED here, same as every slide was before this gate
+    existed at all — not a regression, and not something this pass fixes; checking every
+    slide is future work.
+    """
+    if not assets:
+        return
+    for violation in media_limits.check(platform, surface, assets[0]):
+        if violation.severity == "refuse":
+            raise _NonRetryable(
+                f"{platform} {surface} cannot publish this media: {violation.message}"
+            )
+
+
 def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform: str,
               caption: str | None = None, config=None, surface: str = "feed") -> None:
     if platform not in _PUBLISHERS:
@@ -287,6 +318,7 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
                 f"a story needs an image or video, got '{assets[0]['media_kind']}'"
             )
         # No caption-limit check: a story sends no caption at all.
+        _check_media_limits(assets, platform, surface)
         _validate_media_available(assets, dry_run, asset_base_url, caps, config, surface)
         return
     if post_type == "single" and len(assets) != 1:
@@ -298,53 +330,6 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             raise _NonRetryable(
                 f"a video post needs a video asset, got media_kind='{assets[0]['media_kind']}'"
             )
-        # Facebook Reels limits, checked here rather than left to Meta: an over-length
-        # clip comes back as a generic OAuthException that says nothing about duration,
-        # and by then the send has already read "scheduled" to the owner. Verified
-        # 2026-08-23: 3-90 seconds, at least 540x960. See reference.md. The feed video
-        # surface gets no such check — its ceiling (20 minutes) is far looser, and that
-        # looseness is the whole reason a "feed" vs "reel" surface distinction exists
-        # (see _needs_conformed / _resolve_rel above).
-        if platform == "facebook" and surface == "reel":
-            asset = assets[0]
-            # .keys() guard: legacy rows imported before the video pipeline existed (or
-            # test fixtures) may not carry duration_ms/width/height at all.
-            duration_ms = asset["duration_ms"] if "duration_ms" in asset.keys() else None
-            # Unknown duration must NOT block the send — Meta is the backstop. Refusing
-            # here would wrongly reject a clip that is probably fine just because it
-            # predates duration tracking.
-            if duration_ms is not None:
-                if duration_ms < 3_000:
-                    raise _NonRetryable(
-                        "a Facebook Reel must be at least 3 seconds, this is "
-                        f"{duration_ms / 1000:.1f}s"
-                    )
-                if duration_ms > 90_000:
-                    raise _NonRetryable(
-                        "a Facebook Reel can be at most 90 seconds, this is "
-                        f"{duration_ms / 1000:.1f}s — send it to the Facebook feed "
-                        "instead, which allows up to 20 minutes"
-                    )
-            width = asset["width"] if "width" in asset.keys() else None
-            height = asset["height"] if "height" in asset.keys() else None
-            if width and height and (width < 540 or height < 960):
-                raise _NonRetryable(
-                    f"a Facebook Reel needs at least 540x960, this is {width}x{height}"
-                )
-            # Meta's documented Reels range is "between 16:9 and 9:16" — inclusive on
-            # both ends, same as the duration gate above. 16:9 landscape (~1.778) sits
-            # AT the boundary and IS permitted; only something more extreme (a 21:9
-            # ultrawide, say) is refused. Fraction, not float division, so the 16:9
-            # boundary itself can't be excluded by rounding. Missing width/height must
-            # not block the send, same rationale as the unknown-duration case above —
-            # Meta is the backstop.
-            if width and height:
-                ratio = Fraction(width, height)
-                if not (Fraction(9, 16) <= ratio <= Fraction(16, 9)):
-                    raise _NonRetryable(
-                        "a Facebook Reel needs an aspect ratio between 9:16 and 16:9, "
-                        f"this is {width}x{height}"
-                    )
     # Video-only platforms. Caught here rather than left to the adapter for the same
     # reason as the video and carousel rules below: an unpublishable combination that gets
     # scheduled first dies terminally later, long after the composer could have said so.
@@ -373,6 +358,12 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
             f"caption is {caption_length(caption)} characters; {platform} allows {limit} "
             f"for a {post_type} post"
         )
+    # Media limits, per platform AND surface, from the shared media-limits.json that the
+    # dashboard reads too (worker/media_limits.py). Checked here rather than left to the
+    # platform: an out-of-spec clip comes back as a generic API error that says nothing
+    # about duration, and by then the send has already read "scheduled" to the owner.
+    # This covers feed and reel (the story surface returns above before reaching here).
+    _check_media_limits(assets, platform, surface)
     _validate_media_available(assets, dry_run, asset_base_url, caps, config, surface)
 
 

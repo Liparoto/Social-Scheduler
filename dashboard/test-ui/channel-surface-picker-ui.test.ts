@@ -121,9 +121,11 @@ test("selecting Reel alone marks Reel pressed and Feed not", () => {
   assert.match(String(reel), /aria-pressed="true"/);
 });
 
-// ---- Reel chip: gated by Facebook Reels' own duration/resolution/aspect limits ----
-// (see lib/facebook-reel-spec.test.ts for exhaustive coverage of the limits themselves;
-// these pin that the picker actually wires disabling + the inline reason to them.)
+// ---- Reel chip: gated by the shared media limits (dashboard/media-limits.json), same
+// as every other chip — Facebook Reels' own duration/resolution/aspect limits are one
+// entry in that file, not a special case anymore. (See lib/media-limits.test.ts for
+// exhaustive coverage of the limits themselves; these pin that the picker actually wires
+// disabling + the inline reason to them.)
 function reelButton(html: string): string {
   const m = /<button[^>]*>Reel<\/button>/.exec(html);
   assert.ok(m, "expected a Reel chip in the markup");
@@ -139,8 +141,10 @@ test("a too-long video disables the Reel chip and shows the reason inline, not j
   const chip = reelButton(html);
   assert.match(chip, /\bdisabled=""/);
   assert.match(chip, /title="Too long for Reels/);
-  // Not just the tooltip — the same reason renders as visible text in the row.
-  assert.match(html, /<p[^>]*>Too long for Reels \(20m00s — max 1m30s\)<\/p>/);
+  // Not just the tooltip — the same reason renders as visible text in the row. The exact
+  // wording now comes from the shared media-limits.json entry (facebook.reel.video's
+  // max_duration_ms), via destinationDisabledReason — not this file's own formatting.
+  assert.match(html, /<p[^>]*>Too long for Reels \(longer than 90s\)<\/p>/);
 });
 
 test("a too-short video disables the Reel chip with its own reason", () => {
@@ -150,7 +154,7 @@ test("a too-short video disables the Reel chip with its own reason", () => {
     assets: [{ width: 1080, height: 1920, duration_ms: 1_000 }],
   });
   assert.match(reelButton(html), /\bdisabled=""/);
-  assert.match(html, /Too short for Reels \(1\.0s — min 3\.0s\)/);
+  assert.match(html, /Too short for Reels \(shorter than 3s\)/);
 });
 
 test("an undersized video disables the Reel chip with its own reason", () => {
@@ -160,7 +164,7 @@ test("an undersized video disables the Reel chip with its own reason", () => {
     assets: [{ width: 480, height: 640, duration_ms: 10_000 }],
   });
   assert.match(reelButton(html), /\bdisabled=""/);
-  assert.match(html, /Too small for Reels \(480×640 — min 540×960\)/);
+  assert.match(html, /Too small for Reels \(smaller than 540x960\)/);
 });
 
 test("an ultrawide video disables the Reel chip as the wrong shape", () => {
@@ -170,7 +174,7 @@ test("an ultrawide video disables the Reel chip as the wrong shape", () => {
     assets: [{ width: 2520, height: 1080, duration_ms: 10_000 }],
   });
   assert.match(reelButton(html), /\bdisabled=""/);
-  assert.match(html, /Wrong shape for Reels \(2520×1080\)/);
+  assert.match(html, /Wrong shape for Reels \(aspect ratio 2520x1080\)/);
 });
 
 test("Feed stays enabled even when Reel is disabled for spec reasons", () => {
@@ -220,6 +224,114 @@ test("unknown duration/width/height never disable the Reel chip", () => {
 test("a caller with no assets prop at all leaves Reel enabled", () => {
   const html = render({ channels: [facebook], hasVideo: true });
   assert.doesNotMatch(reelButton(html), /\bdisabled=""/);
+});
+
+// ---- Feed chip, IMAGE assets: every prior case above passed `hasVideo: true` — none of
+// them ever exercised the Feed chip against an IMAGE asset at all, which is exactly the
+// gap that let the FINDING 1 regression through review. instagram.feed.image's aspect
+// range (4:5..1.91:1) and 8MB cap are checked here, including the conform-aware skip: an
+// asset that already has a conformed derivative (publish_path/conform_mode set) must NOT
+// be checked against its own out-of-range original values, because that derivative — not
+// the original — is what's actually published. See lib/media-limits.ts's
+// surfaceReceivesConformedMedia and its matrix cases for the underlying mechanism; these
+// pin that the picker actually wires it through, the same way the Reel section above pins
+// worker parity for video.
+function feedButton(html: string): string {
+  const m = /<button[^>]*>Feed<\/button>/.exec(html);
+  assert.ok(m, "expected a Feed chip in the markup");
+  return m![0];
+}
+
+test("an ordinary iPhone portrait photo with NO conformed derivative disables the Instagram Feed chip", () => {
+  // 1179x2556 (ratio ~0.461) is well outside instagram.feed.image's 4:5..1.91:1 range,
+  // and this asset has no publish_path/conform_mode — the pre-conform state. The chip
+  // must still say why, not just silently disable — same as every other gated chip.
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1179, height: 2556 }],
+  });
+  assert.match(feedButton(html), /\bdisabled=""/);
+  assert.match(html, /Wrong shape for the feed/);
+});
+
+test("FINDING 1 regression pin: the SAME portrait photo, already conformed, leaves the Instagram Feed chip ENABLED", () => {
+  // The exact bug the final review caught: this asset has already been reframed for
+  // Instagram's feed range (publish_path set, built at upload time by
+  // dashboard/lib/conform.ts) — the file Meta actually receives is the cropped
+  // derivative, which is in-range by construction. Checking the ORIGINAL's 1179x2556
+  // against instagram.feed.image's aspect range wrongly disabled this chip for the
+  // owner's most common content before this fix.
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1179, height: 2556, publish_path: "pub/abc.jpg" }],
+  });
+  assert.doesNotMatch(feedButton(html), /\bdisabled=""/);
+});
+
+test("an oversized image with NO conformed derivative disables the Instagram Feed chip on size", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1000, height: 1000, byte_size: 9_000_000 }],
+  });
+  assert.match(feedButton(html), /\bdisabled=""/);
+  assert.match(html, /Too large for the feed/);
+});
+
+test("the same oversized image, already conformed via conform_mode alone, leaves Feed enabled", () => {
+  // conform_mode set with no publish_path is still a signal this asset has a derivative
+  // (the fix's OR condition) — conform.ts's encodeUnderLimit guarantees the sent file is
+  // under the 8MB cap by construction, regardless of this row's own byte_size.
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1000, height: 1000, byte_size: 9_000_000, conform_mode: "pad" }],
+  });
+  assert.doesNotMatch(feedButton(html), /\bdisabled=""/);
+});
+
+test("an in-spec image leaves the Instagram Feed chip enabled whether or not it has a derivative", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1080, height: 1350 }], // 4:5, well within range
+  });
+  assert.doesNotMatch(feedButton(html), /\bdisabled=""/);
+});
+
+// ---- Story chip: gated by the SAME shared limits, closing the owner's original bug
+// report — an over-long video could be sent to an Instagram Story and only fail at Meta,
+// long after the post had already read "scheduled". ------------------------------------
+
+function storyButton(html: string): string {
+  const m = /<button[^>]*>Story<\/button>/.exec(html);
+  assert.ok(m, "expected a Story chip in the markup");
+  return m![0];
+}
+
+test("an over-long video disables the Instagram Story chip", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: true,
+    assets: [{ width: 1080, height: 1920, duration_ms: 600_000 }],
+  });
+  assert.match(html, /Too long for Stories/);
+  assert.match(storyButton(html), /\bdisabled=""/);
+});
+
+test("an in-spec video leaves both Instagram chips enabled", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: true,
+    assets: [{ width: 1080, height: 1920, duration_ms: 20_000 }],
+  });
+  assert.doesNotMatch(html, /Too long/);
+  const feedChip = /<button[^>]*>Feed<\/button>/.exec(html);
+  assert.ok(feedChip);
+  assert.doesNotMatch(feedChip![0], /\bdisabled=""/);
+  assert.doesNotMatch(storyButton(html), /\bdisabled=""/);
 });
 
 test("a multi-slide post says how many Stories it will become, before scheduling", () => {

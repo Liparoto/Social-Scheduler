@@ -1,10 +1,11 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, useTransition } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { channelColor, formatParts, videoPreviewSrc } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
+import { destinationDisabledReason } from "@/lib/media-limits";
 import { captionsForPlatform } from "@/lib/caption-limits";
 import { captionLength } from "@/lib/caption-length";
 import { insertAtCaret } from "@/lib/insert-at-caret";
@@ -127,7 +128,27 @@ export function Composer({
   // Targets, not channel ids: an Instagram channel can be picked for its Feed, its
   // Story, or both, and each is an independent send. See channel-surface-picker.
   const [targets, setTargets] = useState<PostTarget[]>([]);
-  const selectedChannelIds = new Set(targets.map((t) => t.channel_id));
+  // The three prunes elsewhere in this component (onFiles, removeAsset, toggleTextOnly)
+  // fire on a SPECIFIC event and drop targets that became structurally incompatible.
+  // This is the general safety net alongside them, in the same "derive, don't sync" style
+  // post-editor.tsx/post-sends-panel.tsx/schedule-from-library.tsx already use for their
+  // own effectiveTargets: whenever the post's asset changes, any already-selected
+  // (channel, surface) target that the shared media limits (dashboard/media-limits.json,
+  // via destinationDisabledReason — the SAME check ChannelSurfacePicker greys every chip
+  // with) now refuse for the new asset is dropped, without writing back into `targets`
+  // state. Without this, a Story target picked while a video was in-spec could survive
+  // that video being swapped for an out-of-spec one — the exact "chip hid itself, target
+  // survived, wrong media published" failure mode this project has already shipped twice.
+  const effectiveTargets = useMemo(() => {
+    const asset = assets[0]?.asset;
+    if (!asset) return targets;
+    return targets.filter((t) => {
+      const channel = channels.find((c) => c.id === t.channel_id);
+      if (!channel) return true;
+      return destinationDisabledReason(channel.platform, t.surface, asset) === null;
+    });
+  }, [targets, assets, channels]);
+  const selectedChannelIds = new Set(effectiveTargets.map((t) => t.channel_id));
   const [textOnly, setTextOnly] = useState(false);
   const [timezone, setTimezone] = useState(defaultTimezone);
   // Reported up by TimezonePicker; gates scheduling on a valid zone. Irrelevant
@@ -337,7 +358,7 @@ export function Composer({
         .join(", ");
       return setError(`Caption is over the limit for: ${names}.`);
     }
-    if (targets.length === 0) return setError("Select at least one channel.");
+    if (effectiveTargets.length === 0) return setError("Select at least one channel.");
     if (!postNow && !scheduledLocal) return setError("Pick a date and time.");
 
     const res = await fetch("/api/posts", {
@@ -348,7 +369,7 @@ export function Composer({
         first_comment: firstComment,
         post_type: textOnly ? "text" : undefined,
         asset_ids: textOnly ? [] : assets.map((a) => a.asset.id),
-        targets,
+        targets: effectiveTargets,
         ...(postNow ? { post_now: true } : { scheduled_local: scheduledLocal }),
         timezone,
         content_kind: contentKind,
@@ -382,7 +403,7 @@ export function Composer({
         asset_ids: textOnly ? [] : assets.map((a) => a.asset.id),
         content_kind: contentKind,
         content_status: libraryStatus,
-        targets,
+        targets: effectiveTargets,
         caption_variants: captionVariantsPayload,
         period_links: periodLinksPayload,
         tag_ids: tagIds,
@@ -611,7 +632,7 @@ export function Composer({
           </p>
           <ChannelSurfacePicker
             channels={channels}
-            value={targets}
+            value={effectiveTargets}
             onChange={setTargets}
             textOnly={textOnly}
             hasVideo={hasVideo}
@@ -620,6 +641,15 @@ export function Composer({
               width: a.asset.width,
               height: a.asset.height,
               duration_ms: a.asset.duration_ms,
+              // byte_size/publish_path/conform_mode: without these the CHIP checked a
+              // narrower shape than the PRUNE above (effectiveTargets, which already
+              // reads the full asset row) — a 400MB video could render its chip enabled
+              // while every click on it silently did nothing. Also lets
+              // destinationDisabledReason tell an out-of-spec original from one that's
+              // already been conformed for the feed (see lib/media-limits.ts).
+              byte_size: a.asset.byte_size,
+              publish_path: a.asset.publish_path,
+              conform_mode: a.asset.conform_mode,
             }))}
             postNow={postNow}
           />
@@ -772,7 +802,7 @@ export function Composer({
 
         <div className="rounded-card border border-border bg-surface p-4">
           <p className="mb-2 text-xs font-medium text-ink-soft">Headed to</p>
-          {targets.length === 0 ? (
+          {effectiveTargets.length === 0 ? (
             <p className="text-xs text-faint">No channels selected yet.</p>
           ) : (
             <ul className="space-y-1.5">

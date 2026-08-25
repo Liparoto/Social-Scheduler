@@ -38,6 +38,11 @@ export default async function ComposePage({
     first_asset_width: p.first_asset_width,
     first_asset_height: p.first_asset_height,
     first_asset_duration_ms: p.first_asset_duration_ms,
+    // So ChannelSurfacePicker can tell an out-of-spec original from one that's already
+    // been conformed for the feed — see lib/media-limits.ts's destinationDisabledReason.
+    first_asset_byte_size: p.first_asset_byte_size,
+    first_asset_publish_path: p.first_asset_publish_path,
+    first_asset_conform_mode: p.first_asset_conform_mode,
   }));
   // "Tomorrow" in the INSTALL's timezone, not UTC. toISOString() is UTC, so from ~5pm
   // Pacific onwards this returned the day AFTER tomorrow and the composer opened on the

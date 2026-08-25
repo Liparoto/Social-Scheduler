@@ -45,6 +45,9 @@ function videoPost(overrides: Partial<LibraryPickItem> = {}): LibraryPickItem {
     first_asset_width: 1080,
     first_asset_height: 1920,
     first_asset_duration_ms: 10_000,
+    first_asset_byte_size: null,
+    first_asset_publish_path: null,
+    first_asset_conform_mode: null,
     ...overrides,
   };
 }
