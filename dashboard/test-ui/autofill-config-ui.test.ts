@@ -9,7 +9,14 @@ import {
   DEFAULT_TIMES,
   laneFor,
 } from "../components/autofill-config.tsx";
-import { lanePatchBody, panelSummary, toLanePanels } from "../lib/autofill-lanes.ts";
+import {
+  initialCadence,
+  lanePatchBody,
+  newSlotDays,
+  panelSummary,
+  saveBlockedReason,
+  toLanePanels,
+} from "../lib/autofill-lanes.ts";
 import { DAYS, parseCadence, serializeCadence } from "../lib/cadence.ts";
 
 // The two mode defaults are what the owner lands on the first time they switch modes — the
@@ -263,4 +270,102 @@ test("the serialized body is exactly what the panel sent before it was extracted
       serializeCadence(DEFAULT_TIMES),
     )},"min_queue_depth":3,"target_queue_depth":7,"reuse_min_age_days":90}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// What an UNCONFIGURED lane opens on. This is the half of "lanes are independent" that a
+// static render cannot see: DEFAULT_LANE.cadenceConfig is null, so the editor used to fall
+// back to a one-slot 18:00 cadence — and on this install the feed lane's cadence IS 18:00
+// daily, which made the fallback indistinguishable from inheritance. Enable Story, press
+// Save without touching the time, and Stories go out at the same instant as feed posts.
+// An unconfigured lane now opens with NO time rows, so the owner has to state the time.
+
+test("an unconfigured lane opens with no time rows at all, rather than a borrowed 18:00", () => {
+  const cadence = initialCadence(laneFor([], "story"));
+  assert.equal(cadence.mode, "times");
+  assert.deepEqual(
+    cadence.mode === "times" ? cadence.slots : null,
+    [],
+    "any pre-filled time here is a time the owner never chose",
+  );
+});
+
+test("a lane with a SAVED cadence still opens on exactly what was saved", () => {
+  const lanes = toLanePanels(
+    ["feed"],
+    [
+      {
+        id: 1, channel_id: 5, group_id: null, surface: "feed" as const, enabled: 1,
+        cadence_config: '{"slots":[{"time":"07:30","days":["mon"]}]}',
+        min_queue_depth: 3, target_queue_depth: 7, reuse_min_age_days: 90,
+      },
+    ],
+    () => ({}),
+  );
+  assert.deepEqual(initialCadence(laneFor(lanes, "feed")), {
+    mode: "times",
+    slots: [{ time: "07:30", days: ["mon"] }],
+  });
+});
+
+test("a saved interval lane is untouched — the empty start is times-mode only", () => {
+  const lanes = toLanePanels(
+    ["feed"],
+    [
+      {
+        id: 1, channel_id: 5, group_id: null, surface: "feed" as const, enabled: 1,
+        cadence_config: '{"mode":"interval","every_minutes":720,"window":{"from":"08:00","to":"20:00"},"days":["mon"]}',
+        min_queue_depth: 3, target_queue_depth: 7, reuse_min_age_days: 90,
+      },
+    ],
+    () => ({}),
+  );
+  const cadence = initialCadence(laneFor(lanes, "feed"));
+  assert.equal(cadence.mode, "interval");
+});
+
+// A lane that is ON with no cadence is skipped by the worker with "no valid cadence" and
+// looks broken from the dashboard, so it must not be savable in the first place.
+
+test("an ENABLED lane with no times cannot be saved, and the reason says what to do", () => {
+  const reason = saveBlockedReason(true, { mode: "times", slots: [] });
+  assert.ok(reason, "an enabled lane with no cadence must not be silently savable");
+  assert.match(String(reason), /time/i);
+});
+
+test("a lane that is switched OFF saves fine with no times — there is nothing to run", () => {
+  assert.equal(saveBlockedReason(false, { mode: "times", slots: [] }), null);
+});
+
+test("nothing is blocked once a time exists, or in interval mode", () => {
+  assert.equal(saveBlockedReason(true, DEFAULT_TIMES), null);
+  assert.equal(saveBlockedReason(true, DEFAULT_INTERVAL), null);
+});
+
+// The first "+ Add a time" on an empty lane has no previous row to copy days from. All
+// seven, not none: a slot with no days is DROPPED by the worker's _parse_times, leaving
+// parse_cadence returning None and the lane silently not filling at all.
+
+test("the first added time carries all seven days, not an empty day list", () => {
+  assert.deepEqual(newSlotDays([]), [...DAYS]);
+});
+
+test("a later added time copies the days of the row above it, as it always did", () => {
+  assert.deepEqual(newSlotDays([{ time: "09:00", days: ["mon", "fri"] }]), ["mon", "fri"]);
+});
+
+// And an unconfigured lane that is saved while still empty must stay unconfigured. Writing
+// `{"slots":[]}` would parse back to the 18:00 default on the next load and quietly put the
+// borrowed time back.
+
+test("saving an empty times cadence writes NULL, so the lane stays unconfigured", () => {
+  const body = lanePatchBody(laneFor([], "story"), {
+    enabled: false,
+    cadence: { mode: "times", slots: [] },
+    minDepth: 0,
+    target: 0,
+    reuseDays: 180,
+    bpp: 0,
+  });
+  assert.equal(body.cadence_config, null);
 });

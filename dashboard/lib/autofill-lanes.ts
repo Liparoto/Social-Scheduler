@@ -1,4 +1,11 @@
-import { type Cadence, parseCadence, serializeCadence, summarize } from "./cadence";
+import {
+  DAYS,
+  type Cadence,
+  type CadenceSlot,
+  parseCadence,
+  serializeCadence,
+  summarize,
+} from "./cadence";
 import type { AutofillLane, Surface } from "./types";
 
 /** One lane as the config panel wants it: camelCase, `enabled` as a real boolean, and the
@@ -100,6 +107,51 @@ export function panelSummary(lanes: LanePanelData[], surfaces: Surface[]): strin
     .join(" — ");
 }
 
+/**
+ * The cadence a lane's editor OPENS on.
+ *
+ * An unconfigured lane (`cadenceConfig === null`) opens on times mode with NO rows, and the
+ * owner adds the first one. It cannot open on a default time, because on a real install the
+ * default time IS another lane's time: this install's feed lane fills at 18:00 daily, so a
+ * Story lane pre-filled with 18:00 is indistinguishable from one that inherited the feed's
+ * cadence — switch it on, press Save without touching the field, and Stories go out at the
+ * same instant as feed posts. Lanes are independent precisely so that cannot happen.
+ *
+ * This is deliberately NOT `parseCadence(null)`: parseCadence has to answer *something* for
+ * a malformed string a real row might hold, and 18:00 is a reasonable answer there. "Never
+ * configured" is a different question, and only the lane knows it.
+ */
+export function initialCadence(lane: LanePanelData): Cadence {
+  if (!lane.cadenceConfig) return { mode: "times", slots: [] };
+  return parseCadence(lane.cadenceConfig);
+}
+
+/**
+ * Why Save is refused, or null when it is allowed.
+ *
+ * A lane that is ON with no times has no valid cadence: the worker's `_parse_times` finds
+ * nothing to merge, `parse_cadence` returns None, and the lane is skipped with "no valid
+ * cadence" — switched on in the dashboard and filling nothing, which reads as broken. So
+ * the empty start above must not be savable while the lane is enabled.
+ *
+ * Switched OFF is fine: an off lane with no times is exactly the unconfigured state, and
+ * the owner may well be saving only its queue depths.
+ */
+export function saveBlockedReason(enabled: boolean, cadence: Cadence): string | null {
+  if (!enabled) return null;
+  if (cadence.mode === "times" && cadence.slots.length === 0) return "Add a time first";
+  return null;
+}
+
+/** The days a newly added time row starts with: the row above it, or — for the FIRST row
+ *  on an empty lane — all seven. Not an empty list: a slot with no days is dropped by the
+ *  worker's `_parse_times`, so a lane whose only time had no days would silently not fill,
+ *  with nothing in the UI saying so. */
+export function newSlotDays(slots: CadenceSlot[]): string[] {
+  const last = slots[slots.length - 1];
+  return last ? [...last.days] : [...DAYS];
+}
+
 /** What the panel's Save button collects, before it becomes a request body. */
 export interface LaneDraft {
   enabled: boolean;
@@ -127,10 +179,15 @@ export interface LaneDraft {
  * outside its five writable columns, so a stray key is a 500 on save.
  */
 export function lanePatchBody(lane: LanePanelData, draft: LaneDraft) {
+  // An empty times cadence saves as NULL, not as `{"slots":[]}`. The lane is still
+  // unconfigured, and it has to READ as unconfigured on the next load — parseCadence
+  // answers 18:00 for a slot list it finds empty, which would quietly put the borrowed
+  // time back the moment the owner saved an off lane's queue depths.
+  const empty = draft.cadence.mode === "times" && draft.cadence.slots.length === 0;
   return {
     surface: lane.surface,
     autofill_enabled: draft.enabled,
-    cadence_config: serializeCadence(draft.cadence),
+    cadence_config: empty ? null : serializeCadence(draft.cadence),
     min_queue_depth: draft.minDepth,
     target_queue_depth: draft.target,
     reuse_min_age_days: draft.reuseDays,

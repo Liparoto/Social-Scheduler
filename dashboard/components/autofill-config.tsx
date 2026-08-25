@@ -8,14 +8,16 @@ import {
   coveredBands,
   deriveBand,
   intervalNote,
-  parseCadence,
   uncoveredBandWarning,
 } from "@/lib/cadence";
 import {
   type LanePanelData,
+  initialCadence,
   laneFor,
   lanePatchBody,
+  newSlotDays,
   panelSummary,
+  saveBlockedReason,
   surfaceLabel,
 } from "@/lib/autofill-lanes";
 import type { Surface } from "@/lib/types";
@@ -215,7 +217,12 @@ function LaneEditor({
 }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(lane.enabled);
-  const [cadence, setCadence] = useState<Cadence>(() => parseCadence(lane.cadenceConfig));
+  // initialCadence, NOT parseCadence: a lane that has never been configured opens with no
+  // time rows, so the owner has to state the time. parseCadence(null) answers 18:00, which
+  // on this install is the FEED lane's time — a Story lane pre-filled with it looks exactly
+  // like one that inherited the feed's cadence, and saving without touching the field posts
+  // Stories at the same instant as feed posts.
+  const [cadence, setCadence] = useState<Cadence>(() => initialCadence(lane));
   // Switching modes must not throw away what was set on the other one — a mis-click on the
   // radio is recoverable, and only Save commits whichever mode is showing.
   const [savedTimes, setSavedTimes] = useState<Cadence>(() =>
@@ -259,6 +266,7 @@ function LaneEditor({
 
   const field = "rounded-md border border-border bg-surface px-2 py-1 text-sm text-ink focus:border-brand";
 
+  const blocked = saveBlockedReason(enabled, cadence);
   const covered = coveredBands(cadence, bandTimes);
   const uncoveredWarnings = (["morning", "afternoon", "evening"] as const)
     .filter((band) => (lane.bandCounts[band] ?? 0) > 0 && !covered.has(band))
@@ -359,10 +367,12 @@ function LaneEditor({
           <button
             type="button"
             onClick={() => {
-              const lastDays = cadence.slots[cadence.slots.length - 1]?.days ?? [];
               setCadence({
                 mode: "times",
-                slots: [...cadence.slots, { time: "12:00", days: [...lastDays] }],
+                slots: [
+                  ...cadence.slots,
+                  { time: "12:00", days: newSlotDays(cadence.slots) },
+                ],
               });
             }}
             className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:border-border-strong hover:text-ink-soft"
@@ -552,7 +562,7 @@ function LaneEditor({
       <div className="flex items-center gap-3">
         <button
           onClick={save}
-          disabled={pending}
+          disabled={pending || blocked !== null}
           className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
         >
           {/* Names the lane it will write, so Save can never look like it commits both. */}
@@ -562,6 +572,10 @@ function LaneEditor({
               ? `Save ${surfaceLabel(lane.surface)} auto-fill`
               : "Save auto-fill"}
         </button>
+        {/* An enabled lane with no cadence is skipped by the worker with "no valid
+            cadence" — switched on in here and filling nothing. Say so at the button
+            rather than accepting the save and letting it look broken later. */}
+        {blocked ? <span className="text-xs text-muted">{blocked}</span> : null}
         {saved && !pending ? (
           <span className="text-xs text-status-posted">Saved</span>
         ) : null}
