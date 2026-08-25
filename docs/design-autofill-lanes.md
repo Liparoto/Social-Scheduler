@@ -347,8 +347,10 @@ Cases that must pass:
 
 **Migration** — assert every previously auto-fill-enabled unit ends with exactly one feed lane
 whose values equal its old columns, and that a grouped channel gets no lane. Run against a
-`sqlite3 .backup` copy: `migrate.py` has no argument parser and applies migrations to
-whatever DB it is pointed at, on any invocation.
+`sqlite3 .backup` copy. `migrate.py` has no argument parser — just a literal
+`"--status" in sys.argv` test (`migrate.py:86`) — so `--status` is safely read-only but every
+other argument, `--help` included, falls through and applies pending migrations to whatever
+`DATABASE_PATH` resolves to.
 
 **Dashboard** — `npm test`. A `lib/` test for `upsertAutofillLane` and for `getBandCounts`
 returning different numbers per surface, following the `makeTestDb()` + dynamic-import `setup()`
