@@ -48,3 +48,11 @@ test("no channels means no counts, on any surface", async () => {
   const { q } = await setup();
   assert.deepEqual(q.getBandCounts([], "story"), {});
 });
+
+test("a group offers a story lane when any member can take a Story", async () => {
+  const { anySupportsStory } = await import("./platforms.ts");
+  assert.equal(anySupportsStory(["facebook", "instagram"]), true);
+  assert.equal(anySupportsStory(["facebook", "telegram"]), false);
+  assert.equal(anySupportsStory([]), false, "an empty group offers nothing");
+  assert.equal(anySupportsStory(["not-a-platform"]), false, "unknown means no");
+});

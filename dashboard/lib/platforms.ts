@@ -247,6 +247,16 @@ export function supportsStory(value: string): boolean {
   return BY_VALUE.get(value)?.supportsStory ?? false;
 }
 
+/** Does ANY of these platforms have a Stories surface?
+ *
+ *  A channel group fills as one unit, and a story lane on a mixed group reaches only its
+ *  story-capable members — so the group offers a Story lane as soon as one member can
+ *  take one. Unknown platforms are false, matching supportsStory's safe default.
+ */
+export function anySupportsStory(platforms: string[]): boolean {
+  return platforms.some(supportsStory);
+}
+
 // Default true is the safe direction for an unrecognised platform: worst case it shows a
 // "Refresh metrics" button / metrics strip that never produces a number, rather than
 // hiding a real metrics capability an unrecognised platform might actually have.
