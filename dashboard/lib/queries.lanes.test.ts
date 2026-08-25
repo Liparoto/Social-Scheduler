@@ -56,3 +56,43 @@ test("a group offers a story lane when any member can take a Story", async () =>
   assert.equal(anySupportsStory([]), false, "an empty group offers nothing");
   assert.equal(anySupportsStory(["not-a-platform"]), false, "unknown means no");
 });
+
+test("upsert creates a lane, then updates it in place", async () => {
+  const { q, db } = await setup();
+  const channelId = db
+    .prepare("INSERT INTO channels (platform, account_name) VALUES ('instagram','IG')")
+    .run().lastInsertRowid as number;
+  const owner = { kind: "channel" as const, id: channelId };
+
+  q.upsertAutofillLane(owner, "story", {
+    enabled: 1,
+    cadence_config: '{"days":["mon"],"time":"12:00"}',
+    min_queue_depth: 2,
+    target_queue_depth: 4,
+    reuse_min_age_days: 30,
+  });
+  q.upsertAutofillLane(owner, "story", { target_queue_depth: 9 });
+
+  const lanes = q.getAutofillLanes(owner);
+  assert.equal(lanes.length, 1, "upsert must not create a second row for the same surface");
+  assert.equal(lanes[0].surface, "story");
+  assert.equal(lanes[0].target_queue_depth, 9);
+  assert.equal(lanes[0].min_queue_depth, 2, "an omitted field is left alone");
+  assert.equal(lanes[0].group_id, null);
+});
+
+test("feed and story lanes on one owner are independent rows", async () => {
+  const { q, db } = await setup();
+  const groupId = db
+    .prepare("INSERT INTO channel_groups (name) VALUES ('G')")
+    .run().lastInsertRowid as number;
+  const owner = { kind: "group" as const, id: groupId };
+
+  q.upsertAutofillLane(owner, "feed", { enabled: 1, target_queue_depth: 5 });
+  q.upsertAutofillLane(owner, "story", { enabled: 1, target_queue_depth: 12 });
+
+  const bySurface = Object.fromEntries(
+    q.getAutofillLanes(owner).map((l) => [l.surface, l.target_queue_depth]),
+  );
+  assert.deepEqual(bySurface, { feed: 5, story: 12 });
+});

@@ -4,7 +4,7 @@ import type { PostTarget, Surface } from "./types";
 // Kept as a runtime mirror of the Surface union in ./types — an unlisted value must fail
 // loudly here rather than be guessed on a route that publishes (see parseTargets below).
 const VALID_SURFACES: readonly Surface[] = ["feed", "story", "reel"];
-function isSurface(value: unknown): value is Surface {
+export function isSurface(value: unknown): value is Surface {
   return VALID_SURFACES.includes(value as Surface);
 }
 

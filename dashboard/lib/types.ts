@@ -106,6 +106,21 @@ export interface ChannelGroup {
   updated_at: string | null;
 }
 
+/** One auto-fill lane: an owner (a channel OR a group, never both) plus a surface.
+ *  Replaces the auto-fill columns that used to live on Channel and ChannelGroup — those
+ *  columns still exist but nothing reads them. See docs/design-autofill-lanes.md. */
+export interface AutofillLane {
+  id: number;
+  channel_id: number | null;
+  group_id: number | null;
+  surface: Surface;
+  enabled: number;
+  cadence_config: string | null;
+  min_queue_depth: number;
+  target_queue_depth: number;
+  reuse_min_age_days: number;
+}
+
 export interface Asset {
   id: number;
   content_hash: string;

@@ -5,6 +5,7 @@ import { isBlocked } from "./format";
 import { FINISHED_STATUSES_SQL } from "./queue-sections";
 import type {
   Asset,
+  AutofillLane,
   CaptionVariant,
   Channel,
   ChannelGroup,
@@ -365,6 +366,53 @@ export function updateChannelGroup(
 export function deleteChannelGroup(id: number): boolean {
   const info = getDb().prepare("DELETE FROM channel_groups WHERE id = ?").run(id);
   return info.changes > 0;
+}
+
+type LaneOwner = { kind: "channel" | "group"; id: number };
+
+function ownerColumn(owner: LaneOwner): "channel_id" | "group_id" {
+  return owner.kind === "group" ? "group_id" : "channel_id";
+}
+
+/** Every lane belonging to one owner, feed first. */
+export function getAutofillLanes(owner: LaneOwner): AutofillLane[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM autofill_lanes WHERE ${ownerColumn(owner)} = ? ORDER BY surface`,
+    )
+    .all(owner.id) as AutofillLane[];
+}
+
+/** Create this owner's lane for `surface`, or update the fields given.
+ *
+ *  An omitted field is left at its current value, which is what lets the form save one
+ *  lane without disturbing the other. Keyed on the partial unique index from migration
+ *  0028, so a concurrent double-save cannot produce two rows for one surface.
+ */
+export function upsertAutofillLane(
+  owner: LaneOwner,
+  surface: Surface,
+  fields: Partial<
+    Pick<
+      AutofillLane,
+      "enabled" | "cadence_config" | "min_queue_depth" | "target_queue_depth" | "reuse_min_age_days"
+    >
+  >,
+): void {
+  const db = getDb();
+  const column = ownerColumn(owner);
+  db.prepare(
+    `INSERT INTO autofill_lanes (${column}, surface) VALUES (?, ?)
+       ON CONFLICT DO NOTHING`,
+  ).run(owner.id, surface);
+
+  const keys = Object.keys(fields) as (keyof typeof fields)[];
+  if (keys.length === 0) return;
+  const assignments = keys.map((k) => `${k} = @${k}`).join(", ");
+  db.prepare(
+    `UPDATE autofill_lanes SET ${assignments}
+      WHERE ${column} = @ownerId AND surface = @surface`,
+  ).run({ ...fields, ownerId: owner.id, surface });
 }
 
 export function setChannelGroup(channelId: number, groupId: number | null): void {

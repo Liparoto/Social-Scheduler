@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteChannelGroup, getChannelGroup, updateChannelGroup } from "@/lib/queries";
+import {
+  deleteChannelGroup,
+  getChannelGroup,
+  updateChannelGroup,
+  upsertAutofillLane,
+} from "@/lib/queries";
+import { isSurface } from "@/lib/story-fanout";
+import type { Surface } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -35,11 +42,18 @@ export async function PATCH(
     }
     fields.name = name;
   }
-  if ("autofill_enabled" in body) fields.autofill_enabled = body.autofill_enabled ? 1 : 0;
-  if ("cadence_config" in body) fields.cadence_config = body.cadence_config || null;
-  if ("min_queue_depth" in body) fields.min_queue_depth = Number(body.min_queue_depth) || 0;
-  if ("target_queue_depth" in body) fields.target_queue_depth = Number(body.target_queue_depth) || 0;
-  if ("reuse_min_age_days" in body) fields.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
+  // Auto-fill config now lives per (owner, surface) in autofill_lanes, not in columns.
+  // The body names its surface; a request without one predates lanes and means feed.
+  const surface: Surface = isSurface(body.surface) ? body.surface : "feed";
+  const lane: Record<string, unknown> = {};
+  if ("autofill_enabled" in body) lane.enabled = body.autofill_enabled ? 1 : 0;
+  if ("cadence_config" in body) lane.cadence_config = body.cadence_config || null;
+  if ("min_queue_depth" in body) lane.min_queue_depth = Number(body.min_queue_depth) || 0;
+  if ("target_queue_depth" in body) lane.target_queue_depth = Number(body.target_queue_depth) || 0;
+  if ("reuse_min_age_days" in body) lane.reuse_min_age_days = Number(body.reuse_min_age_days) || 0;
+  if (Object.keys(lane).length > 0) {
+    upsertAutofillLane({ kind: "group", id: groupId }, surface, lane);
+  }
   // Math.max(0, …) rather than a bare Number: this value divides slot positions,
   // and a negative would silently mean "off" while reading as if it were on.
   if ("bpp_every_days" in body)
