@@ -226,6 +226,81 @@ test("a caller with no assets prop at all leaves Reel enabled", () => {
   assert.doesNotMatch(reelButton(html), /\bdisabled=""/);
 });
 
+// ---- Feed chip, IMAGE assets: every prior case above passed `hasVideo: true` — none of
+// them ever exercised the Feed chip against an IMAGE asset at all, which is exactly the
+// gap that let the FINDING 1 regression through review. instagram.feed.image's aspect
+// range (4:5..1.91:1) and 8MB cap are checked here, including the conform-aware skip: an
+// asset that already has a conformed derivative (publish_path/conform_mode set) must NOT
+// be checked against its own out-of-range original values, because that derivative — not
+// the original — is what's actually published. See lib/media-limits.ts's
+// surfaceReceivesConformedMedia and its matrix cases for the underlying mechanism; these
+// pin that the picker actually wires it through, the same way the Reel section above pins
+// worker parity for video.
+function feedButton(html: string): string {
+  const m = /<button[^>]*>Feed<\/button>/.exec(html);
+  assert.ok(m, "expected a Feed chip in the markup");
+  return m![0];
+}
+
+test("an ordinary iPhone portrait photo with NO conformed derivative disables the Instagram Feed chip", () => {
+  // 1179x2556 (ratio ~0.461) is well outside instagram.feed.image's 4:5..1.91:1 range,
+  // and this asset has no publish_path/conform_mode — the pre-conform state. The chip
+  // must still say why, not just silently disable — same as every other gated chip.
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1179, height: 2556 }],
+  });
+  assert.match(feedButton(html), /\bdisabled=""/);
+  assert.match(html, /Wrong shape for the feed/);
+});
+
+test("FINDING 1 regression pin: the SAME portrait photo, already conformed, leaves the Instagram Feed chip ENABLED", () => {
+  // The exact bug the final review caught: this asset has already been reframed for
+  // Instagram's feed range (publish_path set, built at upload time by
+  // dashboard/lib/conform.ts) — the file Meta actually receives is the cropped
+  // derivative, which is in-range by construction. Checking the ORIGINAL's 1179x2556
+  // against instagram.feed.image's aspect range wrongly disabled this chip for the
+  // owner's most common content before this fix.
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1179, height: 2556, publish_path: "pub/abc.jpg" }],
+  });
+  assert.doesNotMatch(feedButton(html), /\bdisabled=""/);
+});
+
+test("an oversized image with NO conformed derivative disables the Instagram Feed chip on size", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1000, height: 1000, byte_size: 9_000_000 }],
+  });
+  assert.match(feedButton(html), /\bdisabled=""/);
+  assert.match(html, /Too large for the feed/);
+});
+
+test("the same oversized image, already conformed via conform_mode alone, leaves Feed enabled", () => {
+  // conform_mode set with no publish_path is still a signal this asset has a derivative
+  // (the fix's OR condition) — conform.ts's encodeUnderLimit guarantees the sent file is
+  // under the 8MB cap by construction, regardless of this row's own byte_size.
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1000, height: 1000, byte_size: 9_000_000, conform_mode: "pad" }],
+  });
+  assert.doesNotMatch(feedButton(html), /\bdisabled=""/);
+});
+
+test("an in-spec image leaves the Instagram Feed chip enabled whether or not it has a derivative", () => {
+  const html = render({
+    channels: [ig],
+    hasVideo: false,
+    assets: [{ width: 1080, height: 1350 }], // 4:5, well within range
+  });
+  assert.doesNotMatch(feedButton(html), /\bdisabled=""/);
+});
+
 // ---- Story chip: gated by the SAME shared limits, closing the owner's original bug
 // report — an over-long video could be sent to an Instagram Story and only fail at Meta,
 // long after the post had already read "scheduled". ------------------------------------

@@ -78,7 +78,19 @@ export function ChannelSurfacePicker({
    *  (and duration) to hand (the sends panel, schedule-from-library) simply don't get the
    *  note — and, per destinationDisabledReason, an unknown value never disables the chip
    *  on its own. */
-  assets?: { width: number | null; height: number | null; duration_ms?: number | null }[];
+  assets?: {
+    width: number | null;
+    height: number | null;
+    duration_ms?: number | null;
+    // Threaded through so destinationDisabledReason can tell a genuinely out-of-spec
+    // asset from one that's already been conformed for the feed — see
+    // lib/media-limits.ts's surfaceReceivesConformedMedia. Optional, same as the fields
+    // above: a caller without them just gets the pre-conform-aware behaviour (checked
+    // against this asset's own width/height/byte_size), never a wrongly-enabled chip.
+    byte_size?: number | null;
+    publish_path?: string | null;
+    conform_mode?: string | null;
+  }[];
   postNow?: boolean;
 }) {
   const storyCount = Math.max(slideCount, 1);

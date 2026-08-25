@@ -38,6 +38,11 @@ export type AssetLike = {
   width?: number | null;
   height?: number | null;
   byte_size?: number | null;
+  // Whether — and how — this asset has already been reframed for Instagram's feed range
+  // (dashboard/lib/conform.ts), so checkMedia can tell a conformed derivative from the
+  // untouched original. See surfaceReceivesConformedMedia below for why this matters.
+  publish_path?: string | null;
+  conform_mode?: string | null;
 };
 
 type RawLimits = {
@@ -73,6 +78,37 @@ function ratioAbove(w: number, h: number, [aw, ah]: [number, number]): boolean {
   return w * ah > aw * h;
 }
 
+// Mirrors worker/clients.py's PlatformCaps.needs_conformed_media: true when a platform
+// constrains aspect ratio, so it should be sent the Instagram-conformed derivative
+// (assets.publish_path) rather than the untouched original. No assert guards this against
+// drifting from the worker's copy, same caveat as every other platforms.ts-style mirror
+// in this file (see the top-of-file comment there).
+const NEEDS_CONFORMED_MEDIA: Record<string, boolean> = {
+  instagram: true, facebook: true, threads: true, discord: false, telegram: false, tiktok: false,
+};
+
+/**
+ * Whether SURFACE actually receives the conformed derivative (assets.publish_path) for
+ * this media kind, once the asset has one — i.e. whether checking the asset's OWN
+ * width/height/byte_size for aspect ratio and byte size would be checking a file that is
+ * never actually published. Mirrors worker/publisher.py's _needs_conformed, PLUS the
+ * story/cover carve-out its caller _resolve_rel applies on top of it: _resolve_rel's
+ * story and cover branches ignore needs_conformed entirely and always prefer their OWN
+ * file (a Story's own 9:16 canvas, built by a separate pipeline — migration 0015 — or
+ * simply the untouched original; a Reel's cover is always the untouched cover-conformed
+ * original) over the feed-shaped derivative. So only feed/reel ever actually serve it.
+ *
+ * Video's one extra wrinkle (Facebook's /videos feed edge, which accepts any aspect
+ * ratio) mirrors caps.feed_video_is_constrained; images have no such exception.
+ */
+function surfaceReceivesConformedMedia(
+  platform: string, surface: string, mediaKind: string | null | undefined,
+): boolean {
+  if (surface === "story" || surface === "cover") return false;
+  if (mediaKind === "video" && surface === "feed" && platform === "facebook") return false;
+  return NEEDS_CONFORMED_MEDIA[platform] ?? true;
+}
+
 export function checkMedia(
   platform: string, surface: string, asset: AssetLike, data: PlatformsData = REAL_PLATFORMS,
 ): Violation[] {
@@ -81,6 +117,19 @@ export function checkMedia(
   // A limit that VARIES by account can never be enforced honestly — warn, never refuse.
   const severity: Violation["severity"] = entry.varies ? "warn" : "refuse";
   const out: Violation[] = [];
+
+  // True when this asset already has a conformed derivative AND this surface is one that
+  // actually gets served it — see surfaceReceivesConformedMedia above. When true, the
+  // aspect-ratio and byte-size checks below are skipped entirely: conformance guarantees
+  // the file that is actually sent already satisfies both, by construction
+  // (dashboard/lib/conform.ts's IG_MIN_RATIO/IG_MAX_RATIO/encodeUnderLimit). An iPhone
+  // portrait photo (1179x2556) is the everyday case this matters for — its ORIGINAL fails
+  // instagram.feed.image's aspect range, but the conformed derivative that is actually
+  // published never does. Duration is unaffected either way: conforming never changes it.
+  const hasConformedDerivative =
+    Boolean(asset.publish_path) || (asset.conform_mode != null && asset.conform_mode !== "none");
+  const mediaIsConformed =
+    hasConformedDerivative && surfaceReceivesConformedMedia(platform, surface, asset.media_kind);
 
   // Every check is guarded on the value being KNOWN. Unknown metadata must never refuse:
   // assets predating the video pipeline carry no duration at all. A `null` must never be
@@ -105,14 +154,15 @@ export function checkMedia(
         (entry.max_height != null && h > entry.max_height)) {
       out.push({ kind: "too_large", message: `larger than ${entry.max_width ?? "?"}x${entry.max_height ?? "?"}`, severity });
     }
-    if ((entry.min_aspect && ratioBelow(w, h, entry.min_aspect)) ||
-        (entry.max_aspect && ratioAbove(w, h, entry.max_aspect))) {
+    if (!mediaIsConformed &&
+        ((entry.min_aspect && ratioBelow(w, h, entry.min_aspect)) ||
+         (entry.max_aspect && ratioAbove(w, h, entry.max_aspect)))) {
       out.push({ kind: "wrong_aspect", message: `aspect ratio ${w}x${h}`, severity });
     }
   }
 
   const b = asset.byte_size;
-  if (b != null && entry.max_bytes != null && b > entry.max_bytes) {
+  if (!mediaIsConformed && b != null && entry.max_bytes != null && b > entry.max_bytes) {
     out.push({ kind: "too_large", message: `larger than ${entry.max_bytes} bytes`, severity });
   }
 
