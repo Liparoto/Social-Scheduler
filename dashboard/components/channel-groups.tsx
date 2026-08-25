@@ -3,6 +3,8 @@
 import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AutofillConfig } from "./autofill-config";
+import type { LanePanelData } from "@/lib/autofill-lanes";
+import type { Surface } from "@/lib/types";
 import { ChannelTimezone } from "./channel-timezone";
 import { TimezonePicker } from "./timezone-picker";
 import { tzAbbrev } from "@/lib/format";
@@ -11,15 +13,13 @@ export interface GroupRow {
   id: number;
   name: string;
   timezone: string;
-  autofill_enabled: number;
-  cadence_config: string | null;
-  min_queue_depth: number;
-  target_queue_depth: number;
-  reuse_min_age_days: number;
   bpp_every_days: number;
   bpp_pool_size: number;
-  /** Ready feed posts per time_of_day band, across every member — see getBandCounts. */
-  band_counts: Record<string, number>;
+  /** The group's auto-fill lanes, one per surface it offers — see toLanePanels. Replaces
+   *  the flat autofill_* columns, which nothing reads since migration 0028. */
+  lanes: LanePanelData[];
+  /** Which surfaces this group can offer — "story" only when a member can post one. */
+  surfaces: Surface[];
   members: { id: number; account_name: string; platform: string }[];
 }
 
@@ -120,15 +120,11 @@ export function ChannelGroups({
             <ChannelTimezone target={{ kind: "group", id: g.id }} timezone={g.timezone} />
             <AutofillConfig
               target={{ kind: "group", id: g.id }}
-              enabled={g.autofill_enabled === 1}
-              cadenceConfig={g.cadence_config}
-              minQueueDepth={g.min_queue_depth}
-              targetQueueDepth={g.target_queue_depth}
-              reuseMinAgeDays={g.reuse_min_age_days}
+              surfaces={g.surfaces}
+              lanes={g.lanes}
               bppEveryDays={g.bpp_every_days ?? 0}
               bppPoolSize={g.bpp_pool_size ?? 0}
               bandTimes={bandTimes}
-              bandCounts={g.band_counts ?? {}}
             />
           </div>
         ))}

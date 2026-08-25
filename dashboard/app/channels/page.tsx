@@ -1,11 +1,21 @@
 import { getBppPool } from "@/lib/insights-queries";
-import { getChannels, listChannelGroups, getGroupMembers, getBandCounts } from "@/lib/queries";
+import {
+  getChannels,
+  listChannelGroups,
+  getGroupMembers,
+  getBandCounts,
+  getAutofillLanes,
+} from "@/lib/queries";
 import { config } from "@/lib/config";
+import { toLanePanels } from "@/lib/autofill-lanes";
+import type { Surface } from "@/lib/types";
 import {
   accountIdLabel,
+  anySupportsStory,
   oauthConnectPath,
   platformLabel,
   supportsAvatar,
+  supportsStory,
   usesAccountId,
 } from "@/lib/platforms";
 import { PageHeader, ChannelChip, ChannelAvatar, EmptyState } from "@/components/ui";
@@ -23,6 +33,13 @@ import { tzAbbrev } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
+/** Which auto-fill lanes an ungrouped channel can offer. Instagram is the only platform
+ *  with a Story surface, so every other channel gets the single-lane panel it always had —
+ *  no switch, nothing new to learn. */
+function channelSurfaces(platform: string): Surface[] {
+  return supportsStory(platform) ? ["feed", "story"] : ["feed"];
+}
+
 export default async function ChannelsPage({
   searchParams,
 }: {
@@ -36,25 +53,32 @@ export default async function ChannelsPage({
   // connection looks identical to a successful one that simply has not appeared yet.
   const params = await searchParams;
   const channels = getChannels();
-  const groups = listChannelGroups().map((g) => ({
-    id: g.id,
-    name: g.name,
-    timezone: g.timezone,
-    autofill_enabled: g.autofill_enabled,
-    cadence_config: g.cadence_config,
-    min_queue_depth: g.min_queue_depth,
-    target_queue_depth: g.target_queue_depth,
-    reuse_min_age_days: g.reuse_min_age_days,
-    bpp_every_days: g.bpp_every_days,
-    // Pool is measured against a MEMBER: a group sends what its members can send.
-    bpp_pool_size: getBppPool(getGroupMembers(g.id)[0]?.id ?? 0).usable,
-    band_counts: getBandCounts(getGroupMembers(g.id).map((m) => m.id), "feed"),
-    members: getGroupMembers(g.id).map((m) => ({
-      id: m.id,
-      account_name: m.account_name,
-      platform: m.platform,
-    })),
-  }));
+  const groups = listChannelGroups().map((g) => {
+    const members = getGroupMembers(g.id);
+    const memberIds = members.map((m) => m.id);
+    // A group offers a Story lane only when one of its members can actually post a Story —
+    // otherwise the lane would be configurable and never fire.
+    const surfaces: Surface[] = anySupportsStory(members.map((m) => m.platform))
+      ? ["feed", "story"]
+      : ["feed"];
+    return {
+      id: g.id,
+      name: g.name,
+      timezone: g.timezone,
+      bpp_every_days: g.bpp_every_days,
+      // Pool is measured against a MEMBER: a group sends what its members can send.
+      bpp_pool_size: getBppPool(members[0]?.id ?? 0).usable,
+      surfaces,
+      lanes: toLanePanels(surfaces, getAutofillLanes({ kind: "group", id: g.id }), (s) =>
+        getBandCounts(memberIds, s),
+      ),
+      members: members.map((m) => ({
+        id: m.id,
+        account_name: m.account_name,
+        platform: m.platform,
+      })),
+    };
+  });
   const groupNames = new Map(groups.map((g) => [g.id, g.name]));
   const groupTimezones = new Map(groups.map((g) => [g.id, g.timezone]));
 
@@ -254,15 +278,15 @@ export default async function ChannelsPage({
                 {c.group_id === null ? (
                   <AutofillConfig
                     target={{ kind: "channel", id: c.id }}
-                    enabled={c.autofill_enabled === 1}
-                    cadenceConfig={c.cadence_config}
-                    minQueueDepth={c.min_queue_depth}
-                    targetQueueDepth={c.target_queue_depth}
-                    reuseMinAgeDays={c.reuse_min_age_days}
+                    surfaces={channelSurfaces(c.platform)}
+                    lanes={toLanePanels(
+                      channelSurfaces(c.platform),
+                      getAutofillLanes({ kind: "channel", id: c.id }),
+                      (s) => getBandCounts([c.id], s),
+                    )}
                     bppEveryDays={c.bpp_every_days ?? 0}
                     bppPoolSize={getBppPool(c.id).usable}
                     bandTimes={config.bandTimes}
-                    bandCounts={getBandCounts([c.id], "feed")}
                   />
                 ) : (
                   <p className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3 text-xs text-muted">
