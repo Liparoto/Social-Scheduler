@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { limitsFor, checkMedia, anyDestinationAccepts, type PlatformsData } from "./media-limits.ts";
+import {
+  limitsFor, checkMedia, anyDestinationAccepts, needsConformedDerivative, type PlatformsData,
+} from "./media-limits.ts";
 import matrix from "./media-limits-matrix.json" with { type: "json" };
 
 test("facebook reel limits load from the shared file", () => {
@@ -104,4 +106,42 @@ test("REFUSAL BRANCH (synthetic data): a video under every stub cap is accepted"
   };
   const asset = { media_kind: "video", duration_ms: 60 * 1000, width: 1080, height: 1920 };
   assert.equal(anyDestinationAccepts(asset, stub), true);
+});
+
+// ---- needsConformedDerivative -------------------------------------------------------
+//
+// Three cases, matching the ones reasoned through before this task was dispatched:
+//
+// 1. An 18-minute clip fails BOTH conform-requiring destinations (Instagram feed,
+//    Facebook Reels) for `too_long` — a duration problem, which no re-encode can fix
+//    (this app never trims footage). No derivative is worth building.
+// 2. A 30-second 4K VERTICAL clip (2160x3840) is refused by Instagram's feed only for
+//    being `too_large` (width 2160 > max_width 1920) — exactly what downscaling fixes —
+//    and is accepted outright by Facebook Reels (540x960 min, 9:16..16:9 inclusive, and
+//    2160:3840 is exactly 9:16). This is the case an "accepts it AS-IS" predicate gets
+//    wrong: the everyday 4K-shooting-iPhone case this pipeline exists for.
+// 3. A 30-second 1080x1920 clip is accepted outright by both — trivially worth building.
+
+test("an 18-minute video gets no conformed derivative — too_long isn't fixable by conversion", () => {
+  const asset = { media_kind: "video", duration_ms: 18 * 60 * 1000, width: 3840, height: 2160 };
+  assert.equal(needsConformedDerivative(asset), false);
+});
+
+test("a 30-second 4K vertical clip still gets one — its only refusal (too_large/width) IS fixable", () => {
+  const asset = { media_kind: "video", duration_ms: 30_000, width: 2160, height: 3840 };
+  assert.equal(needsConformedDerivative(asset), true);
+});
+
+test("a 30-second 1080x1920 clip gets one — accepted outright by both conform-requiring destinations", () => {
+  const asset = { media_kind: "video", duration_ms: 30_000, width: 1080, height: 1920 };
+  assert.equal(needsConformedDerivative(asset), true);
+});
+
+test("a video refused only by a non-conform-requiring surface (Instagram story) still gets a derivative", () => {
+  // instagram/story is deliberately excluded from CONFORM_REQUIRING (nothing consumes
+  // the feed-shaped derivative there — see the function's comment) — a 61-second clip
+  // busts story's 60s cap but is well within Instagram feed's 15-minute cap and Facebook
+  // Reels' shape, so this must stay true regardless of what story thinks.
+  const asset = { media_kind: "video", duration_ms: 61_000, width: 1080, height: 1920 };
+  assert.equal(needsConformedDerivative(asset), true);
 });

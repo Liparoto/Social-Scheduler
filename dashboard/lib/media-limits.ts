@@ -191,3 +191,66 @@ export function anyDestinationAccepts(asset: AssetLike, data: PlatformsData = RE
   }
   return false;
 }
+
+/**
+ * Which video destinations the conformed derivative (the Instagram-shaped, downscaled/
+ * re-encoded copy built at upload time) actually gets USED by, once built —
+ * i.e. which surfaces' `_resolve_rel` (worker/publisher.py) would ever read publish_path
+ * for video. NOT every platform/surface that happens to have a video entry in
+ * media-limits.json:
+ *
+ *   - instagram/feed  — needs_conformed_media=True (worker/clients.py), and _resolve_rel
+ *     prefers publish_path here. Included.
+ *   - instagram/story — ALSO needs_conformed_media=True, but _resolve_rel's story branch
+ *     is `canvas or original or conformed`: it reads story_path (a separate 9:16 canvas
+ *     built by a different pipeline, migration 0015), falling back to the untouched
+ *     original, and only reaches the feed-shaped conformed derivative as a last-ditch
+ *     fallback nothing in normal operation exercises. Building a feed-conform derivative
+ *     for a surface that never wants it is exactly the waste this function exists to
+ *     avoid. Excluded.
+ *   - facebook/feed   — feed_video_is_constrained=False: the endpoint accepts any aspect
+ *     ratio, so _resolve_rel prefers the untouched original. Excluded.
+ *   - facebook/reel   — feed_video_is_constrained has no effect here (that flag only
+ *     covers the *feed* surface); Reels ARE aspect/size constrained, so _resolve_rel
+ *     prefers publish_path. Included.
+ *   - tiktok/feed     — needs_conformed_media=False (TikTok's own upload API handles
+ *     transcoding). Excluded.
+ */
+const CONFORM_REQUIRING: Array<[platform: string, surface: string]> = [
+  ["instagram", "feed"],
+  ["facebook", "reel"],
+];
+
+// Violation kinds a re-encode/downscale can actually repair. Mirrors video-spec.ts's
+// fatal/convertible split (same reasoning, same naming intent, different data source):
+// this app never trims or crops footage — that is an editorial decision it must not
+// make — so a duration or framing problem is never fixable by conversion. A resolution,
+// byte-size, or container/codec problem genuinely is.
+const FIXABLE_BY_CONVERSION: ReadonlySet<Violation["kind"]> = new Set(["too_large", "wrong_format"]);
+
+/**
+ * Whether building the conformed derivative is worth it for this VIDEO asset: true only
+ * when some destination that actually USES a conformed derivative (see
+ * CONFORM_REQUIRING's comment) either already accepts this asset as-is, or refuses it
+ * only for reasons conversion can fix.
+ *
+ * This is deliberately NOT "would a conform-requiring destination accept this asset
+ * today" — that phrasing gets the everyday case backwards. A 4K vertical clip
+ * (2160x3840) is refused by Instagram's feed for being too wide (max_width 1920), and
+ * downscaling to 1920 is exactly what conforming does. Asking "does it already fit"
+ * would skip the transcode in precisely the case the transcode exists to fix — this is
+ * not hypothetical, it is the owner's iPhone's default 4K recording. So each
+ * conform-requiring destination is asked "after conversion could fix what conversion CAN
+ * fix, would this still be refused?" — i.e. do only NON-fixable ("refuse") violations
+ * remain? If every conform-requiring destination has at least one non-fixable refusal
+ * (too_short/too_long/too_small/wrong_aspect — trimming/reframing, which this app never
+ * does), there is nothing conversion could achieve for any of them, and building the
+ * derivative would be pure waste (e.g. an 18-minute clip: too_long for both Instagram's
+ * feed and Facebook's Reels, and no re-encode adds time back).
+ */
+export function needsConformedDerivative(asset: AssetLike): boolean {
+  return CONFORM_REQUIRING.some(([platform, surface]) => {
+    const refusals = checkMedia(platform, surface, asset).filter((v) => v.severity === "refuse");
+    return refusals.every((v) => FIXABLE_BY_CONVERSION.has(v.kind));
+  });
+}

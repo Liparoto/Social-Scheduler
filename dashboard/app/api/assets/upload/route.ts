@@ -12,7 +12,7 @@ import { validateReel, classifyReelErrors, humanDuration, REEL_MIME_TYPES } from
 import { findConverter, convertVideo, ConvertError } from "@/lib/video-convert";
 import { converterAdvice } from "@/lib/converter-advice";
 import { IMAGE_EXT_BY_MIME, resolveUploadMime } from "@/lib/upload-mime";
-import { anyDestinationAccepts, type AssetLike } from "@/lib/media-limits";
+import { anyDestinationAccepts, needsConformedDerivative, type AssetLike } from "@/lib/media-limits";
 
 export const runtime = "nodejs";
 
@@ -107,10 +107,17 @@ export async function POST(req: NextRequest) {
 
     const storageRel = `${hash}.${ext}`;
 
-    if (check.convertible.length === 0) {
-      // In spec already — today's path, unchanged: no conform derivative, publish_path
-      // stays NULL, so the worker's existing _resolve_url precedence falls through to
-      // storage_path with no worker change.
+    // Only bother transcoding when some destination that actually USES a conformed
+    // derivative could benefit from one — see needsConformedDerivative's comment. An
+    // 18-minute clip fails every conform-requiring surface no matter what shape it's
+    // encoded in (too_long is not fixable by conversion), so spending minutes
+    // transcoding it toward a spec it can never meet is pure waste; it reaches
+    // Facebook's feed as the untouched original either way.
+    if (check.convertible.length === 0 || !needsConformedDerivative(assetLike)) {
+      // In spec already, OR nothing that would use the derivative can be fixed by
+      // conversion — no conform derivative, publish_path stays NULL, so the worker's
+      // existing _resolve_url precedence falls through to storage_path with no worker
+      // change.
       await fs.mkdir(config.assetStorageDir, { recursive: true });
       await fs.writeFile(path.join(config.assetStorageDir, storageRel), buf);
 
