@@ -247,10 +247,15 @@ const FIXABLE_BY_CONVERSION: ReadonlySet<Violation["kind"]> = new Set(["too_larg
  * does), there is nothing conversion could achieve for any of them, and building the
  * derivative would be pure waste (e.g. an 18-minute clip: too_long for both Instagram's
  * feed and Facebook's Reels, and no re-encode adds time back).
+ *
+ * `data` defaults to the real media-limits.json for every production call, same pattern
+ * as `anyDestinationAccepts` above — tests pass a synthetic `data` to pin the
+ * CONFORM_REQUIRING exclusion list itself (e.g. proving instagram/story staying excluded
+ * actually matters), which real data cannot exercise on demand.
  */
-export function needsConformedDerivative(asset: AssetLike): boolean {
+export function needsConformedDerivative(asset: AssetLike, data: PlatformsData = REAL_PLATFORMS): boolean {
   return CONFORM_REQUIRING.some(([platform, surface]) => {
-    const refusals = checkMedia(platform, surface, asset).filter((v) => v.severity === "refuse");
+    const refusals = checkMedia(platform, surface, asset, data).filter((v) => v.severity === "refuse");
     return refusals.every((v) => FIXABLE_BY_CONVERSION.has(v.kind));
   });
 }

@@ -145,3 +145,51 @@ test("a video refused only by a non-conform-requiring surface (Instagram story) 
   const asset = { media_kind: "video", duration_ms: 61_000, width: 1080, height: 1920 };
   assert.equal(needsConformedDerivative(asset), true);
 });
+
+// The two cases above (2160x3840 4K vertical, and the 61s story-only refusal) both pass
+// whether or not the corrections behind this function were actually applied: the 4K case
+// is accepted OUTRIGHT by facebook/reel (that entry has no max_width/max_height, only
+// minimums), so a WRONG "accepts as-is" predicate returns true too — Instagram's
+// "accepts after conversion" path is never exercised. And the 61s case is accepted
+// outright by instagram/feed alone, so it passes whether instagram/story is correctly
+// excluded from CONFORM_REQUIRING or wrongly re-added. Both tests below exist
+// specifically to close those two gaps — do not read them as arbitrary and delete them.
+
+test("DISCRIMINATING CASE: a 120s 2560x1440 clip needs the 'accepts AFTER conversion' predicate, not 'accepts as-is'", () => {
+  // instagram/feed: duration 120s is well under its 15-minute cap, but width 2560 >
+  // max_width 1920 — refused ONLY for too_large, which downscaling fixes. So this
+  // destination counts as "worth converting for" under the corrected predicate.
+  // facebook/reel: duration 120s > its 90s cap — refused for too_long, NOT fixable by
+  // any re-encode (width/height/aspect are all in range: 2560x1440 is exactly 16:9,
+  // the inclusive upper edge of facebook/reel's aspect band). So this destination alone
+  // could never justify building a derivative.
+  // A correct predicate returns true (instagram/feed alone is enough). A predicate that
+  // asks "does some conform-requiring destination accept this AS-IS" (the brief's
+  // original, backward version) returns false here — neither destination accepts the
+  // asset unconverted. The two predicates finally disagree on this input, which is why
+  // it's the regression guard for correction 2, not the 4K-vertical case above.
+  const asset = { media_kind: "video", duration_ms: 120_000, width: 2560, height: 1440 };
+  assert.equal(needsConformedDerivative(asset), true);
+});
+
+test("DISCRIMINATING CASE (synthetic data): instagram/story must stay excluded from CONFORM_REQUIRING", () => {
+  // Stub where BOTH conform-requiring destinations (instagram/feed, facebook/reel)
+  // refuse the asset non-fixably (too_long, low caps), but instagram/story — which is
+  // NOT conform-requiring, because _resolve_rel never reads the feed-shaped derivative
+  // for stories — would happily accept it (a generous cap). With the correct
+  // CONFORM_REQUIRING list this must be false: story's willingness to accept is
+  // irrelevant to whether building the derivative is worth it. If instagram/story were
+  // ever mistakenly added back to CONFORM_REQUIRING, this flips to true, which is
+  // exactly the regression this test exists to catch.
+  const stub: PlatformsData = {
+    instagram: {
+      feed: { video: { max_duration_ms: 10_000, note: "stub: low cap, non-fixable refusal" } },
+      story: { video: { max_duration_ms: 999_999, note: "stub: generous cap — would accept" } },
+    },
+    facebook: {
+      reel: { video: { max_duration_ms: 10_000, note: "stub: low cap, non-fixable refusal" } },
+    },
+  };
+  const asset = { media_kind: "video", duration_ms: 20_000, width: 1080, height: 1920 };
+  assert.equal(needsConformedDerivative(asset, stub), false);
+});
