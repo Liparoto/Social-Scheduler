@@ -870,9 +870,15 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
     # same line. A story lane on a Telegram channel must be refused by the WORKER — the
     # dashboard hides the option, but the worker must never depend on the UI for
     # correctness.
+    # .get(), matching _platform_capability_params: a platform PLATFORM_CAPS does not
+    # recognize has no surfaces, which is the safe direction — that member sits the lane
+    # out. A bare subscript would raise KeyError all the way out of run_autofill and stop
+    # EVERY lane in the install, not just the unrecognized platform's.
     members = [
         m for m in lane.members
-        if lane.surface in PLATFORM_CAPS[m["platform"]].surfaces
+        if lane.surface in getattr(
+            PLATFORM_CAPS.get(m["platform"]), "surfaces", frozenset()
+        )
     ]
     if not members:
         if logger:

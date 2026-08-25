@@ -348,3 +348,44 @@ def test_a_story_lane_never_queues_a_bpp_recycle(conn, config):
         "SELECT COUNT(*) FROM publications WHERE is_recycled = 1"
     ).fetchone()[0]
     assert recycled == 0, "BPP is a feed-only concept"
+
+
+def test_a_platform_missing_from_platform_caps_skips_its_lane_not_every_lane(
+    conn, config, monkeypatch
+):
+    """An unknown platform must be read as "does not have this surface" — never a crash.
+
+    channels.platform carries a CHECK listing exactly the six keys PLATFORM_CAPS holds,
+    so this cannot happen today. It becomes possible the moment a migration widens that
+    CHECK without touching PLATFORM_CAPS, and the failure mode is out of proportion to
+    the mistake: a bare subscript raises KeyError out of run_autofill and stops EVERY
+    lane in the install, including the ones that have nothing to do with the new
+    platform. _platform_capability_params already uses .get() for exactly this reason.
+
+    Simulated by removing a key rather than inserting an illegal platform, because the
+    CHECK correctly refuses one.
+    """
+    from worker import autofill as af
+
+    ig = make_channel(conn, platform="instagram", name="IG")
+    th = make_channel(conn, platform="threads", name="TH")
+    make_lane(conn, channel_id=ig, surface="feed", min_depth=2, target=2)
+    make_lane(conn, channel_id=th, surface="feed", min_depth=2, target=2)
+    make_post(conn, targets=[(ig, "feed")])
+    make_post(conn, targets=[(th, "feed")])
+    conn.commit()
+
+    monkeypatch.setattr(
+        af, "PLATFORM_CAPS",
+        {k: v for k, v in af.PLATFORM_CAPS.items() if k != "threads"},
+    )
+
+    run_autofill(conn, config, _now())
+
+    by_channel = {
+        r["channel_id"]: r["n"] for r in conn.execute(
+            "SELECT channel_id, COUNT(*) AS n FROM publications GROUP BY channel_id"
+        ).fetchall()
+    }
+    assert by_channel.get(ig, 0) > 0, "a known platform's lane must still fill"
+    assert by_channel.get(th, 0) == 0, "an unknown platform has no surfaces — skip it"
