@@ -48,7 +48,7 @@ export default async function ChannelsPage({
     bpp_every_days: g.bpp_every_days,
     // Pool is measured against a MEMBER: a group sends what its members can send.
     bpp_pool_size: getBppPool(getGroupMembers(g.id)[0]?.id ?? 0).usable,
-    band_counts: getBandCounts(getGroupMembers(g.id).map((m) => m.id)),
+    band_counts: getBandCounts(getGroupMembers(g.id).map((m) => m.id), "feed"),
     members: getGroupMembers(g.id).map((m) => ({
       id: m.id,
       account_name: m.account_name,
@@ -262,7 +262,7 @@ export default async function ChannelsPage({
                     bppEveryDays={c.bpp_every_days ?? 0}
                     bppPoolSize={getBppPool(c.id).usable}
                     bandTimes={config.bandTimes}
-                    bandCounts={getBandCounts([c.id])}
+                    bandCounts={getBandCounts([c.id], "feed")}
                   />
                 ) : (
                   <p className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3 text-xs text-muted">

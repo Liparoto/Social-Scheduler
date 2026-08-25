@@ -291,7 +291,7 @@ export function getGroupMembers(groupId: number): Channel[] {
     .all(groupId) as Channel[];
 }
 
-/** Ready, feed-targeted posts per time_of_day band, across a set of channels.
+/** Ready posts targeted at `surface`, per time_of_day band, across a set of channels.
  *
  *  Feeds the auto-fill form's coverage warning: a band with content but no slot in the
  *  cadence means those posts silently stop being auto-filled, and the queue goes on looking
@@ -300,8 +300,15 @@ export function getGroupMembers(groupId: number): Channel[] {
  *  Deliberately approximate — it does NOT re-run cooldown, period or caption-length
  *  eligibility. Making it exact would mean running the full selection pass on every page
  *  render to sharpen a number whose only job is "this band has content and nowhere to put it".
+ *
+ *  Surface matters: a warning that lies is worse than no warning. Counting feed posts
+ *  for a story lane would flag bands the lane has no problem with, and this warning is
+ *  the only safety net the strict band rule has.
  */
-export function getBandCounts(channelIds: number[]): Record<string, number> {
+export function getBandCounts(
+  channelIds: number[],
+  surface: Surface,
+): Record<string, number> {
   if (channelIds.length === 0) return {};
   const placeholders = channelIds.map(() => "?").join(",");
   const rows = getDb()
@@ -315,10 +322,10 @@ export function getBandCounts(channelIds: number[]): Record<string, number> {
           AND EXISTS (SELECT 1 FROM post_targets ptg
                        WHERE ptg.post_id = p.id
                          AND ptg.channel_id IN (${placeholders})
-                         AND ptg.surface = 'feed')
+                         AND ptg.surface = ?)
         GROUP BY t.name`,
     )
-    .all(...channelIds) as { band: string; n: number }[];
+    .all(...channelIds, surface) as { band: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.band, r.n]));
 }
 
