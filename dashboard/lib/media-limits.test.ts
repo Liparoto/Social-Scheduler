@@ -22,10 +22,23 @@ test("unknown metadata never refuses", () => {
 
 // The whole point of the shared file: this matrix is the SAME file the Python side
 // reads in test_media_limits_agreement.py. A case added here is covered on both sides.
+//
+// severity is compared alongside kind (Finding 5, final review): before this, a case
+// like discord's `varies` entry (`expect: []`) proved nothing about severity at all, and
+// the varies -> "warn" mapping could be reverted in ONE language with a fully green
+// suite — in the one test whose entire purpose is that the two languages cannot diverge.
+// message is deliberately NOT compared: Python formats numbers with `:g`, TypeScript
+// with plain division, and those happen to agree for every value in this file today but
+// aren't guaranteed to — see the matrix's own _coverage_note for that known-untested
+// divergence, recorded rather than silently ignored.
 for (const [i, c] of matrix.cases.entries()) {
   test(`matrix case ${i}: ${c.platform}/${c.surface}`, () => {
-    const got = checkMedia(c.platform, c.surface, c.asset).map((v) => v.kind).sort();
-    assert.deepEqual(got, [...c.expect].sort());
+    const got = checkMedia(c.platform, c.surface, c.asset)
+      .map((v) => `${v.kind}:${v.severity}`)
+      .sort();
+    const expectedSeverity = (c as { expect_severity?: string }).expect_severity ?? "refuse";
+    const expect = [...c.expect].map((kind) => `${kind}:${expectedSeverity}`).sort();
+    assert.deepEqual(got, expect);
   });
 }
 
