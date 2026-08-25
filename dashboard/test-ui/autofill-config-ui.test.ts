@@ -19,7 +19,7 @@ import {
   unofferedLaneNote,
   toLanePanels,
 } from "../lib/autofill-lanes.ts";
-import { DAYS, parseCadence, serializeCadence } from "../lib/cadence.ts";
+import { DAYS, type Cadence, parseCadence, serializeCadence } from "../lib/cadence.ts";
 
 // The two mode defaults are what the owner lands on the first time they switch modes — the
 // stored cadence is one mode, so the OTHER mode has nothing to restore and falls back here.
@@ -465,4 +465,95 @@ test("the collapsed panel of a feed-only group still reports a stranded Story la
   );
   assert.match(html, /Story/, "a lane that is still switched on must not vanish");
   assert.match(html, /12:00/, "and its cadence has to be visible, not just its name");
+});
+
+// ---------------------------------------------------------------------------
+// Every cadence shape the WORKER will refuse. worker/scheduling.py's parse_cadence is the
+// authority: _parse_times drops any slot whose time is unparseable OR whose day list is
+// empty, and returns None when nothing survives; _parse_interval returns None for a
+// non-positive every_minutes and for an explicitly empty `days` key. A lane skipped with
+// "no valid cadence" sits switched on in the dashboard and fills nothing — which is
+// exactly what the pre-lane default did (cadence.ts's DEFAULT is 18:00 with days: []).
+//
+// saveBlockedReason judges the SERIALIZED cadence, because serializeCadence is what the
+// worker will actually read.
+
+test("a time with no days selected is blocked — this is the old default's exact shape", () => {
+  const reason = saveBlockedReason(true, {
+    mode: "times",
+    slots: [{ time: "18:00", days: [] }],
+  });
+  assert.ok(reason, "the worker drops a slot with no days, leaving no valid cadence");
+  assert.match(String(reason), /day/i, "name the actual problem, not 'invalid cadence'");
+});
+
+test("several times, none of them with a day, is still blocked", () => {
+  assert.match(
+    String(saveBlockedReason(true, {
+      mode: "times",
+      slots: [{ time: "09:00", days: [] }, { time: "18:00", days: [] }],
+    })),
+    /day/i,
+  );
+});
+
+test("one time with a day is enough — the worker keeps that slot and drops the rest", () => {
+  assert.equal(
+    saveBlockedReason(true, {
+      mode: "times",
+      slots: [{ time: "09:00", days: [] }, { time: "18:00", days: ["sat"] }],
+    }),
+    null,
+  );
+});
+
+test("a blank time on the only row is blocked, and says so rather than blaming the days", () => {
+  // serializeCadence drops it (mirroring _parse_hhmm), so the saved cadence has no slots.
+  const reason = saveBlockedReason(true, { mode: "times", slots: [{ time: "", days: [...DAYS] }] });
+  assert.ok(reason);
+  assert.match(String(reason), /time/i);
+});
+
+// Interval mode. Reachable: the form's DayToggles let every day be unchecked, and
+// serializeCadence ALWAYS writes the `days` key — which is the case _parse_interval
+// explicitly rejects rather than widening to all week.
+
+// DEFAULT_INTERVAL is typed as the Cadence UNION, so spreading it loses the discriminant.
+// Narrowed once here rather than cast at every use.
+const INTERVAL = DEFAULT_INTERVAL as Extract<Cadence, { mode: "interval" }>;
+
+test("an interval with every day unchecked is blocked", () => {
+  const reason = saveBlockedReason(true, { ...INTERVAL, days: [] });
+  assert.ok(reason, "an explicitly empty day list makes _parse_interval return None");
+  assert.match(String(reason), /day/i);
+});
+
+test("an interval of zero is blocked", () => {
+  const reason = saveBlockedReason(true, { ...INTERVAL, everyMinutes: 0 });
+  assert.ok(reason, "_parse_interval refuses every_minutes <= 0");
+  assert.doesNotMatch(String(reason), /day/i, "the days are fine — say what is wrong");
+});
+
+test("an interval keeps saving on any single day, and on a short-but-positive gap", () => {
+  assert.equal(saveBlockedReason(true, { ...INTERVAL, days: ["wed"] }), null);
+  // 5 minutes is under the form's own 15-minute floor but is a cadence the worker WILL
+  // run. This gate is about "no valid cadence", not about every rule the panel has.
+  assert.equal(saveBlockedReason(true, { ...INTERVAL, everyMinutes: 5 }), null);
+});
+
+// The escape hatch. Turning something OFF must never be blocked, whatever state it is in —
+// a lane the owner is switching off is precisely the one most likely to be half-configured.
+
+test("a DISABLED lane saves in every blocked shape", () => {
+  const broken: Cadence[] = [
+    { mode: "times", slots: [] },
+    { mode: "times", slots: [{ time: "18:00", days: [] }] },
+    { mode: "times", slots: [{ time: "", days: [...DAYS] }] },
+    { ...INTERVAL, days: [] },
+    { ...INTERVAL, everyMinutes: 0 },
+  ];
+  for (const cadence of broken) {
+    assert.equal(saveBlockedReason(false, cadence), null,
+      `switching a lane off must never be blocked: ${JSON.stringify(cadence)}`);
+  }
 });

@@ -168,20 +168,67 @@ export function initialCadence(lane: LanePanelData): Cadence {
   return parseCadence(lane.cadenceConfig);
 }
 
+/** Does this day list name at least one real weekday? Mirrors the worker's
+ *  `_weekday_ints`, which silently skips anything it does not recognize — so a list of
+ *  nonsense names is an EMPTY list on the other side, not a populated one. */
+function hasWeekday(days: unknown): boolean {
+  return Array.isArray(days) && DAYS.some((d) => days.includes(d));
+}
+
 /**
  * Why Save is refused, or null when it is allowed.
  *
- * A lane that is ON with no times has no valid cadence: the worker's `_parse_times` finds
- * nothing to merge, `parse_cadence` returns None, and the lane is skipped with "no valid
- * cadence" — switched on in the dashboard and filling nothing, which reads as broken. So
- * the empty start above must not be savable while the lane is enabled.
+ * The one rule: **an enabled lane whose cadence would produce no slots cannot be saved.**
+ * `worker/scheduling.py`'s `parse_cadence` returns None for those, `run_autofill` skips
+ * the lane with "no valid cadence", and the result is a lane that is switched ON in the
+ * dashboard and fills nothing — which reads as broken rather than as a mistake. That is
+ * not a hypothetical shape: it is exactly what the pre-lane default was
+ * (`cadence.ts`'s DEFAULT is 18:00 with `days: []`), which is why an unconfigured lane
+ * looked configured and silently never ran.
  *
- * Switched OFF is fine: an off lane with no times is exactly the unconfigured state, and
- * the owner may well be saving only its queue depths.
+ * Judged on the SERIALIZED cadence, not on the object in hand, because serializeCadence
+ * is what the worker will actually read — and it already drops a slot whose time is not
+ * HH:MM, which is the same slot `_parse_hhmm` drops on the other side. One mirror of the
+ * worker's rule, in one place, rather than one per call site.
+ *
+ * The messages name the actual problem. "Invalid cadence" tells the owner nothing they
+ * can act on; "Pick at least one day" is the fix.
+ *
+ * Switched OFF is never blocked, in any shape. A lane being turned off is the one most
+ * likely to be half-configured, and refusing to save it would trap the owner in a lane
+ * they are trying to leave.
  */
 export function saveBlockedReason(enabled: boolean, cadence: Cadence): string | null {
   if (!enabled) return null;
-  if (cadence.mode === "times" && cadence.slots.length === 0) return "Add a time first";
+
+  const cfg = JSON.parse(serializeCadence(cadence)) as {
+    mode?: string;
+    every_minutes?: unknown;
+    days?: unknown;
+    slots?: { time: string; days: unknown }[];
+  };
+
+  if (cfg.mode === "interval") {
+    // _parse_interval: a non-positive every_minutes is None, full stop. The form's own
+    // 15-minute floor is a separate, looser house rule — 5 minutes is a cadence the
+    // worker WILL run, so it is not this gate's business.
+    if (!(Number(cfg.every_minutes) > 0)) return "Set an interval above zero";
+    // An explicitly empty day list is refused rather than widened to all week, and the
+    // form ALWAYS writes the `days` key — so unchecking all seven reaches that branch.
+    if (!hasWeekday(cfg.days)) return "Pick at least one day";
+    return null;
+  }
+
+  const slots = cfg.slots ?? [];
+  if (slots.length === 0) {
+    // Nothing survived serialization. Either there were no rows, or the only rows had a
+    // blank time — different mistakes, so say which one.
+    return cadence.mode === "times" && cadence.slots.length > 0
+      ? "Fill in the time"
+      : "Add a time first";
+  }
+  // _parse_times drops every slot with an empty day list, and an empty merge is None.
+  if (!slots.some((s) => hasWeekday(s.days))) return "Pick at least one day";
   return null;
 }
 
