@@ -7,11 +7,19 @@ separate slot walks.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone as _tz
+
 import pytest
 
 from worker.autofill import _autofill_lanes, run_autofill
 
 CADENCE = '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}'
+
+
+def _now():
+    """A fixed 'now' well after every fixture's created_at, so cooldown and season gates
+    behave deterministically."""
+    return datetime(2026, 6, 1, 12, 0, tzinfo=_tz.utc)
 
 
 def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
@@ -186,3 +194,74 @@ def test_latest_future_scheduled_is_per_surface(conn):
     now = "2026-01-01T00:00:00+00:00"
     assert latest_future_scheduled(conn, cid, now, "feed").startswith("2026-09-01")
     assert latest_future_scheduled(conn, cid, now, "story").startswith("2099-12-31")
+
+
+def test_a_story_lane_picks_only_story_targeted_posts(conn):
+    from worker.autofill import eligible_candidates
+
+    cid = make_channel(conn)
+    feed_only = make_post(conn, targets=[(cid, "feed")], caption="feed only")
+    story_ok = make_post(conn, targets=[(cid, "story")], caption="story ok")
+    channel = conn.execute("SELECT * FROM channels WHERE id = ?", (cid,)).fetchone()
+    now = _now()
+
+    story_ids = {r["post_id"] for r in
+                 eligible_candidates(conn, channel, now, None, surface="story")}
+    feed_ids = {r["post_id"] for r in
+                eligible_candidates(conn, channel, now, None, surface="feed")}
+
+    assert story_ids == {story_ok}
+    assert feed_ids == {feed_only}
+
+
+def test_a_long_caption_blocks_the_feed_lane_but_not_the_story_lane(conn):
+    """A Story sends no caption at all (publisher.py suppresses it unconditionally), so
+    gating a story candidate on caption length would silently empty the rotation over a
+    limit that is never applied to it."""
+    from worker.autofill import eligible_candidates
+
+    cid = make_channel(conn, platform="threads")
+    long_caption = "x" * 10_000
+    pid = make_post(conn, targets=[(cid, "feed"), (cid, "story")], caption=long_caption)
+    channel = conn.execute("SELECT * FROM channels WHERE id = ?", (cid,)).fetchone()
+    now = _now()
+
+    feed = {r["post_id"] for r in
+            eligible_candidates(conn, channel, now, None, surface="feed")}
+    assert pid not in feed, "over the platform's caption limit — would fail forever"
+
+    story = {r["post_id"] for r in
+             eligible_candidates(conn, channel, now, None, surface="story")}
+    assert pid in story, "a story sends no caption, so the limit does not apply"
+
+
+def test_a_story_lane_on_a_mixed_group_reaches_only_story_capable_members(conn, config):
+    """Drives run_autofill rather than the inner function, because the capability gate
+    lives in _fill_unit — which is what makes it cover the SOLO path too, not just
+    groups. Asserts on channel_id only: at this point in the build the insert does not
+    yet write `surface` (Task 6 adds that), so filtering on it here would assert nothing."""
+    gid = make_group(conn)
+    ig = make_channel(conn, platform="instagram", name="IG", group_id=gid)
+    fb = make_channel(conn, platform="facebook", name="FB", group_id=gid)
+    make_lane(conn, group_id=gid, surface="story", min_depth=3, target=2)
+    make_post(conn, targets=[(ig, "story"), (fb, "story")])
+    conn.commit()
+
+    run_autofill(conn, config, _now())
+
+    reached = {r["channel_id"] for r in conn.execute(
+        "SELECT DISTINCT channel_id FROM publications WHERE created_by = 'autofill'"
+    ).fetchall()}
+    assert reached == {ig}, "Facebook has no Stories surface — it must get nothing"
+
+
+def test_a_story_lane_on_a_story_incapable_solo_channel_fills_nothing(conn, config):
+    """The reason the gate is in _fill_unit and not in group_eligible_candidates. A solo
+    Telegram story lane must be refused by the WORKER; it must not depend on the
+    dashboard never offering one."""
+    cid = make_channel(conn, platform="telegram", name="TG")
+    make_lane(conn, channel_id=cid, surface="story", min_depth=3, target=2)
+    make_post(conn, targets=[(cid, "story")])
+    conn.commit()
+
+    assert run_autofill(conn, config, _now()) == 0

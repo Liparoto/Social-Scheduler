@@ -303,7 +303,7 @@ def test_the_pool_rotates_oldest_first(conn):
 
     from worker import db as dbmod
 
-    pool = bpp_pool(conn, dbmod.get_channel(conn, cid), NOW)
+    pool = bpp_pool(conn, dbmod.get_channel(conn, cid), NOW, surface="feed")
     assert [r["post_id"] for r in pool] == [ancient, recent]
 
 

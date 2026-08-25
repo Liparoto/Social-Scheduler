@@ -17,7 +17,7 @@ NOW = datetime(2026, 7, 22, 18, 0, tzinfo=timezone.utc)
 def picks(conn, channel_id, limit):
     from worker import db
     ch = db.get_channel(conn, channel_id)
-    return [r["post_id"] for r in eligible_candidates(conn, ch, NOW, limit)]
+    return [r["post_id"] for r in eligible_candidates(conn, ch, NOW, limit, surface="feed")]
 
 
 # ---- seed helpers ---------------------------------------------------------------
@@ -308,7 +308,7 @@ def test_video_posts_are_eligible_for_autofill(conn):
     appears, with no error anywhere."""
     ch = make_channel(conn)
     p = make_video_post(conn, ch)
-    rows = select_candidates(conn, ch, NOW)
+    rows = select_candidates(conn, ch, NOW, "feed")
     assert [r["post_type"] for r in rows] == ["video"]
     assert p in picks(conn, ch, 10)
 
@@ -327,7 +327,7 @@ def test_video_posts_not_selected_for_channel_with_no_video_publish_path(conn):
     a publish path (_publish_threads has no video branch), so it still does."""
     ch = make_channel(conn, platform="threads")
     p = make_video_post(conn, ch)
-    rows = select_candidates(conn, ch, NOW)
+    rows = select_candidates(conn, ch, NOW, "feed")
     assert [r["post_type"] for r in rows] == []
     assert p not in picks(conn, ch, 10)
 
@@ -496,7 +496,7 @@ def test_story_only_post_is_never_autofilled_into_the_feed(conn):
     )
     conn.commit()
 
-    rows = select_candidates(conn, ch, NOW)
+    rows = select_candidates(conn, ch, NOW, "feed")
     assert p not in [r["post_id"] for r in rows]
     assert p not in picks(conn, ch, 10)
 
@@ -511,7 +511,7 @@ def test_a_post_targeted_at_both_surfaces_is_still_autofilled_for_the_feed(conn)
     )
     conn.commit()
 
-    assert p in [r["post_id"] for r in select_candidates(conn, ch, NOW)]
+    assert p in [r["post_id"] for r in select_candidates(conn, ch, NOW, "feed")]
 
 
 # ---- several posts a day ------------------------------------------------------------

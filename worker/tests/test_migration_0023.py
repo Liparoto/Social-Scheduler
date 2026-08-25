@@ -81,7 +81,7 @@ def test_archiving_alone_does_not_hide_a_post_from_auto_fill(conn):
     conn.commit()
 
     ch = db.get_channel(conn, cid)
-    picked = [r["post_id"] for r in eligible_candidates(conn, ch, NOW, 10)]
+    picked = [r["post_id"] for r in eligible_candidates(conn, ch, NOW, 10, surface="feed")]
     assert pid in picked, (
         "archived_at is a dashboard visibility flag; content_status is the automation "
         "gate. If auto-fill should skip archived posts, that is a design change — say so "
@@ -103,4 +103,6 @@ def test_content_status_is_still_what_stops_auto_fill(conn):
     conn.commit()
 
     ch = db.get_channel(conn, cid)
-    assert pid not in [r["post_id"] for r in eligible_candidates(conn, ch, NOW, 10)]
+    assert pid not in [
+        r["post_id"] for r in eligible_candidates(conn, ch, NOW, 10, surface="feed")
+    ]

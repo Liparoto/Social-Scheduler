@@ -123,7 +123,7 @@ def test_metrics_then_ranking_prefers_higher_performer(conn, config):
     _record(conn, low_pub, NOW.isoformat(), {"reach": 10, "saved": 0})
     _record(conn, high_pub, NOW.isoformat(), {"reach": 900, "saved": 80})
 
-    got = [r["post_id"] for r in select_candidates(conn, ch, NOW)][:1]
+    got = [r["post_id"] for r in select_candidates(conn, ch, NOW, "feed")][:1]
     assert got == [high_post]
 
 

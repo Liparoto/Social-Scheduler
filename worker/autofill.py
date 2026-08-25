@@ -171,7 +171,7 @@ def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str, sur
     return row[0] if row else None
 
 
-def select_candidates(conn, channel_id: int, now):
+def select_candidates(conn, channel_id: int, now, surface: str):
     """SQL-gated, ordered candidate posts for a channel. Cooldown/one-time/period gates
     are applied afterward in `eligible_candidates` (Python — clearer for date math).
 
@@ -217,13 +217,16 @@ def select_candidates(conn, channel_id: int, now):
         FROM posts p
         WHERE p.content_status = 'ready'
           AND {_TYPE_CAPABILITY_SQL}
-          -- surface='feed': auto-fill queues ordinary posts only. A post targeted SOLELY
-          -- at an Instagram Story must never be auto-queued as a feed post — matching on
-          -- channel_id alone would send it to the wrong destination silently. Story
-          -- recycling is a deliberate v1 scope cut (docs/design-instagram-stories.md §4),
-          -- not an oversight.
+          -- Auto-fill queues only posts explicitly targeted at THIS lane's surface.
+          -- Matching on channel_id alone would send a Story-only post to the feed
+          -- silently. A story lane is the exact mirror: nothing lands on a Story
+          -- because auto-fill inferred it could.
           AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid
-                        AND pt.surface = 'feed')
+                        AND pt.surface = :surface)
+          -- Surface-BLIND on purpose: a post already queued as a Story is also held out
+          -- of the feed lane (and vice versa). This is the shared-cooldown principle
+          -- applied to pending work, and it is what stops the same photo appearing on
+          -- the feed and in Stories the same day. Do not add a surface predicate here.
           AND NOT EXISTS (
              SELECT 1 FROM publications q
              WHERE q.post_id = p.id AND q.channel_id = :cid
@@ -235,7 +238,7 @@ def select_candidates(conn, channel_id: int, now):
           last_posted ASC,
           p.created_at ASC
         """,
-        {"cid": channel_id, **cap_params},
+        {"cid": channel_id, "surface": surface, **cap_params},
     ).fetchall()
     return rows
 
@@ -314,7 +317,7 @@ def capable_post_ids(conn, channel) -> set[int]:
     }
 
 
-def eligible_candidates(conn, channel, now, limit: int | None, *,
+def eligible_candidates(conn, channel, now, limit: int | None, *, surface: str,
                         reuse_default=None, timezone_name=None, skip_cooldown=False):
     """Apply cooldown, one-time, period, and caption-length gates to the SQL candidates;
     return <= limit (or all of them when limit is None).
@@ -329,7 +332,7 @@ def eligible_candidates(conn, channel, now, limit: int | None, *,
         timezone_name = channel["timezone"]
     today_local = local_date(now, timezone_name)
     out = []
-    for r in select_candidates(conn, channel["id"], now):
+    for r in select_candidates(conn, channel["id"], now, surface):
         last = r["last_posted"]
         if r["content_kind"] == "one_time":
             if last is not None:
@@ -346,9 +349,16 @@ def eligible_candidates(conn, channel, now, limit: int | None, *,
         green, blackout = _post_periods(conn, r["post_id"])
         if not in_season(green, blackout, today_local):
             continue
-        if _caption_too_long_for_channel(conn, channel, r["post_id"], r["post_type"]):
+        if surface == "feed" and _caption_too_long_for_channel(
+            conn, channel, r["post_id"], r["post_type"]
+        ):
             # Over this channel's limit: never queue it here to fail terminally later.
             # Other channels (e.g. Instagram, no caption limit) still get to select it.
+            #
+            # Feed only. A Story sends NO caption — worker/publisher.py suppresses it
+            # unconditionally and _validate runs no caption check on the story branch —
+            # so applying the limit here would silently exclude every long-caption post
+            # from the Story rotation over a rule that will never be applied to it.
             continue
         out.append(r)
         if limit is not None and len(out) >= limit:
@@ -398,7 +408,7 @@ def group_rank(conn, member_ids: list[int], post_ids) -> list:
 
 
 def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
-                              skip_cooldown=False):
+                              surface: str, skip_cooldown=False):
     """Ranked (candidate_row, [member channels to receive it]) for a channel group.
 
     A post P is group-eligible when BOTH hold:
@@ -430,8 +440,8 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
         allowed[m["id"]] = {
             r["post_id"]
             for r in eligible_candidates(
-                conn, m, now, None, reuse_default=reuse_default, timezone_name=tz_name,
-                skip_cooldown=skip_cooldown,
+                conn, m, now, None, surface=surface, reuse_default=reuse_default,
+                timezone_name=tz_name, skip_cooldown=skip_cooldown,
             )
         }
 
@@ -552,7 +562,8 @@ def _setting(settings, name: str, default=0):
     return default if value is None else value
 
 
-def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> list:
+def bpp_pool(conn, channel, now, *, surface: str, reuse_default=None,
+            timezone_name=None) -> list:
     """The owner's marked posts that could go out on this channel, whose turn first.
 
     Ordered by when each last went out, oldest first, so the pool ROTATES: every marked
@@ -564,6 +575,9 @@ def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> l
     post returns every four months, which a 90-day reuse window would silently veto,
     leaving the feature looking broken rather than declining. One-time content is still
     excluded — "never repost this" outranks "repost my best".
+
+    `surface` is the LANE's surface, same as everywhere else — a BPP pick is still a pick,
+    and must be targeted at the surface the lane is topping up.
     """
     marked = {
         row["id"]
@@ -572,7 +586,7 @@ def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> l
     if not marked:
         return []
     rows = eligible_candidates(
-        conn, channel, now, None, reuse_default=reuse_default,
+        conn, channel, now, None, surface=surface, reuse_default=reuse_default,
         timezone_name=timezone_name, skip_cooldown=True,
     )
     pool = [r for r in rows if r["post_id"] in marked]
@@ -624,10 +638,10 @@ def _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post, ban
         return placed
 
     if unit.is_group:
-        pool = _group_bpp_pool(conn, settings, unit.members, now)
+        pool = _group_bpp_pool(conn, settings, unit.members, now, unit.surface)
     else:
         channel = unit.members[0]
-        pool = [(r, [channel]) for r in bpp_pool(conn, channel, now)]
+        pool = [(r, [channel]) for r in bpp_pool(conn, channel, now, surface=unit.surface)]
 
     if not pool:
         if logger:
@@ -699,12 +713,15 @@ def _stranded_by_band(candidates, bands_by_post, covered) -> dict[str, int]:
     return counts
 
 
-def _group_bpp_pool(conn, group, members, now) -> list:
+def _group_bpp_pool(conn, group, members, now, surface: str) -> list:
     """The group's BPP pool as (row, recipients) pairs.
 
     Reuses group_eligible_candidates for the recipient logic — which members can take a
     post, and whether a rule blocks the whole group — so a BPP is delivered on exactly the
     same terms as any other pick and cannot land on a subset of the group.
+
+    `surface` is the LANE's surface — a BPP pick is still a pick, targeted at whichever
+    surface the lane is topping up.
     """
     marked = {
         row["id"]
@@ -715,7 +732,7 @@ def _group_bpp_pool(conn, group, members, now) -> list:
     pairs = [
         (row, recipients)
         for row, recipients in group_eligible_candidates(
-            conn, group, members, now, None, skip_cooldown=True
+            conn, group, members, now, None, surface=surface, skip_cooldown=True
         )
         if row["post_id"] in marked
     ]
@@ -810,6 +827,24 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
             logger.info("[autofill %s] group has no active members — skipping", lane.label)
         return 0
 
+    # A lane reaches only members whose platform HAS this surface: an Instagram + Facebook
+    # group with a story lane creates Instagram sends and nothing for the Page.
+    #
+    # Here rather than inside group_eligible_candidates so the SOLO path is gated by the
+    # same line. A story lane on a Telegram channel must be refused by the WORKER — the
+    # dashboard hides the option, but the worker must never depend on the UI for
+    # correctness.
+    members = [
+        m for m in lane.members
+        if lane.surface in PLATFORM_CAPS[m["platform"]].surfaces
+    ]
+    if not members:
+        if logger:
+            logger.info("[autofill %s] no active member can take a %s — skipping",
+                        lane.label, lane.surface)
+        return 0
+    lane.members = members
+
     settings = lane.settings
     cadence = parse_cadence(settings["cadence_config"])
     if cadence is None:
@@ -836,10 +871,15 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
     # hundreds of usable posts sat further down the ranking. The SLOTS do the limiting instead —
     # which is already how the group and BPP paths have always worked.
     if lane.is_group:
-        candidates = group_eligible_candidates(conn, settings, lane.members, now, None)
+        candidates = group_eligible_candidates(
+            conn, settings, lane.members, now, None, surface=lane.surface
+        )
     else:
         ch = lane.members[0]
-        candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, None)]
+        candidates = [
+            (r, [ch]) for r in
+            eligible_candidates(conn, ch, now, None, surface=lane.surface)
+        ]
 
     if not candidates:
         if logger:

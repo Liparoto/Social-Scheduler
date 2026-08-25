@@ -94,7 +94,8 @@ def test_capable_post_ids_ignores_targeting_and_cooldown(conn):
     ig = make_channel(conn, platform="instagram")
     untargeted = make_post(conn, targets=())
     assert untargeted in capable_post_ids(conn, ch(conn, ig))
-    assert [r["post_id"] for r in eligible_candidates(conn, ch(conn, ig), NOW, None)] == []
+    assert [r["post_id"] for r in
+            eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed")] == []
 
 
 def test_video_post_is_capable_for_instagram_but_not_threads(conn):
@@ -127,15 +128,16 @@ def test_eligible_candidates_accepts_policy_overrides(conn):
     conn.commit()
 
     # 21 days ago. Channel default (180) excludes it; a group override of 7 admits it.
-    assert [r["post_id"] for r in eligible_candidates(conn, ch(conn, ig), NOW, None)] == []
-    got = eligible_candidates(conn, ch(conn, ig), NOW, None, reuse_default=7)
+    assert [r["post_id"] for r in
+            eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed")] == []
+    got = eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed", reuse_default=7)
     assert [r["post_id"] for r in got] == [p]
 
 
 def test_eligible_candidates_limit_none_means_unlimited(conn):
     ig = make_channel(conn, platform="instagram")
     ids = {make_post(conn, targets=(ig,)) for _ in range(5)}
-    got = eligible_candidates(conn, ch(conn, ig), NOW, None)
+    got = eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed")
     assert {r["post_id"] for r in got} == ids
 
 
@@ -162,7 +164,9 @@ def pair(conn, **kw):
 
 
 def picked(conn, gid, limit=10):
-    got = group_eligible_candidates(conn, grp(conn, gid), members(conn, gid), NOW, limit)
+    got = group_eligible_candidates(
+        conn, grp(conn, gid), members(conn, gid), NOW, limit, surface="feed"
+    )
     return [(r["post_id"], sorted(m["id"] for m in ms)) for r, ms in got]
 
 
@@ -336,7 +340,9 @@ def test_group_selection_respects_limit(conn):
 
 def test_group_with_no_active_members_selects_nothing(conn):
     gid = make_group(conn)
-    assert group_eligible_candidates(conn, grp(conn, gid), [], NOW, 5) == []
+    assert group_eligible_candidates(
+        conn, grp(conn, gid), [], NOW, 5, surface="feed"
+    ) == []
 
 
 # ---- Task 4: group top-up -------------------------------------------------------
