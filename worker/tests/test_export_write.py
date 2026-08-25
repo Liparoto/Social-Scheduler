@@ -8,10 +8,11 @@ from worker.export.write import copy_images
 GENERATED_AT = "2026-07-24T19:30:00+00:00"
 
 
-def _bundle(posts, channels=None, channel_groups=None):
+def _bundle(posts, channels=None, channel_groups=None, autofill_lanes=None):
     return ExportBundle(
         generated_at=GENERATED_AT, posts=posts, sends=[], metrics=[],
         assets=[], channels=channels or [], channel_groups=channel_groups or [],
+        autofill_lanes=autofill_lanes or [],
     )
 
 
@@ -276,9 +277,7 @@ def _channel():
     return ExportedChannel(
         channel_id=1, platform="instagram", account_name="Test IG",
         business_label=None, timezone="UTC", is_active=True, requires_approval=False,
-        autofill_enabled=False, cadence_config=None, min_queue_depth=0,
-        target_queue_depth=0, reuse_min_age_days=180, remote_account_id="178414",
-        linked_page_id=None, group_id=None,
+        remote_account_id="178414", linked_page_id=None, group_id=None,
     )
 
 
@@ -362,6 +361,7 @@ def test_write_workbook_creates_every_tab(tmp_path):
     assert path.name == "SocialScheduler-Export.xlsx"
     assert book.sheetnames == [
         "Posts", "Sends", "Metrics", "Assets", "Channels", "Channel groups",
+        "Auto-fill lanes",
     ]
 
 
@@ -688,3 +688,73 @@ def test_readme_truncates_a_long_problem_list(tmp_path):
     printed = [p for p in problems if p in text]
     assert len(printed) == 20
     assert "5 more" in text or "5 further" in text
+
+
+# ---- auto-fill lanes -----------------------------------------------------------------
+
+from worker.export.collect import ExportedAutofillLane
+
+
+def _lane(**kw):
+    base = dict(
+        lane_id=1, owner_kind="channel", owner_id=1, owner_name="Test IG",
+        surface="feed", enabled=True, cadence_config='{"mon":1}',
+        min_queue_depth=3, target_queue_depth=7, reuse_min_age_days=90,
+    )
+    base.update(kw)
+    return ExportedAutofillLane(**base)
+
+
+def test_autofill_lanes_tab_reports_both_lanes_of_one_owner(tmp_path):
+    """A backup that showed one cadence per owner could never show the Story rotation —
+    the thing lanes exist for."""
+    bundle = _bundle([])
+    bundle.autofill_lanes = [
+        _lane(lane_id=1, surface="feed", target_queue_depth=7),
+        _lane(lane_id=2, surface="story", target_queue_depth=3, enabled=False),
+    ]
+
+    rows = _rows(load_workbook(
+        write_workbook(bundle, tmp_path, missing_asset_ids=set())
+    )["Auto-fill lanes"])
+
+    assert [(r["surface"], r["target_queue_depth"], r["enabled"]) for r in rows] == [
+        ("feed", 7, True), ("story", 3, False),
+    ]
+    assert rows[0]["owner"] == "Test IG (channel)"
+    assert rows[0]["reuse_min_age_days"] == 90
+
+
+def test_the_channels_and_groups_tabs_no_longer_report_frozen_autofill_columns(tmp_path):
+    """Those columns have been unwritten since migration 0028. Left in the workbook they
+    state a cadence the worker is not running, and the reader cannot tell."""
+    bundle = _bundle([])
+    bundle.channels = [_channel()]
+
+    book = load_workbook(write_workbook(bundle, tmp_path, missing_asset_ids=set()))
+    frozen = {
+        "autofill_enabled", "cadence_config",
+        "min_queue_depth", "target_queue_depth", "reuse_min_age_days",
+    }
+    for tab in ("Channels", "Channel groups"):
+        header = set(next(book[tab].values))
+        assert not (frozen & header), f"{tab} still reports {sorted(frozen & header)}"
+
+
+def test_write_json_includes_the_lanes(tmp_path):
+    bundle = _bundle([])
+    bundle.autofill_lanes = [_lane(surface="story")]
+
+    data = json.loads(write_json(bundle, tmp_path).read_text(encoding="utf-8"))
+
+    assert data["autofill_lanes"][0]["surface"] == "story"
+    assert data["autofill_lanes"][0]["owner_name"] == "Test IG"
+
+
+def test_readme_counts_the_lanes(tmp_path):
+    bundle = _bundle([])
+    bundle.autofill_lanes = [_lane(surface="feed"), _lane(lane_id=2, surface="story")]
+
+    text = write_readme(bundle, tmp_path, CopyResult(copied=0)).read_text(encoding="utf-8")
+
+    assert "2 auto-fill lane(s)" in text

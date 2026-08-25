@@ -133,6 +133,11 @@ def copy_images(bundle: ExportBundle, asset_root: Path, out_dir: Path) -> CopyRe
 
 
 # Bump when the JSON shape changes incompatibly, so a future importer can branch.
+#
+# NOT bumped when the auto-fill columns moved to an "autofill_lanes" key: worker/restore.py
+# is the only reader, it REFUSES any version it does not recognize, and it reads only the
+# posts/images/assets fields — none of which changed. Bumping would have made every
+# existing backup un-restorable to buy a distinction nothing consumes.
 JSON_FORMAT_VERSION = 1
 
 
@@ -153,6 +158,7 @@ def write_json(bundle: ExportBundle, out_dir: Path) -> Path:
         "assets": [asdict(a) for a in bundle.assets],
         "channels": [asdict(c) for c in bundle.channels],
         "channel_groups": [asdict(g) for g in bundle.channel_groups],
+        "autofill_lanes": [asdict(lane) for lane in bundle.autofill_lanes],
     }
     path = out_dir / "export.json"
     # ensure_ascii=False keeps captions readable if someone opens this in a text editor.
@@ -226,23 +232,28 @@ ASSETS_HEADERS = [
     "published_copy_filename",
 ]
 
+# The auto-fill columns are absent from both of these on purpose: migration 0028 froze
+# them and moved the real config to autofill_lanes, so printing them stated a cadence the
+# worker was not running. They live on the "Auto-fill lanes" tab now.
 CHANNELS_HEADERS = [
     "channel_id", "platform", "account_name", "business_label", "timezone", "is_active",
-    "requires_approval", "autofill_enabled", "cadence_config", "min_queue_depth",
-    "target_queue_depth", "reuse_min_age_days", "remote_account_id", "linked_page_id",
-    "group_id",
+    "requires_approval", "remote_account_id", "linked_page_id", "group_id",
 ]
 
 GROUPS_HEADERS = [
-    "group_id", "name", "timezone", "is_active", "autofill_enabled", "cadence_config",
-    "min_queue_depth", "target_queue_depth", "reuse_min_age_days",
+    "group_id", "name", "timezone", "is_active",
+]
+
+LANES_HEADERS = [
+    "lane_id", "owner", "surface", "enabled", "cadence_config", "min_queue_depth",
+    "target_queue_depth", "reuse_min_age_days",
 ]
 
 
 def write_workbook(
     bundle: ExportBundle, out_dir: Path, missing_asset_ids: set[int]
 ) -> Path:
-    """The human artifact: five tabs, each with one clear grain.
+    """The human artifact: seven tabs, each with one clear grain.
 
     Written after the images are copied, because the Assets tab reports which files
     were missing from disk.
@@ -334,23 +345,32 @@ def write_workbook(
     _add_sheet(book, "Channels", CHANNELS_HEADERS, [
         [
             c.channel_id, c.platform, c.account_name, c.business_label, c.timezone,
-            c.is_active, c.requires_approval, c.autofill_enabled, c.cadence_config,
-            c.min_queue_depth, c.target_queue_depth, c.reuse_min_age_days,
+            c.is_active, c.requires_approval,
             c.remote_account_id, c.linked_page_id, c.group_id,
         ]
         for c in bundle.channels
     ])
 
-    # Its own sheet rather than columns folded into Channels: a group's cadence and queue
-    # depths belong to the GROUP, and repeating them on every member would read as
-    # per-channel settings that could be edited independently. They cannot.
+    # Its own sheet rather than columns folded into Channels: group membership belongs to
+    # the GROUP, and repeating it on every member would read as per-channel settings that
+    # could be edited independently. They cannot.
     _add_sheet(book, "Channel groups", GROUPS_HEADERS, [
-        [
-            g.group_id, g.name, g.timezone, g.is_active, g.autofill_enabled,
-            g.cadence_config, g.min_queue_depth, g.target_queue_depth,
-            g.reuse_min_age_days,
-        ]
+        [g.group_id, g.name, g.timezone, g.is_active]
         for g in bundle.channel_groups
+    ])
+
+    # The tab that actually answers "what is auto-fill doing?". It cannot be folded into
+    # Channels or Channel groups because an owner has one lane PER SURFACE — a group can
+    # run a feed rotation and a Story rotation on independent cadences, and either tab
+    # would have to pick one and hide the other. `owner` is denormalized to
+    # "Name (channel|group)" so a row means something on its own.
+    _add_sheet(book, "Auto-fill lanes", LANES_HEADERS, [
+        [
+            lane.lane_id, f"{lane.owner_name} ({lane.owner_kind})", lane.surface,
+            lane.enabled, lane.cadence_config, lane.min_queue_depth,
+            lane.target_queue_depth, lane.reuse_min_age_days,
+        ]
+        for lane in bundle.autofill_lanes
     ])
 
     # Captions are long; wrapping keeps the Posts tab scannable.
@@ -386,11 +406,17 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         "                                Without it, the files below are a record you can",
         "                                read but not reload.",
         "",
-        "  SocialScheduler-Export.xlsx   Open this one. Five tabs:",
-        "                                Posts, Sends, Metrics, Assets, Channels.",
+        "  SocialScheduler-Export.xlsx   Open this one. Seven tabs: Posts, Sends,",
+        "                                Metrics, Assets, Channels, Channel groups",
+        "                                and Auto-fill lanes.",
         "                                Start on 'Posts' — it has everything you",
         "                                normally want, including how often each",
         "                                post has gone out and how it performed.",
+        "                                'Auto-fill lanes' is where the posting",
+        "                                schedules live: one row per account (or",
+        "                                group) per place it posts, so a feed",
+        "                                rotation and a Stories rotation each show",
+        "                                their own cadence.",
         "",
         "  export.json                   The same data in a form software can read",
         "                                back in. You don't need to open this.",
@@ -422,6 +448,7 @@ def write_readme(bundle: ExportBundle, out_dir: Path, copy_result: CopyResult) -
         f"  {len(bundle.assets)} asset(s) on record",
         f"  {len(bundle.channels)} channel(s)",
         f"  {len(bundle.channel_groups)} channel group(s)",
+        f"  {len(bundle.autofill_lanes)} auto-fill lane(s)",
         f"  {copy_result.copied} image file(s) copied",
         "",
         "HOW TO RESTORE THIS BACKUP",

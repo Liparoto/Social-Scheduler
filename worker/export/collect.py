@@ -178,11 +178,12 @@ CHANNEL_COLUMNS: tuple[str, ...] = (
     "timezone",
     "is_active",
     "requires_approval",
-    "autofill_enabled",
-    "cadence_config",
-    "min_queue_depth",
-    "target_queue_depth",
-    "reuse_min_age_days",
+    # The auto-fill columns that used to sit here (autofill_enabled, cadence_config,
+    # min_queue_depth, target_queue_depth, reuse_min_age_days) are deliberately GONE.
+    # Migration 0028 moved that config into autofill_lanes and left these behind frozen
+    # and unwritten. Exporting them made the snapshot state a cadence the worker was not
+    # running — a confident lie the reader had no way to spot — and it could never show a
+    # Story lane at all. See collect_autofill_lanes.
     "remote_account_id",
     "linked_page_id",
     # Which group this channel auto-fills as part of. Without it a restored backup
@@ -274,11 +275,6 @@ class ExportedChannel:
     timezone: str
     is_active: bool
     requires_approval: bool
-    autofill_enabled: bool
-    cadence_config: str | None
-    min_queue_depth: int
-    target_queue_depth: int
-    reuse_min_age_days: int
     remote_account_id: str | None
     linked_page_id: str | None
     group_id: int | None
@@ -288,18 +284,42 @@ class ExportedChannel:
 class ExportedChannelGroup:
     """A named set of channels that auto-fills as ONE unit.
 
-    Backed up as its own record because it owns real scheduling configuration — one
-    cadence, one queue depth, one reuse window — that is NOT recoverable from the
-    channels pointing at it. Losing it turns a coordinated group back into independent
-    channels that each pick their own content on their own days, which is precisely the
-    behaviour the group exists to prevent.
+    Backed up as its own record because the membership itself is not recoverable from
+    anywhere else: lose it and a coordinated group becomes independent channels that each
+    pick their own content on their own days, which is precisely what grouping prevents.
+
+    The group's SCHEDULE is no longer here. Since migration 0028 a group's cadence, queue
+    depths and reuse window live one-per-surface in autofill_lanes — see
+    ExportedAutofillLane — and the columns of the same name on channel_groups are frozen.
     """
 
     group_id: int
     name: str
     timezone: str
     is_active: bool
-    autofill_enabled: bool
+
+
+@dataclass
+class ExportedAutofillLane:
+    """One auto-fill lane: an owner (a channel group, or an ungrouped channel) PLUS a
+    surface, with the cadence and depths that lane actually runs on.
+
+    Its own record rather than columns on the owner, because since migration 0028 an
+    owner has as many lanes as it has surfaces — a group can run a feed rotation and a
+    Story rotation on completely independent cadences. Folding either one back onto the
+    owner would have to pick a winner and silently hide the other.
+
+    owner_name is denormalized on purpose: this is a HUMAN snapshot, and "Personal
+    (group)" is the only form of the row a reader can act on without cross-referencing
+    another tab.
+    """
+
+    lane_id: int
+    owner_kind: str          # 'channel' or 'group'
+    owner_id: int
+    owner_name: str
+    surface: str             # 'feed', 'story' or 'reel'
+    enabled: bool
     cadence_config: str | None
     min_queue_depth: int
     target_queue_depth: int
@@ -315,26 +335,60 @@ class ExportBundle:
     assets: list[ExportedAsset]
     channels: list[ExportedChannel]
     channel_groups: list[ExportedChannelGroup]
+    autofill_lanes: list[ExportedAutofillLane]
 
 
 def collect_channel_groups(conn: sqlite3.Connection) -> list[ExportedChannelGroup]:
-    """Every channel group. No allow-list needed — a group holds no credentials at all."""
+    """Every channel group. No allow-list needed — a group holds no credentials at all.
+
+    Identity and membership only; the schedule comes from collect_autofill_lanes.
+    """
     return [
         ExportedChannelGroup(
             group_id=row["id"],
             name=row["name"],
             timezone=row["timezone"],
             is_active=bool(row["is_active"]),
-            autofill_enabled=bool(row["autofill_enabled"]),
+        )
+        for row in conn.execute(
+            "SELECT id, name, timezone, is_active FROM channel_groups ORDER BY id"
+        )
+    ]
+
+
+def collect_autofill_lanes(conn: sqlite3.Connection) -> list[ExportedAutofillLane]:
+    """Every auto-fill lane, with its owner's name resolved for the human tabs.
+
+    A lane has exactly one owner — the CHECK on autofill_lanes guarantees a channel OR a
+    group, never both and never neither — so the two LEFT JOINs can never both match and
+    COALESCE picks the one that did.
+
+    Ordered so an owner's lanes sit together and feed reads before story. Group lanes come
+    first because their channel_id is NULL and SQLite sorts NULL first — which happens to
+    match the order worker/autofill.py fills them in.
+    """
+    return [
+        ExportedAutofillLane(
+            lane_id=row["id"],
+            owner_kind="channel" if row["channel_id"] is not None else "group",
+            owner_id=row["channel_id"] if row["channel_id"] is not None else row["group_id"],
+            owner_name=row["owner_name"],
+            surface=row["surface"],
+            enabled=bool(row["enabled"]),
             cadence_config=row["cadence_config"],
             min_queue_depth=row["min_queue_depth"],
             target_queue_depth=row["target_queue_depth"],
             reuse_min_age_days=row["reuse_min_age_days"],
         )
         for row in conn.execute(
-            "SELECT id, name, timezone, is_active, autofill_enabled, cadence_config,"
-            "       min_queue_depth, target_queue_depth, reuse_min_age_days"
-            "  FROM channel_groups ORDER BY id"
+            "SELECT l.id, l.channel_id, l.group_id, l.surface, l.enabled,"
+            "       l.cadence_config, l.min_queue_depth, l.target_queue_depth,"
+            "       l.reuse_min_age_days,"
+            "       COALESCE(c.account_name, g.name) AS owner_name"
+            "  FROM autofill_lanes l"
+            "  LEFT JOIN channels       c ON c.id = l.channel_id"
+            "  LEFT JOIN channel_groups g ON g.id = l.group_id"
+            " ORDER BY l.channel_id, l.group_id, l.surface"
         )
     ]
 
@@ -350,11 +404,6 @@ def collect_channels(conn: sqlite3.Connection) -> list[ExportedChannel]:
             timezone=row["timezone"],
             is_active=bool(row["is_active"]),
             requires_approval=bool(row["requires_approval"]),
-            autofill_enabled=bool(row["autofill_enabled"]),
-            cadence_config=row["cadence_config"],
-            min_queue_depth=row["min_queue_depth"],
-            target_queue_depth=row["target_queue_depth"],
-            reuse_min_age_days=row["reuse_min_age_days"],
             remote_account_id=row["remote_account_id"],
             linked_page_id=row["linked_page_id"],
             group_id=row["group_id"],
@@ -500,4 +549,5 @@ def collect_all(conn: sqlite3.Connection, generated_at: str) -> ExportBundle:
         assets=collect_assets(conn),
         channels=collect_channels(conn),
         channel_groups=collect_channel_groups(conn),
+        autofill_lanes=collect_autofill_lanes(conn),
     )

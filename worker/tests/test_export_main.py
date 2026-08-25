@@ -231,6 +231,7 @@ def test_export_of_an_empty_database_still_produces_a_valid_workbook(config, tmp
 
     assert book.sheetnames == [
         "Posts", "Sends", "Metrics", "Assets", "Channels", "Channel groups",
+        "Auto-fill lanes",
     ]
     assert result.copied == 0
     assert json.loads((out_dir / "export.json").read_text())["posts"] == []
