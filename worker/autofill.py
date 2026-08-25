@@ -820,6 +820,30 @@ def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
     return out
 
 
+def _slide_asset_ids(conn, post_id: int, surface: str) -> list:
+    """The asset_id values this post's publication rows should carry on `surface`.
+
+    A FEED send is ONE row covering all of the post's assets, which `asset_id IS NULL`
+    encodes (migration 0014). A STORY send is one row PER slide, because there is no such
+    thing as a carousel Story in the API: a four-slide post becomes four consecutive
+    Stories, each an independent publication that retries, fails and reports metrics on
+    its own.
+
+    This is the Python counterpart to dashboard/lib/story-fanout.ts's expandTarget, whose
+    docstring has always claimed one existed here. It does now. The two runtimes share a
+    database, not code (CLAUDE.md), so the rule is deliberately duplicated and tested on
+    both sides — change one and you must change the other.
+    """
+    if surface != "story":
+        return [None]
+    return [
+        r["asset_id"] for r in conn.execute(
+            "SELECT asset_id FROM post_assets WHERE post_id = ? ORDER BY sort_order ASC",
+            (post_id,),
+        ).fetchall()
+    ]
+
+
 def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logger) -> int:
     """Top up one lane. Returns the number of publications created."""
     if lane.is_group and not lane.members:
@@ -944,15 +968,19 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
                 # not the schedule, so one member of a group may need approval and
                 # another not.
                 status = "pending_approval" if member["requires_approval"] else "scheduled"
-                conn.execute(
-                    """INSERT INTO publications
-                         (post_id, channel_id, scheduled_at, status, created_by,
-                          is_recycled)
-                       VALUES (?, ?, ?, ?, 'autofill', ?)""",
-                    (row["post_id"], member["id"], slot.isoformat(), status,
-                     1 if is_bpp else 0),
-                )
-                made += 1
+                # One row for a feed send; one row PER SLIDE for a story send. They share
+                # the slot's timestamp, so ascending publication id gives the publish
+                # order worker/db.py's `ORDER BY scheduled_at, id` relies on.
+                for asset_id in _slide_asset_ids(conn, row["post_id"], lane.surface):
+                    conn.execute(
+                        """INSERT INTO publications
+                             (post_id, channel_id, scheduled_at, status, created_by,
+                              is_recycled, surface, asset_id)
+                           VALUES (?, ?, ?, ?, 'autofill', ?, ?, ?)""",
+                        (row["post_id"], member["id"], slot.isoformat(), status,
+                         1 if is_bpp else 0, lane.surface, asset_id),
+                    )
+                    made += 1
         conn.commit()
     except Exception:
         conn.rollback()

@@ -265,3 +265,66 @@ def test_a_story_lane_on_a_story_incapable_solo_channel_fills_nothing(conn, conf
     conn.commit()
 
     assert run_autofill(conn, config, _now()) == 0
+
+
+def test_a_feed_slot_makes_one_publication_covering_every_asset(conn):
+    from worker.autofill import _slide_asset_ids
+
+    cid = make_channel(conn)
+    pid = make_post(conn, targets=[(cid, "feed")], post_type="carousel", slides=3)
+    assert _slide_asset_ids(conn, pid, "feed") == [None], \
+        "a feed send means ALL assets in order, which is what asset_id NULL encodes"
+
+
+def test_a_story_slot_makes_one_publication_per_slide_in_order(conn):
+    from worker.autofill import _slide_asset_ids
+
+    cid = make_channel(conn)
+    pid = make_post(conn, targets=[(cid, "story")], post_type="carousel", slides=4)
+    expected = [r["asset_id"] for r in conn.execute(
+        "SELECT asset_id FROM post_assets WHERE post_id = ? ORDER BY sort_order", (pid,)
+    ).fetchall()]
+    assert _slide_asset_ids(conn, pid, "story") == expected
+    assert len(expected) == 4
+
+
+def test_run_autofill_writes_story_sends_with_surface_and_asset_id(conn, config):
+    """End to end: a story lane queues a four-slide post as four Stories at ONE instant,
+    ordered by ascending id — the order worker/db.py's `ORDER BY scheduled_at, id`
+    relies on to send them out in sequence."""
+    cid = make_channel(conn)
+    make_lane(conn, channel_id=cid, surface="story", min_depth=3, target=3)
+    pid = make_post(conn, targets=[(cid, "story")], post_type="carousel", slides=4)
+    conn.commit()
+
+    made = run_autofill(conn, config, _now())
+    assert made > 0
+
+    rows = conn.execute(
+        """SELECT id, surface, asset_id, scheduled_at FROM publications
+            WHERE post_id = ? ORDER BY id""",
+        (pid,),
+    ).fetchall()
+    assert len(rows) == 4, "four slides, four independent Stories"
+    assert {r["surface"] for r in rows} == {"story"}
+    assert [r["asset_id"] for r in rows] == [r["asset_id"] for r in conn.execute(
+        "SELECT asset_id FROM post_assets WHERE post_id = ? ORDER BY sort_order", (pid,)
+    ).fetchall()]
+    assert len({r["scheduled_at"] for r in rows}) == 1, "one slot, one instant"
+
+
+def test_a_feed_lane_still_writes_exactly_one_row_with_a_null_asset(conn, config):
+    """The regression guard: feed behaviour must be byte-identical to before lanes."""
+    cid = make_channel(conn)
+    make_lane(conn, channel_id=cid, surface="feed", min_depth=3, target=1)
+    pid = make_post(conn, targets=[(cid, "feed")], post_type="carousel", slides=3)
+    conn.commit()
+
+    run_autofill(conn, config, _now())
+
+    rows = conn.execute(
+        "SELECT surface, asset_id FROM publications WHERE post_id = ?", (pid,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["surface"] == "feed"
+    assert rows[0]["asset_id"] is None
