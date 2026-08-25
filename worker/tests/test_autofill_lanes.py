@@ -132,3 +132,57 @@ def test_an_inactive_owner_produces_no_lanes(conn):
     conn.commit()
 
     assert _autofill_lanes(conn) == []
+
+
+def queue(conn, post_id, channel_id, when, *, surface="feed", asset_id=None):
+    conn.execute(
+        """INSERT INTO publications
+             (post_id, channel_id, scheduled_at, status, surface, asset_id)
+           VALUES (?,?,?, 'scheduled', ?, ?)""",
+        (post_id, channel_id, when, surface, asset_id),
+    )
+    conn.commit()
+
+
+def test_a_full_story_queue_does_not_stall_the_feed_lane(conn):
+    """The single most important assertion in this feature. scheduled_ahead_count was
+    surface-blind, so story sends would satisfy the feed lane's min_queue_depth check
+    and the feed would silently stop filling."""
+    from worker.autofill import scheduled_ahead_count
+
+    cid = make_channel(conn)
+    pid = make_post(conn, targets=[(cid, "story")])
+    for day in range(10):
+        queue(conn, pid, cid, f"2099-01-{day + 1:02d}T18:00:00+00:00", surface="story")
+
+    assert scheduled_ahead_count(conn, cid, "2026-01-01T00:00:00+00:00", "story") == 10
+    assert scheduled_ahead_count(conn, cid, "2026-01-01T00:00:00+00:00", "feed") == 0
+
+
+def test_story_queue_depth_counts_slots_not_slides(conn):
+    """One slot fans out into one publication per slide. Counting rows would read a
+    four-slide Story as four posts of queue depth and stall the lane after two picks."""
+    from worker.autofill import scheduled_ahead_count
+
+    cid = make_channel(conn)
+    pid = make_post(conn, targets=[(cid, "story")], slides=4)
+    for slide in range(4):
+        queue(conn, pid, cid, "2099-01-01T18:00:00+00:00", surface="story",
+              asset_id=slide + 1)
+
+    assert scheduled_ahead_count(conn, cid, "2026-01-01T00:00:00+00:00", "story") == 1
+
+
+def test_latest_future_scheduled_is_per_surface(conn):
+    """The slot walk starts AFTER the last queued send. A story queued far into the
+    future must not push the feed lane's next slot out with it."""
+    from worker.autofill import latest_future_scheduled
+
+    cid = make_channel(conn)
+    pid = make_post(conn, targets=[(cid, "feed"), (cid, "story")])
+    queue(conn, pid, cid, "2099-12-31T18:00:00+00:00", surface="story")
+    queue(conn, pid, cid, "2026-09-01T18:00:00+00:00", surface="feed")
+
+    now = "2026-01-01T00:00:00+00:00"
+    assert latest_future_scheduled(conn, cid, now, "feed").startswith("2026-09-01")
+    assert latest_future_scheduled(conn, cid, now, "story").startswith("2099-12-31")

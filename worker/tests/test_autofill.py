@@ -129,7 +129,7 @@ def test_scheduled_ahead_count(conn):
     p = make_post(conn)
     queue_future(conn, p, ch, "2026-08-01T22:00:00+00:00")  # future
     queue_future(conn, make_post(conn), ch, "2026-07-01T22:00:00+00:00")  # past -> not "ahead"
-    assert scheduled_ahead_count(conn, ch, NOW.isoformat()) == 1
+    assert scheduled_ahead_count(conn, ch, NOW.isoformat(), "feed") == 1
 
 
 # ---- selection tiers ------------------------------------------------------------

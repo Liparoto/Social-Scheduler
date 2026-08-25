@@ -83,43 +83,56 @@ def _platform_capability_params(platform: str | None) -> dict:
     }
 
 
-def scheduled_ahead_count(conn, channel_id: int, now_iso: str) -> int:
-    """How many publications are queued ahead (future, not yet posted) for a channel."""
+def scheduled_ahead_count(conn, channel_id: int, now_iso: str, surface: str) -> int:
+    """How many future SLOTS this channel has queued ON THIS SURFACE — distinct INSTANTS,
+    not a row count and not distinct text (see _INSTANT).
+
+    Two things make the surface filter load-bearing. Without it a healthy Story queue
+    satisfies the FEED lane's `ahead >= min_queue_depth` check and the feed silently
+    stops filling. And counting distinct instants rather than rows is what makes a
+    four-slide Story — one slot, four publications — read as one post of queue depth
+    instead of four. For a feed lane the two counts are identical, because a solo feed
+    slot produces exactly one publication; the change is a no-op there and a correctness
+    fix here.
+    """
+    sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
     row = conn.execute(
         f"""
-        SELECT COUNT(*) FROM publications
+        SELECT COUNT(DISTINCT {_INSTANT}) FROM publications
         WHERE channel_id = ?
-          AND status IN ({",".join("?" * len(ACTIVE_QUEUE_STATUSES))})
+          AND surface = ?
+          AND status IN ({sq})
           AND scheduled_at > ?
         """,
-        (channel_id, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (channel_id, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0]
 
 
-def latest_future_scheduled(conn, channel_id: int, now_iso: str) -> str | None:
+def latest_future_scheduled(conn, channel_id: int, now_iso: str, surface: str) -> str | None:
+    sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
     row = conn.execute(
         f"""
         SELECT scheduled_at FROM publications
         WHERE channel_id = ?
-          AND status IN ({",".join("?" * len(ACTIVE_QUEUE_STATUSES))})
+          AND surface = ?
+          AND status IN ({sq})
           AND scheduled_at > ?
         ORDER BY {_INSTANT} DESC, scheduled_at DESC
         LIMIT 1
         """,
-        (channel_id, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (channel_id, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0] if row else None
 
 
-def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> int:
-    """How many future SLOTS a group has queued — distinct INSTANTS across its members,
-    not a row count and not distinct text (see _INSTANT).
+def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str, surface: str) -> int:
+    """How many future SLOTS a group has queued ON THIS SURFACE — distinct INSTANTS across
+    its members, not a row count and not distinct text (see _INSTANT).
 
     A group writes one row per member at a single timestamp, so counting rows would
     report a two-member group as twice as full as it is and stop refilling at half the
-    target. Solo channels keep using scheduled_ahead_count (a plain row count) so their
-    behaviour is byte-identical to before groups existed.
+    target.
     """
     if not member_ids:
         return 0
@@ -129,15 +142,16 @@ def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> in
         f"""
         SELECT COUNT(DISTINCT {_INSTANT}) FROM publications
         WHERE channel_id IN ({mq})
+          AND surface = ?
           AND status IN ({sq})
           AND scheduled_at > ?
         """,
-        (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (*member_ids, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0]
 
 
-def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str) -> str | None:
+def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str, surface: str) -> str | None:
     if not member_ids:
         return None
     mq = ",".join("?" * len(member_ids))
@@ -146,12 +160,13 @@ def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str) -> 
         f"""
         SELECT scheduled_at FROM publications
         WHERE channel_id IN ({mq})
+          AND surface = ?
           AND status IN ({sq})
           AND scheduled_at > ?
         ORDER BY {_INSTANT} DESC, scheduled_at DESC
         LIMIT 1
         """,
-        (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (*member_ids, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0] if row else None
 
@@ -804,11 +819,11 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
 
     member_ids = [m["id"] for m in lane.members]
     if lane.is_group:
-        ahead = group_scheduled_ahead_count(conn, member_ids, now_iso)
-        last_future = group_latest_future_scheduled(conn, member_ids, now_iso)
+        ahead = group_scheduled_ahead_count(conn, member_ids, now_iso, lane.surface)
+        last_future = group_latest_future_scheduled(conn, member_ids, now_iso, lane.surface)
     else:
-        ahead = scheduled_ahead_count(conn, member_ids[0], now_iso)
-        last_future = latest_future_scheduled(conn, member_ids[0], now_iso)
+        ahead = scheduled_ahead_count(conn, member_ids[0], now_iso, lane.surface)
+        last_future = latest_future_scheduled(conn, member_ids[0], now_iso, lane.surface)
 
     if ahead >= settings["min_queue_depth"]:
         return 0  # queue is healthy

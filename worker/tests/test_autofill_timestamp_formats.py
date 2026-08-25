@@ -52,7 +52,7 @@ def test_one_slot_written_in_both_formats_counts_as_one(conn):
     _pub(conn, pid, th, JS_FMT)
     conn.commit()
 
-    assert group_scheduled_ahead_count(conn, [ig, th], NOW_ISO) == 1
+    assert group_scheduled_ahead_count(conn, [ig, th], NOW_ISO, "feed") == 1
 
 
 def test_matching_formats_still_count_as_one(conn):
@@ -63,7 +63,7 @@ def test_matching_formats_still_count_as_one(conn):
     _pub(conn, pid, th, PY_FMT)
     conn.commit()
 
-    assert group_scheduled_ahead_count(conn, [ig, th], NOW_ISO) == 1
+    assert group_scheduled_ahead_count(conn, [ig, th], NOW_ISO, "feed") == 1
 
 
 def test_genuinely_distinct_slots_are_not_collapsed(conn):
@@ -76,7 +76,7 @@ def test_genuinely_distinct_slots_are_not_collapsed(conn):
     _pub(conn, pid, th, "2026-08-19T19:30:00.000Z")
     conn.commit()
 
-    assert group_scheduled_ahead_count(conn, [ig, th], NOW_ISO) == 2
+    assert group_scheduled_ahead_count(conn, [ig, th], NOW_ISO, "feed") == 2
 
 
 def test_latest_future_scheduled_is_the_latest_INSTANT(conn):
@@ -87,7 +87,7 @@ def test_latest_future_scheduled_is_the_latest_INSTANT(conn):
     _pub(conn, pid, th, "2026-08-19T19:30:00+00:00")
     conn.commit()
 
-    latest = group_latest_future_scheduled(conn, [ig, th], NOW_ISO)
+    latest = group_latest_future_scheduled(conn, [ig, th], NOW_ISO, "feed")
     assert latest is not None
     assert latest.startswith("2026-08-20T19:30:00")
 
