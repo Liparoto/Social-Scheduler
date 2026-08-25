@@ -116,6 +116,26 @@ export function panelSurfaces(offered: Surface[], lanes: LanePanelData[]): Surfa
   return [...offered, ...extra];
 }
 
+/**
+ * Which surface the editor is actually on, given what the switch is showing and what the
+ * owner last picked.
+ *
+ * The selection is client state and `shown` is derived from props, so the two can part
+ * company without a remount — and the case where they do is this feature's own exit path.
+ * Switch a stranded lane off, Save, and `router.refresh()` re-renders in place: the row is
+ * no longer enabled, so it leaves `shown`, while the selection still names it. Keyed on
+ * the stale value the editor would stay mounted on a lane `laneFor` can no longer find,
+ * fall back to DEFAULT_LANE — `offered: true`, so even the warning note disappears — and
+ * leave the owner on an empty editor with no switch back. The next Save from there writes
+ * a null cadence and zero depths over the row they just disabled.
+ *
+ * A derivation rather than an effect that resets the state: an effect would render the
+ * wedged frame first, and this has to be true on every frame.
+ */
+export function activeSurface(shown: Surface[], selected: Surface): Surface {
+  return shown.includes(selected) ? selected : (shown[0] ?? "feed");
+}
+
 /** The note on a stranded lane. Two facts the owner cannot work out from the panel: it is
  *  not running now, and it will start again on its own if a capable channel is ever added
  *  back — which is the only reason switching it off matters. */

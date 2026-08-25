@@ -10,6 +10,7 @@ import {
   laneFor,
 } from "../components/autofill-config.tsx";
 import {
+  activeSurface,
   initialCadence,
   lanePatchBody,
   newSlotDays,
@@ -556,4 +557,33 @@ test("a DISABLED lane saves in every blocked shape", () => {
     assert.equal(saveBlockedReason(false, cadence), null,
       `switching a lane off must never be blocked: ${JSON.stringify(cadence)}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Item 2's own exit path. `surface` is client state; `shown` is derived from props. Switch
+// the stranded Story lane off and Save, and router.refresh() re-renders WITHOUT remounting:
+// props.lanes loses the Story entry, so `shown` drops to ["feed"] and the switch disappears
+// — while `surface` is still "story". Keyed on that stale value, the editor stays mounted
+// on a lane laneFor can no longer find, falls back to DEFAULT_LANE (offered: true, so even
+// the note goes), and a second Save writes cadence_config null and depths 0 over the row
+// the owner just disabled. The successful exit becomes a trap that then overwrites the row.
+//
+// The fix is a derivation, not more state: a selection that is no longer shown falls back
+// to the first surface that is.
+
+test("a selected surface that is still shown is left alone", () => {
+  assert.equal(activeSurface(["feed", "story"], "story"), "story");
+  assert.equal(activeSurface(["feed", "story"], "feed"), "feed");
+});
+
+test("a selection that stops being shown falls back — this is the switched-off stranded lane", () => {
+  assert.equal(
+    activeSurface(["feed"], "story"),
+    "feed",
+    "after the Story row is disabled the editor must land on Feed, not on a ghost lane",
+  );
+});
+
+test("an empty shown list still resolves to a real surface rather than undefined", () => {
+  assert.equal(activeSurface([], "story"), "feed");
 });

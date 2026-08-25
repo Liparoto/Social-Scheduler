@@ -12,6 +12,7 @@ import {
 } from "@/lib/cadence";
 import {
   type LanePanelData,
+  activeSurface,
   initialCadence,
   laneFor,
   lanePatchBody,
@@ -134,6 +135,10 @@ export function AutofillConfig(props: Props) {
   // switch to reach it with and no line in the summary saying it exists.
   const shown = panelSurfaces(props.surfaces, props.lanes);
   const [surface, setSurface] = useState<Surface>(shown[0] ?? "feed");
+  // The SELECTION is client state; `shown` comes from props. Saving a stranded lane off
+  // drops it from `shown` via router.refresh() without remounting this component, leaving
+  // the selection pointing at a lane that is no longer listed — see activeSurface.
+  const active = activeSurface(shown, surface);
   const multi = shown.length > 1;
 
   return (
@@ -166,9 +171,9 @@ export function AutofillConfig(props: Props) {
                     key={s}
                     type="button"
                     onClick={() => setSurface(s)}
-                    aria-pressed={s === surface}
+                    aria-pressed={s === active}
                     className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                      s === surface
+                      s === active
                         ? "bg-brand text-on-brand"
                         : "text-muted hover:text-ink-soft"
                     }`}
@@ -191,8 +196,8 @@ export function AutofillConfig(props: Props) {
               lane that has never been configured, which would post at the wrong hour the
               moment it was switched on. */}
           <LaneEditor
-            key={surface}
-            lane={laneFor(props.lanes, surface)}
+            key={active}
+            lane={laneFor(props.lanes, active)}
             multi={multi}
             noun={noun}
             endpoint={endpoint}
