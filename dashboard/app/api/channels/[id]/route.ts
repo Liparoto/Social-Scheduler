@@ -63,6 +63,17 @@ export async function PATCH(
   if ("is_active" in body) fields.is_active = body.is_active ? 1 : 0;
   // Auto-fill config now lives per (owner, surface) in autofill_lanes, not in columns.
   // The body names its surface; a request without one predates lanes and means feed.
+  //
+  // An unrecognized surface is refused rather than read as feed. Coercing it wrote the
+  // sending panel's cadence and depths onto the LIVE FEED lane — a typo like "stories"
+  // silently reconfigured the wrong rotation, on a route that already answers 400 for a
+  // bad color_hue and a stray timezone.
+  if ("surface" in body && !isSurface(body.surface)) {
+    return NextResponse.json(
+      { error: 'surface must be one of "feed", "story" or "reel".' },
+      { status: 400 }
+    );
+  }
   const surface: Surface = isSurface(body.surface) ? body.surface : "feed";
   const lane: Record<string, unknown> = {};
   if ("autofill_enabled" in body) lane.enabled = body.autofill_enabled ? 1 : 0;
