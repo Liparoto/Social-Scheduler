@@ -173,6 +173,12 @@ def test_planned_slots_count_toward_the_gap_not_just_sent_ones():
 _CADENCE = '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}'
 
 
+# The superseded reuse_min_age_days columns get a value nothing like the lane's, so any
+# code still reading one is caught rather than accidentally agreeing. Writing the same
+# number to both, which this file used to do, hides that class of bug entirely.
+COLUMN_REUSE_SENTINEL = 9999
+
+
 def _channel(conn, *, bpp_days=0, target=4, min_depth=3, reuse=30):
     cid = conn.execute(
         """INSERT INTO channels
@@ -180,7 +186,7 @@ def _channel(conn, *, bpp_days=0, target=4, min_depth=3, reuse=30):
               min_queue_depth, target_queue_depth, reuse_min_age_days, remote_account_id,
               access_token, bpp_every_days)
            VALUES ('instagram','Chan','UTC',1,?,?,?,?,'acct1','tok',?)""",
-        (_CADENCE, min_depth, target, reuse, bpp_days),
+        (_CADENCE, min_depth, target, COLUMN_REUSE_SENTINEL, bpp_days),
     ).lastrowid
     conn.execute(
         """INSERT INTO autofill_lanes
@@ -303,7 +309,12 @@ def test_the_pool_rotates_oldest_first(conn):
 
     from worker import db as dbmod
 
-    pool = bpp_pool(conn, dbmod.get_channel(conn, cid), NOW, surface="feed")
+    # reuse_default mirrors what _apply_bpp's solo arm passes: the LANE's window, never
+    # the frozen channels column.
+    pool = bpp_pool(conn, dbmod.get_channel(conn, cid), NOW, surface="feed",
+                    reuse_default=conn.execute(
+                        "SELECT reuse_min_age_days FROM autofill_lanes"
+                        " WHERE channel_id=? AND surface='feed'", (cid,)).fetchone()[0])
     assert [r["post_id"] for r in pool] == [ancient, recent]
 
 
@@ -365,8 +376,8 @@ def _group(conn, *, bpp_days=0, target=4, min_depth=3):
         """INSERT INTO channel_groups
              (name, timezone, autofill_enabled, cadence_config, min_queue_depth,
               target_queue_depth, reuse_min_age_days, bpp_every_days)
-           VALUES ('G','UTC',1,?,?,?,30,?)""",
-        (_CADENCE, min_depth, target, bpp_days),
+           VALUES ('G','UTC',1,?,?,?,?,?)""",
+        (_CADENCE, min_depth, target, COLUMN_REUSE_SENTINEL, bpp_days),
     ).lastrowid
     conn.execute(
         """INSERT INTO autofill_lanes

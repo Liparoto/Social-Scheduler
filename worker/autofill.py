@@ -322,9 +322,14 @@ def eligible_candidates(conn, channel, now, limit: int | None, *, surface: str,
     """Apply cooldown, one-time, period, and caption-length gates to the SQL candidates;
     return <= limit (or all of them when limit is None).
 
-    reuse_default/timezone_name override the channel's own values. A grouped channel
-    takes both from its group, so the group's cadence and cooldown policy govern every
-    member; omit them and the channel's own columns are used exactly as before.
+    reuse_default/timezone_name are the LANE's policy: a grouped channel takes both from
+    its group and an ungrouped one from its own lane row, so the cadence and cooldown
+    policy that governs is the one the dashboard actually writes.
+
+    Omitting them falls back to the channel's own columns. That fallback exists only for
+    direct callers (tests, one-off scripts) — `channels.reuse_min_age_days` has been
+    frozen and unwritten since migration 0028, so every production call site MUST pass
+    reuse_default. _fill_unit once did not, and the owner's setting was write-only.
     """
     if reuse_default is None:
         reuse_default = channel["reuse_min_age_days"]
@@ -641,7 +646,14 @@ def _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post, ban
         pool = _group_bpp_pool(conn, settings, unit.members, now, unit.surface)
     else:
         channel = unit.members[0]
-        pool = [(r, [channel]) for r in bpp_pool(conn, channel, now, surface=unit.surface)]
+        # Same lane-over-column rule as the selection arm above. The reuse window is inert
+        # here (a BPP pool runs skip_cooldown=True), but passing it keeps the two solo call
+        # sites identical so neither can quietly go back to reading a frozen column.
+        pool = [(r, [channel]) for r in bpp_pool(
+            conn, channel, now, surface=unit.surface,
+            reuse_default=_setting(settings, "reuse_min_age_days", None),
+            timezone_name=settings["timezone"],
+        )]
 
     if not pool:
         if logger:
@@ -900,9 +912,19 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
         )
     else:
         ch = lane.members[0]
+        # reuse_default/timezone_name come from the LANE's settings, never from the
+        # channel row — exactly as the group arm takes them from the group. Since
+        # migration 0028 the dashboard writes autofill_lanes.reuse_min_age_days and
+        # nothing writes channels.reuse_min_age_days, so omitting it here made the solo
+        # channel's reuse window write-only: eligible_candidates would fall back to the
+        # frozen column and both of the channel's lanes would silently share it.
         candidates = [
             (r, [ch]) for r in
-            eligible_candidates(conn, ch, now, None, surface=lane.surface)
+            eligible_candidates(
+                conn, ch, now, None, surface=lane.surface,
+                reuse_default=settings["reuse_min_age_days"],
+                timezone_name=settings["timezone"],
+            )
         ]
 
     if not candidates:

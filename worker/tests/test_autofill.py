@@ -14,29 +14,51 @@ from worker.autofill import (
 NOW = datetime(2026, 7, 22, 18, 0, tzinfo=timezone.utc)
 
 
-def picks(conn, channel_id, limit):
+def picks(conn, channel_id, limit, surface="feed"):
+    """Mirror what _fill_unit's solo arm does: the LANE supplies the reuse window.
+
+    Passing it explicitly is the point. `eligible_candidates` still falls back to
+    `channels.reuse_min_age_days` when it is omitted, and that column has been frozen and
+    unwritten since migration 0028 — a helper that leant on the fallback would go on
+    passing while production silently used a stale number.
+    """
     from worker import db
     ch = db.get_channel(conn, channel_id)
-    return [r["post_id"] for r in eligible_candidates(conn, ch, NOW, limit, surface="feed")]
+    reuse = conn.execute(
+        "SELECT reuse_min_age_days FROM autofill_lanes WHERE channel_id=? AND surface=?",
+        (channel_id, surface),
+    ).fetchone()[0]
+    return [r["post_id"] for r in eligible_candidates(
+        conn, ch, NOW, limit, surface=surface, reuse_default=reuse)]
 
 
 # ---- seed helpers ---------------------------------------------------------------
+# The value written to the SUPERSEDED channels.reuse_min_age_days column. Deliberately
+# nothing like the lane's, and deliberately enormous: since migration 0028 nothing writes
+# that column and nothing may read it, so any code that does gets a window so long that
+# every recyclable post vanishes and the test that depends on it fails loudly. When both
+# copies held 180 no test in this suite could tell them apart — which is exactly how a
+# solo lane's reuse setting stayed write-only.
+COLUMN_REUSE_SENTINEL = 9999
+
+
 def make_channel(conn, *, autofill=1, min_depth=3, target=5, cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
-                 tz="America/New_York", approval=0, platform="instagram"):
+                 tz="America/New_York", approval=0, platform="instagram", lane_reuse=180):
     channel_id = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, requires_approval,
               remote_account_id, access_token)
-           VALUES (?,'Chan',?,?,?,?,?,180,?, 'acct1','tok')""",
-        (platform, tz, autofill, cadence, min_depth, target, approval),
+           VALUES (?,'Chan',?,?,?,?,?,?,?, 'acct1','tok')""",
+        (platform, tz, autofill, cadence, min_depth, target, COLUMN_REUSE_SENTINEL,
+         approval),
     ).lastrowid
     conn.execute(
         """INSERT INTO autofill_lanes
              (channel_id, surface, enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days)
-           VALUES (?, 'feed', ?, ?, ?, ?, 180)""",
-        (channel_id, autofill, cadence, min_depth, target),
+           VALUES (?, 'feed', ?, ?, ?, ?, ?)""",
+        (channel_id, autofill, cadence, min_depth, target, lane_reuse),
     )
     return channel_id
 
@@ -266,7 +288,7 @@ def test_dry_run_publication_not_counted_as_posted(conn):
 
 
 def test_per_post_cooldown_override(conn):
-    ch = make_channel(conn)  # channel reuse default = 180 days
+    ch = make_channel(conn)  # lane reuse default = 180 days
     p = make_post(conn, ch)
     conn.execute("UPDATE posts SET cooldown_days=7 WHERE id=?", (p,))
     conn.commit()
@@ -806,3 +828,29 @@ def test_assign_reads_due_as_a_SLOT_index_not_a_placement_count():
         (9, 3, True),   # the marked post takes the DUE slot, on day 3
         (1, 4, False),
     ]
+
+
+# ---- lane settings actually govern ---------------------------------------------------
+
+def test_solo_lane_reuse_window_governs_over_the_frozen_channel_column(conn, config):
+    """A SOLO (ungrouped) channel must fill under its LANE's reuse_min_age_days.
+
+    Migration 0028 moved auto-fill config into autofill_lanes and left the columns on
+    `channels` in place but unwritten. The dashboard only ever writes the lane, so if the
+    worker's solo arm falls back to `channels.reuse_min_age_days` the owner's setting is
+    write-only: they shorten the window, nothing happens, and both lanes silently share
+    whatever the column happened to freeze at.
+
+    Lane says 10 days; the frozen column says COLUMN_REUSE_SENTINEL. The one post went out
+    30 days ago, which is recyclable under the lane and still in cooldown under the column.
+    """
+    ch = make_channel(conn, min_depth=1, target=1, lane_reuse=10)
+    p = make_post(conn, ch)
+    mark_posted(conn, p, ch, (NOW - timedelta(days=30)).isoformat())
+
+    made = run_autofill(conn, config, NOW)
+    assert made == 1, "the lane's 10-day reuse window must govern, not the frozen column"
+    queued = [r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM publications WHERE channel_id=? AND status='scheduled'",
+        (ch,)).fetchall()]
+    assert queued == [p]

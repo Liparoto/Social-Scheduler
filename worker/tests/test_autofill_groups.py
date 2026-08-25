@@ -9,18 +9,28 @@ from worker.autofill import capable_post_ids, eligible_candidates
 NOW = datetime(2026, 7, 22, 18, 0, tzinfo=timezone.utc)
 
 
+# The value written to the SUPERSEDED reuse_min_age_days columns on channels and
+# channel_groups. Since migration 0028 nothing writes them and nothing may read them, so
+# they hold a window long enough that any code still reading one drops every recyclable
+# post and fails its test loudly. Writing the SAME number to the column and the lane —
+# which this file used to do — is what let a solo lane's reuse setting stay write-only
+# with a green suite.
+COLUMN_REUSE_SENTINEL = 9999
+
+
 # ---- seed helpers ---------------------------------------------------------------
 def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
                  autofill=0, tz="America/New_York", approval=0,
                  cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
-                 min_depth=3, target=5, reuse=180, active=1):
+                 min_depth=3, target=5, reuse=180, active=1,
+                 column_reuse=COLUMN_REUSE_SENTINEL):
     channel_id = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, requires_approval,
               remote_account_id, access_token, group_id, is_active)
            VALUES (?,?,?,?,?,?,?,?,?,'acct1','tok',?,?)""",
-        (platform, name, tz, autofill, cadence, min_depth, target, reuse, approval,
+        (platform, name, tz, autofill, cadence, min_depth, target, column_reuse, approval,
          group_id, active),
     ).lastrowid
     if group_id is None:
@@ -40,13 +50,14 @@ def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
 
 def make_group(conn, *, name="Personal", autofill=1, tz="America/New_York",
                cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
-               min_depth=3, target=5, reuse=180, active=1):
+               min_depth=3, target=5, reuse=180, active=1,
+               column_reuse=COLUMN_REUSE_SENTINEL):
     group_id = conn.execute(
         """INSERT INTO channel_groups
              (name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, is_active)
            VALUES (?,?,?,?,?,?,?,?)""",
-        (name, tz, autofill, cadence, min_depth, target, reuse, active),
+        (name, tz, autofill, cadence, min_depth, target, column_reuse, active),
     ).lastrowid
     conn.execute(
         """INSERT INTO autofill_lanes
@@ -118,7 +129,7 @@ def test_long_caption_is_capable_for_instagram_but_not_threads(conn):
 def test_eligible_candidates_accepts_policy_overrides(conn):
     """A group supplies its own reuse_min_age_days and timezone; the member channel's
     values must not be consulted when overrides are passed."""
-    ig = make_channel(conn, platform="instagram", reuse=180)
+    ig = make_channel(conn, platform="instagram", column_reuse=180)
     p = make_post(conn, targets=(ig,))
     conn.execute(
         "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
@@ -145,8 +156,23 @@ def test_eligible_candidates_limit_none_means_unlimited(conn):
 from worker.autofill import group_eligible_candidates  # noqa: E402
 
 
-def grp(conn, group_id):
-    return conn.execute("SELECT * FROM channel_groups WHERE id=?", (group_id,)).fetchone()
+def grp(conn, group_id, surface="feed"):
+    """The lane SETTINGS _fill_unit would hand group_eligible_candidates — the lane row
+    merged with the owner's timezone and bpp dials — not the raw channel_groups row.
+
+    Handing over the raw group row would read `channel_groups.reuse_min_age_days`, a
+    column frozen and unwritten since migration 0028, and every assertion below would be
+    about a number the worker never consults.
+    """
+    from worker.autofill import _lane_settings
+    group = conn.execute(
+        "SELECT * FROM channel_groups WHERE id=?", (group_id,)
+    ).fetchone()
+    lane = conn.execute(
+        "SELECT * FROM autofill_lanes WHERE group_id=? AND surface=?",
+        (group_id, surface),
+    ).fetchone()
+    return _lane_settings(lane, group)
 
 
 def members(conn, group_id):
@@ -239,9 +265,9 @@ def test_blackout_on_the_group_timezone_blocks_the_group(conn):
 
 
 def test_group_reuse_override_governs_over_member_reuse(conn):
-    """The group's reuse_min_age_days must win over the members' own column. Members
-    default to reuse=180; the group here is 7. A publish 21 days ago is recyclable
-    under the group's policy but would still be in cooldown under either member's own."""
+    """The group LANE's reuse_min_age_days must win over the members' own column. Each
+    member's column holds COLUMN_REUSE_SENTINEL; the group's lane here is 7. A publish 21
+    days ago is recyclable under the lane's policy and in cooldown under any column."""
     gid, ig, th = pair(conn, reuse=7)
     p = make_post(conn, targets=(ig, th))
     conn.execute(
