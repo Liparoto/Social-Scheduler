@@ -286,7 +286,17 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         raise _NonRetryable(
             f"unsupported platform '{platform}' — this worker has no adapter for it"
         )
-    caps = PLATFORM_CAPS[platform]
+    # .get(), matching worker/autofill.py's _platform_capability_params — but where
+    # auto-fill can safely read "unknown platform" as "supports nothing" and skip the
+    # candidate, a publish cannot: the caps drive which surface, media and URL form get
+    # sent, so proceeding on guessed capabilities would publish something wrong rather
+    # than nothing. Terminal, not retryable: this worker's capability table is fixed at
+    # import, so no amount of retrying will make the platform known.
+    caps = PLATFORM_CAPS.get(platform)
+    if caps is None:
+        raise _NonRetryable(
+            f"platform '{platform}' has no declared capabilities in this worker"
+        )
     post_type = post["post_type"]
     if post_type not in SUPPORTED_POST_TYPES:
         raise _NonRetryable(
@@ -480,7 +490,14 @@ def _normalise_comment(raw: str | None) -> str | None:
 
 def _build_plan(channel, post, assets, asset_base_url: str | None, caption: str | None,
                  config=None, surface: str = "feed", conn=None) -> dict:
-    caps = PLATFORM_CAPS[channel["platform"]]
+    # Same rule as _validate, repeated rather than assumed: _validate runs first on the
+    # live path and would already have refused this, but _build_plan is called directly
+    # by tests and one-off scripts, and every line below it reads `caps`.
+    caps = PLATFORM_CAPS.get(channel["platform"])
+    if caps is None:
+        raise _NonRetryable(
+            f"platform '{channel['platform']}' has no declared capabilities in this worker"
+        )
     # For real publishes every asset resolves (validated above). In dry-run there is no
     # tunnel, so show a readable local marker instead of a live URL. The marker must use
     # the SAME needs_conformed decision as _resolve_url, computed the same way (via

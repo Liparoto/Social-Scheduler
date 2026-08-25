@@ -22,14 +22,25 @@ def _now():
     return datetime(2026, 6, 1, 12, 0, tzinfo=_tz.utc)
 
 
+# The value written to the SUPERSEDED channels.reuse_min_age_days column. Deliberately
+# nothing like any lane's, and deliberately enormous: since migration 0028 nothing writes
+# that column and nothing may read it, so any code that does gets a window so long that
+# every recyclable post vanishes and the test that depends on it fails loudly. Leaving the
+# column on its schema default of 180 — make_lane's default too — is how a solo lane's
+# reuse window stayed write-only through an entire build (fixed in 740ee45): no test in the
+# file could tell the two copies apart. This file is the likeliest home for the next lane
+# path's tests, so the two must never be the same number here either.
+COLUMN_REUSE_SENTINEL = 9999
+
+
 def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
                  tz="America/New_York", approval=0, active=1):
     return conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, group_id, requires_approval, is_active,
-              remote_account_id, access_token)
-           VALUES (?,?,?,?,?,?, 'acct1','tok')""",
-        (platform, name, tz, group_id, approval, active),
+              reuse_min_age_days, remote_account_id, access_token)
+           VALUES (?,?,?,?,?,?,?, 'acct1','tok')""",
+        (platform, name, tz, group_id, approval, active, COLUMN_REUSE_SENTINEL),
     ).lastrowid
 
 

@@ -257,3 +257,36 @@ def test_a_reel_surface_on_a_platform_without_a_reels_surface_is_refused_termina
             [{"media_kind": "video", "id": 1, "storage_path": "a.mp4"}],
             dry_run=True, asset_base_url=None, platform="instagram", surface="reel",
         )
+
+
+# ---------------------------------------------------------------------------
+# An unknown platform. PLATFORM_CAPS was subscripted bare in two places here, so a
+# platform it does not know would KeyError mid-publish rather than failing the
+# publication. worker/autofill.py already uses the safe .get() form; the publisher now
+# matches it, and fails TERMINALLY with a message naming the platform — a publish to a
+# platform this worker has no capabilities for can never succeed on a retry, so retrying
+# it forever is the wrong direction, and so is quietly treating it as capable of nothing
+# (that would let a publish proceed against guessed capabilities).
+
+def test_a_platform_with_no_declared_capabilities_fails_terminally(monkeypatch):
+    from worker import publisher
+
+    # Past the adapter gate, so the capability lookup is what is actually under test.
+    monkeypatch.setitem(publisher._PUBLISHERS, "mystery", lambda *a, **k: None)
+    with pytest.raises(_NonRetryable, match="mystery"):
+        _validate(
+            {"post_type": "single"},
+            [{"media_kind": "image", "id": 1}],
+            dry_run=True, asset_base_url=None, platform="mystery",
+        )
+
+
+def test_building_a_plan_for_an_unknown_platform_fails_terminally_too():
+    from worker.publisher import _build_plan
+
+    with pytest.raises(_NonRetryable, match="mystery"):
+        _build_plan(
+            {"platform": "mystery", "id": 1, "account_name": "x"},
+            {"post_type": "single", "id": 1},
+            [], None, "hi",
+        )

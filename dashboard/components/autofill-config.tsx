@@ -8,15 +8,20 @@ import {
   coveredBands,
   deriveBand,
   intervalNote,
-  parseCadence,
   uncoveredBandWarning,
 } from "@/lib/cadence";
 import {
   type LanePanelData,
+  activeSurface,
+  initialCadence,
   laneFor,
   lanePatchBody,
+  newSlotDays,
   panelSummary,
+  panelSurfaces,
+  saveBlockedReason,
   surfaceLabel,
+  unofferedLaneNote,
 } from "@/lib/autofill-lanes";
 import type { Surface } from "@/lib/types";
 
@@ -38,7 +43,11 @@ interface Props {
   lanes: LanePanelData[];
   /** Which surfaces this owner can offer. Always includes "feed"; includes "story" only
    *  when a story-capable channel is in scope, so a lane that could never fire is never
-   *  configurable. One entry means no switch at all. */
+   *  configurable. One entry means no switch at all.
+   *
+   *  The switch may still show one MORE than this: a lane left switched on for a surface
+   *  that stopped being offered stays reachable so it can be turned off — see
+   *  toLanePanels and panelSurfaces. */
   surfaces: Surface[];
   bppEveryDays: number;
   /** Marked posts this unit can actually send. */
@@ -121,8 +130,16 @@ export function AutofillConfig(props: Props) {
       : `/api/channels/${props.target.id}`;
   const noun = props.target.kind === "group" ? "group" : "channel";
   const [open, setOpen] = useState(false);
-  const [surface, setSurface] = useState<Surface>(props.surfaces[0] ?? "feed");
-  const multi = props.surfaces.length > 1;
+  // Everything on offer, plus any lane still switched on for a surface that is not — the
+  // whole panel keys off this rather than props.surfaces, or a stranded lane would have no
+  // switch to reach it with and no line in the summary saying it exists.
+  const shown = panelSurfaces(props.surfaces, props.lanes);
+  const [surface, setSurface] = useState<Surface>(shown[0] ?? "feed");
+  // The SELECTION is client state; `shown` comes from props. Saving a stranded lane off
+  // drops it from `shown` via router.refresh() without remounting this component, leaving
+  // the selection pointing at a lane that is no longer listed — see activeSurface.
+  const active = activeSurface(shown, surface);
+  const multi = shown.length > 1;
 
   return (
     <div className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3">
@@ -135,7 +152,7 @@ export function AutofillConfig(props: Props) {
             about the other one exactly when the owner wants to compare them. */}
         <span className="text-xs font-medium text-ink-soft">
           Auto-fill{" "}
-          <span className="text-faint">· {panelSummary(props.lanes, props.surfaces)}</span>
+          <span className="text-faint">· {panelSummary(props.lanes, shown)}</span>
         </span>
         <span className="text-xs text-muted">{open ? "Hide" : "Edit"}</span>
       </button>
@@ -149,14 +166,14 @@ export function AutofillConfig(props: Props) {
                 aria-label="Which rotation to edit"
                 className="inline-flex gap-0.5 rounded-md border border-border bg-surface p-0.5"
               >
-                {props.surfaces.map((s) => (
+                {shown.map((s) => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setSurface(s)}
-                    aria-pressed={s === surface}
+                    aria-pressed={s === active}
                     className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-                      s === surface
+                      s === active
                         ? "bg-brand text-on-brand"
                         : "text-muted hover:text-ink-soft"
                     }`}
@@ -166,7 +183,7 @@ export function AutofillConfig(props: Props) {
                 ))}
               </div>
               <p className="mt-1.5 text-[11px] text-muted">
-                {props.surfaces.map(surfaceLabel).join(" and ")} fill independently — each
+                {shown.map(surfaceLabel).join(" and ")} fill independently — each
                 has its own cadence, queue depths and reuse rule. Saving one leaves the
                 other untouched.
               </p>
@@ -179,8 +196,8 @@ export function AutofillConfig(props: Props) {
               lane that has never been configured, which would post at the wrong hour the
               moment it was switched on. */}
           <LaneEditor
-            key={surface}
-            lane={laneFor(props.lanes, surface)}
+            key={active}
+            lane={laneFor(props.lanes, active)}
             multi={multi}
             noun={noun}
             endpoint={endpoint}
@@ -215,7 +232,12 @@ function LaneEditor({
 }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(lane.enabled);
-  const [cadence, setCadence] = useState<Cadence>(() => parseCadence(lane.cadenceConfig));
+  // initialCadence, NOT parseCadence: a lane that has never been configured opens with no
+  // time rows, so the owner has to state the time. parseCadence(null) answers 18:00, which
+  // on this install is the FEED lane's time — a Story lane pre-filled with it looks exactly
+  // like one that inherited the feed's cadence, and saving without touching the field posts
+  // Stories at the same instant as feed posts.
+  const [cadence, setCadence] = useState<Cadence>(() => initialCadence(lane));
   // Switching modes must not throw away what was set on the other one — a mis-click on the
   // radio is recoverable, and only Save commits whichever mode is showing.
   const [savedTimes, setSavedTimes] = useState<Cadence>(() =>
@@ -259,6 +281,7 @@ function LaneEditor({
 
   const field = "rounded-md border border-border bg-surface px-2 py-1 text-sm text-ink focus:border-brand";
 
+  const blocked = saveBlockedReason(enabled, cadence);
   const covered = coveredBands(cadence, bandTimes);
   const uncoveredWarnings = (["morning", "afternoon", "evening"] as const)
     .filter((band) => (lane.bandCounts[band] ?? 0) > 0 && !covered.has(band))
@@ -275,6 +298,15 @@ function LaneEditor({
         Automatically keep this {noun}&rsquo;s{" "}
         {multi ? `${surfaceLabel(lane.surface)} ` : ""}queue topped up
       </label>
+
+      {/* A lane left switched on for a surface nothing here can post any more. Shown as
+          saved and never auto-disabled — but it WILL start filling again by itself if a
+          capable channel is added back, which is the part the owner cannot see. */}
+      {!lane.offered ? (
+        <p className="rounded-md border border-status-publishing/40 bg-surface p-2 text-[11px] text-status-publishing">
+          {unofferedLaneNote(lane.surface, noun)}
+        </p>
+      ) : null}
 
       <div className="flex gap-4 text-xs text-ink-soft">
         <label className="flex items-center gap-1.5">
@@ -359,10 +391,12 @@ function LaneEditor({
           <button
             type="button"
             onClick={() => {
-              const lastDays = cadence.slots[cadence.slots.length - 1]?.days ?? [];
               setCadence({
                 mode: "times",
-                slots: [...cadence.slots, { time: "12:00", days: [...lastDays] }],
+                slots: [
+                  ...cadence.slots,
+                  { time: "12:00", days: newSlotDays(cadence.slots) },
+                ],
               });
             }}
             className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:border-border-strong hover:text-ink-soft"
@@ -552,7 +586,7 @@ function LaneEditor({
       <div className="flex items-center gap-3">
         <button
           onClick={save}
-          disabled={pending}
+          disabled={pending || blocked !== null}
           className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand hover:bg-brand-ink disabled:opacity-50"
         >
           {/* Names the lane it will write, so Save can never look like it commits both. */}
@@ -562,6 +596,10 @@ function LaneEditor({
               ? `Save ${surfaceLabel(lane.surface)} auto-fill`
               : "Save auto-fill"}
         </button>
+        {/* An enabled lane with no cadence is skipped by the worker with "no valid
+            cadence" — switched on in here and filling nothing. Say so at the button
+            rather than accepting the save and letting it look broken later. */}
+        {blocked ? <span className="text-xs text-muted">{blocked}</span> : null}
         {saved && !pending ? (
           <span className="text-xs text-status-posted">Saved</span>
         ) : null}
