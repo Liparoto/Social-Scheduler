@@ -63,7 +63,7 @@ test("getBandCounts counts ready feed posts per band", async () => {
   seedPost(db, a, "evening", "draft"); // not ready -> not counted
   seedPost(db, a, null);              // untagged -> not counted
 
-  const counts = q.getBandCounts([a]);
+  const counts = q.getBandCounts([a], "feed");
   assert.equal(counts.evening, 2);
   assert.equal(counts.morning, 1);
   assert.equal(counts.afternoon ?? 0, 0);
@@ -74,11 +74,11 @@ test("getBandCounts spans every channel in a group", async () => {
   seedPost(db, a, "evening");
   seedPost(db, b, "evening");
 
-  assert.equal(q.getBandCounts([a]).evening, 1);
-  assert.equal(q.getBandCounts([a, b]).evening, 2);
+  assert.equal(q.getBandCounts([a], "feed").evening, 1);
+  assert.equal(q.getBandCounts([a, b], "feed").evening, 2);
 });
 
 test("getBandCounts returns an empty object for no channels", async () => {
   const { q } = await setup();
-  assert.deepEqual(q.getBandCounts([]), {});
+  assert.deepEqual(q.getBandCounts([], "feed"), {});
 });

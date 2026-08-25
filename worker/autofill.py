@@ -83,43 +83,56 @@ def _platform_capability_params(platform: str | None) -> dict:
     }
 
 
-def scheduled_ahead_count(conn, channel_id: int, now_iso: str) -> int:
-    """How many publications are queued ahead (future, not yet posted) for a channel."""
+def scheduled_ahead_count(conn, channel_id: int, now_iso: str, surface: str) -> int:
+    """How many future SLOTS this channel has queued ON THIS SURFACE — distinct INSTANTS,
+    not a row count and not distinct text (see _INSTANT).
+
+    Two things make the surface filter load-bearing. Without it a healthy Story queue
+    satisfies the FEED lane's `ahead >= min_queue_depth` check and the feed silently
+    stops filling. And counting distinct instants rather than rows is what makes a
+    four-slide Story — one slot, four publications — read as one post of queue depth
+    instead of four. For a feed lane the two counts are identical, because a solo feed
+    slot produces exactly one publication; the change is a no-op there and a correctness
+    fix here.
+    """
+    sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
     row = conn.execute(
         f"""
-        SELECT COUNT(*) FROM publications
+        SELECT COUNT(DISTINCT {_INSTANT}) FROM publications
         WHERE channel_id = ?
-          AND status IN ({",".join("?" * len(ACTIVE_QUEUE_STATUSES))})
+          AND surface = ?
+          AND status IN ({sq})
           AND scheduled_at > ?
         """,
-        (channel_id, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (channel_id, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0]
 
 
-def latest_future_scheduled(conn, channel_id: int, now_iso: str) -> str | None:
+def latest_future_scheduled(conn, channel_id: int, now_iso: str, surface: str) -> str | None:
+    sq = ",".join("?" * len(ACTIVE_QUEUE_STATUSES))
     row = conn.execute(
         f"""
         SELECT scheduled_at FROM publications
         WHERE channel_id = ?
-          AND status IN ({",".join("?" * len(ACTIVE_QUEUE_STATUSES))})
+          AND surface = ?
+          AND status IN ({sq})
           AND scheduled_at > ?
         ORDER BY {_INSTANT} DESC, scheduled_at DESC
         LIMIT 1
         """,
-        (channel_id, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (channel_id, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0] if row else None
 
 
-def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> int:
-    """How many future SLOTS a group has queued — distinct INSTANTS across its members,
-    not a row count and not distinct text (see _INSTANT).
+def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str, surface: str) -> int:
+    """How many future SLOTS a group has queued ON THIS SURFACE — distinct INSTANTS across
+    its members, not a row count and not distinct text (see _INSTANT).
 
     A group writes one row per member at a single timestamp, so counting rows would
     report a two-member group as twice as full as it is and stop refilling at half the
-    target. Solo channels keep using scheduled_ahead_count (a plain row count) so their
-    behaviour is byte-identical to before groups existed.
+    target.
     """
     if not member_ids:
         return 0
@@ -129,15 +142,16 @@ def group_scheduled_ahead_count(conn, member_ids: list[int], now_iso: str) -> in
         f"""
         SELECT COUNT(DISTINCT {_INSTANT}) FROM publications
         WHERE channel_id IN ({mq})
+          AND surface = ?
           AND status IN ({sq})
           AND scheduled_at > ?
         """,
-        (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (*member_ids, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0]
 
 
-def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str) -> str | None:
+def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str, surface: str) -> str | None:
     if not member_ids:
         return None
     mq = ",".join("?" * len(member_ids))
@@ -146,17 +160,18 @@ def group_latest_future_scheduled(conn, member_ids: list[int], now_iso: str) -> 
         f"""
         SELECT scheduled_at FROM publications
         WHERE channel_id IN ({mq})
+          AND surface = ?
           AND status IN ({sq})
           AND scheduled_at > ?
         ORDER BY {_INSTANT} DESC, scheduled_at DESC
         LIMIT 1
         """,
-        (*member_ids, *ACTIVE_QUEUE_STATUSES, now_iso),
+        (*member_ids, surface, *ACTIVE_QUEUE_STATUSES, now_iso),
     ).fetchone()
     return row[0] if row else None
 
 
-def select_candidates(conn, channel_id: int, now):
+def select_candidates(conn, channel_id: int, now, surface: str):
     """SQL-gated, ordered candidate posts for a channel. Cooldown/one-time/period gates
     are applied afterward in `eligible_candidates` (Python — clearer for date math).
 
@@ -202,13 +217,16 @@ def select_candidates(conn, channel_id: int, now):
         FROM posts p
         WHERE p.content_status = 'ready'
           AND {_TYPE_CAPABILITY_SQL}
-          -- surface='feed': auto-fill queues ordinary posts only. A post targeted SOLELY
-          -- at an Instagram Story must never be auto-queued as a feed post — matching on
-          -- channel_id alone would send it to the wrong destination silently. Story
-          -- recycling is a deliberate v1 scope cut (docs/design-instagram-stories.md §4),
-          -- not an oversight.
+          -- Auto-fill queues only posts explicitly targeted at THIS lane's surface.
+          -- Matching on channel_id alone would send a Story-only post to the feed
+          -- silently. A story lane is the exact mirror: nothing lands on a Story
+          -- because auto-fill inferred it could.
           AND EXISTS (SELECT 1 FROM post_targets pt WHERE pt.post_id = p.id AND pt.channel_id = :cid
-                        AND pt.surface = 'feed')
+                        AND pt.surface = :surface)
+          -- Surface-BLIND on purpose: a post already queued as a Story is also held out
+          -- of the feed lane (and vice versa). This is the shared-cooldown principle
+          -- applied to pending work, and it is what stops the same photo appearing on
+          -- the feed and in Stories the same day. Do not add a surface predicate here.
           AND NOT EXISTS (
              SELECT 1 FROM publications q
              WHERE q.post_id = p.id AND q.channel_id = :cid
@@ -220,7 +238,7 @@ def select_candidates(conn, channel_id: int, now):
           last_posted ASC,
           p.created_at ASC
         """,
-        {"cid": channel_id, **cap_params},
+        {"cid": channel_id, "surface": surface, **cap_params},
     ).fetchall()
     return rows
 
@@ -299,14 +317,19 @@ def capable_post_ids(conn, channel) -> set[int]:
     }
 
 
-def eligible_candidates(conn, channel, now, limit: int | None, *,
+def eligible_candidates(conn, channel, now, limit: int | None, *, surface: str,
                         reuse_default=None, timezone_name=None, skip_cooldown=False):
     """Apply cooldown, one-time, period, and caption-length gates to the SQL candidates;
     return <= limit (or all of them when limit is None).
 
-    reuse_default/timezone_name override the channel's own values. A grouped channel
-    takes both from its group, so the group's cadence and cooldown policy govern every
-    member; omit them and the channel's own columns are used exactly as before.
+    reuse_default/timezone_name are the LANE's policy: a grouped channel takes both from
+    its group and an ungrouped one from its own lane row, so the cadence and cooldown
+    policy that governs is the one the dashboard actually writes.
+
+    Omitting them falls back to the channel's own columns. That fallback exists only for
+    direct callers (tests, one-off scripts) — `channels.reuse_min_age_days` has been
+    frozen and unwritten since migration 0028, so every production call site MUST pass
+    reuse_default. _fill_unit once did not, and the owner's setting was write-only.
     """
     if reuse_default is None:
         reuse_default = channel["reuse_min_age_days"]
@@ -314,7 +337,7 @@ def eligible_candidates(conn, channel, now, limit: int | None, *,
         timezone_name = channel["timezone"]
     today_local = local_date(now, timezone_name)
     out = []
-    for r in select_candidates(conn, channel["id"], now):
+    for r in select_candidates(conn, channel["id"], now, surface):
         last = r["last_posted"]
         if r["content_kind"] == "one_time":
             if last is not None:
@@ -331,9 +354,16 @@ def eligible_candidates(conn, channel, now, limit: int | None, *,
         green, blackout = _post_periods(conn, r["post_id"])
         if not in_season(green, blackout, today_local):
             continue
-        if _caption_too_long_for_channel(conn, channel, r["post_id"], r["post_type"]):
+        if surface == "feed" and _caption_too_long_for_channel(
+            conn, channel, r["post_id"], r["post_type"]
+        ):
             # Over this channel's limit: never queue it here to fail terminally later.
             # Other channels (e.g. Instagram, no caption limit) still get to select it.
+            #
+            # Feed only. A Story sends NO caption — worker/publisher.py suppresses it
+            # unconditionally and _validate runs no caption check on the story branch —
+            # so applying the limit here would silently exclude every long-caption post
+            # from the Story rotation over a rule that will never be applied to it.
             continue
         out.append(r)
         if limit is not None and len(out) >= limit:
@@ -383,7 +413,7 @@ def group_rank(conn, member_ids: list[int], post_ids) -> list:
 
 
 def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
-                              skip_cooldown=False):
+                              surface: str, skip_cooldown=False):
     """Ranked (candidate_row, [member channels to receive it]) for a channel group.
 
     A post P is group-eligible when BOTH hold:
@@ -415,8 +445,8 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
         allowed[m["id"]] = {
             r["post_id"]
             for r in eligible_candidates(
-                conn, m, now, None, reuse_default=reuse_default, timezone_name=tz_name,
-                skip_cooldown=skip_cooldown,
+                conn, m, now, None, surface=surface, reuse_default=reuse_default,
+                timezone_name=tz_name, skip_cooldown=skip_cooldown,
             )
         }
 
@@ -436,36 +466,90 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
 
 
 @dataclass
-class AutofillUnit:
-    """One thing auto-fill tops up. A channel_group with its active members, or a single
-    ungrouped channel standing alone. `settings` carries cadence_config, timezone,
-    min/target_queue_depth and reuse_min_age_days — the group and the channel share those
-    column names precisely so this stays one code path."""
+class AutofillLane:
+    """One thing auto-fill tops up: an owner (a channel_group with its active members, or
+    an ungrouped channel standing alone) PLUS a surface.
+
+    A group with a feed lane and a story lane is two lanes, topped up independently —
+    separate queue-depth maths, separate candidate pools, separate slot walks. That
+    independence is the whole feature: see docs/design-autofill-lanes.md.
+
+    `settings` is the lane row merged with the owner's `timezone` and `bpp_*` dials, which
+    stay stored on the owner. The merge is not cosmetic: `_setting` swallows a missing
+    column and returns its default, so a `settings` that dropped `bpp_every_days` would
+    not raise — the BPP step would read 0, conclude "off", and silently stop recycling
+    with nothing logged.
+    """
 
     label: str
-    settings: object
+    surface: str
+    settings: dict
     members: list
     is_group: bool
 
 
-def _autofill_units(conn) -> list[AutofillUnit]:
-    """Groups first, then ungrouped channels. A channel with group_id set is NEVER also
-    returned as a solo unit, so it can't be topped up twice in one cycle."""
-    units: list[AutofillUnit] = []
-    for g in conn.execute(
-        "SELECT * FROM channel_groups WHERE is_active = 1 AND autofill_enabled = 1"
+# Owner columns that travel with every lane, because the file already reads them off
+# `settings` and they describe the ACCOUNT rather than the schedule.
+_OWNER_SETTINGS = ("timezone", "bpp_every_days", "bpp_strong_pct", "bpp_broad_pct")
+
+
+def _lane_settings(lane_row, owner_row) -> dict:
+    """The lane's own columns, plus the owner settings listed above.
+
+    Tolerant of an owner that lacks a column: channel_groups never got bpp_strong_pct /
+    bpp_broad_pct (0022 added them to channels only), and a clone may be mid-migration.
+    A missing dial is simply absent, which `_setting` already handles.
+    """
+    out = {key: lane_row[key] for key in lane_row.keys()}
+    for key in _OWNER_SETTINGS:
+        try:
+            out[key] = owner_row[key]
+        except (IndexError, KeyError):
+            pass
+    return out
+
+
+def _autofill_lanes(conn) -> list[AutofillLane]:
+    """Every enabled lane whose owner is active. Groups first, then ungrouped channels.
+
+    A channel with group_id set is NEVER also returned as a solo lane — it fills through
+    its group — so it cannot be topped up twice in one cycle even if a stray lane row
+    exists on it.
+    """
+    lanes: list[AutofillLane] = []
+    for lane_row in conn.execute(
+        """SELECT l.*, g.name AS owner_label
+             FROM autofill_lanes l
+             JOIN channel_groups g ON g.id = l.group_id
+            WHERE l.enabled = 1 AND g.is_active = 1
+            ORDER BY g.id, l.surface"""
     ).fetchall():
+        group = conn.execute(
+            "SELECT * FROM channel_groups WHERE id = ?", (lane_row["group_id"],)
+        ).fetchone()
         members = conn.execute(
             "SELECT * FROM channels WHERE group_id = ? AND is_active = 1 ORDER BY id",
-            (g["id"],),
+            (lane_row["group_id"],),
         ).fetchall()
-        units.append(AutofillUnit(g["name"], g, list(members), True))
-    for ch in conn.execute(
-        """SELECT * FROM channels
-            WHERE is_active = 1 AND autofill_enabled = 1 AND group_id IS NULL"""
+        lanes.append(AutofillLane(
+            lane_row["owner_label"], lane_row["surface"],
+            _lane_settings(lane_row, group), list(members), True,
+        ))
+    for lane_row in conn.execute(
+        """SELECT l.*, c.account_name AS owner_label
+             FROM autofill_lanes l
+             JOIN channels c ON c.id = l.channel_id
+            WHERE l.enabled = 1 AND c.is_active = 1 AND c.group_id IS NULL
+            ORDER BY c.id, l.surface"""
     ).fetchall():
-        units.append(AutofillUnit(ch["account_name"], ch, [ch], False))
-    return units
+        channel = conn.execute(
+            "SELECT * FROM channels WHERE id = ?", (lane_row["channel_id"],)
+        ).fetchone()
+        lanes.append(AutofillLane(
+            lane_row["owner_label"], lane_row["surface"],
+            _lane_settings(lane_row, channel), [channel], False,
+        ))
+    return lanes
 
 
 def _setting(settings, name: str, default=0):
@@ -483,7 +567,8 @@ def _setting(settings, name: str, default=0):
     return default if value is None else value
 
 
-def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> list:
+def bpp_pool(conn, channel, now, *, surface: str, reuse_default=None,
+            timezone_name=None) -> list:
     """The owner's marked posts that could go out on this channel, whose turn first.
 
     Ordered by when each last went out, oldest first, so the pool ROTATES: every marked
@@ -495,6 +580,9 @@ def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> l
     post returns every four months, which a 90-day reuse window would silently veto,
     leaving the feature looking broken rather than declining. One-time content is still
     excluded — "never repost this" outranks "repost my best".
+
+    `surface` is the LANE's surface, same as everywhere else — a BPP pick is still a pick,
+    and must be targeted at the surface the lane is topping up.
     """
     marked = {
         row["id"]
@@ -503,7 +591,7 @@ def bpp_pool(conn, channel, now, *, reuse_default=None, timezone_name=None) -> l
     if not marked:
         return []
     rows = eligible_candidates(
-        conn, channel, now, None, reuse_default=reuse_default,
+        conn, channel, now, None, surface=surface, reuse_default=reuse_default,
         timezone_name=timezone_name, skip_cooldown=True,
     )
     pool = [r for r in rows if r["post_id"] in marked]
@@ -555,10 +643,17 @@ def _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post, ban
         return placed
 
     if unit.is_group:
-        pool = _group_bpp_pool(conn, settings, unit.members, now)
+        pool = _group_bpp_pool(conn, settings, unit.members, now, unit.surface)
     else:
         channel = unit.members[0]
-        pool = [(r, [channel]) for r in bpp_pool(conn, channel, now)]
+        # Same lane-over-column rule as the selection arm above. The reuse window is inert
+        # here (a BPP pool runs skip_cooldown=True), but passing it keeps the two solo call
+        # sites identical so neither can quietly go back to reading a frozen column.
+        pool = [(r, [channel]) for r in bpp_pool(
+            conn, channel, now, surface=unit.surface,
+            reuse_default=_setting(settings, "reuse_min_age_days", None),
+            timezone_name=settings["timezone"],
+        )]
 
     if not pool:
         if logger:
@@ -630,12 +725,15 @@ def _stranded_by_band(candidates, bands_by_post, covered) -> dict[str, int]:
     return counts
 
 
-def _group_bpp_pool(conn, group, members, now) -> list:
+def _group_bpp_pool(conn, group, members, now, surface: str) -> list:
     """The group's BPP pool as (row, recipients) pairs.
 
     Reuses group_eligible_candidates for the recipient logic — which members can take a
     post, and whether a rule blocks the whole group — so a BPP is delivered on exactly the
     same terms as any other pick and cannot land on a subset of the group.
+
+    `surface` is the LANE's surface — a BPP pick is still a pick, targeted at whichever
+    surface the lane is topping up.
     """
     marked = {
         row["id"]
@@ -646,7 +744,7 @@ def _group_bpp_pool(conn, group, members, now) -> list:
     pairs = [
         (row, recipients)
         for row, recipients in group_eligible_candidates(
-            conn, group, members, now, None, skip_cooldown=True
+            conn, group, members, now, None, surface=surface, skip_cooldown=True
         )
         if row["post_id"] in marked
     ]
@@ -734,27 +832,75 @@ def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
     return out
 
 
-def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logger) -> int:
-    """Top up one unit. Returns the number of publications created."""
-    if unit.is_group and not unit.members:
+def _slide_asset_ids(conn, post_id: int, surface: str) -> list:
+    """The asset_id values this post's publication rows should carry on `surface`.
+
+    A FEED send is ONE row covering all of the post's assets, which `asset_id IS NULL`
+    encodes (migration 0014). A STORY send is one row PER slide, because there is no such
+    thing as a carousel Story in the API: a four-slide post becomes four consecutive
+    Stories, each an independent publication that retries, fails and reports metrics on
+    its own.
+
+    This is the Python counterpart to dashboard/lib/story-fanout.ts's expandTarget, whose
+    docstring has always claimed one existed here. It does now. The two runtimes share a
+    database, not code (CLAUDE.md), so the rule is deliberately duplicated and tested on
+    both sides — change one and you must change the other.
+    """
+    if surface != "story":
+        return [None]
+    return [
+        r["asset_id"] for r in conn.execute(
+            "SELECT asset_id FROM post_assets WHERE post_id = ? ORDER BY sort_order ASC",
+            (post_id,),
+        ).fetchall()
+    ]
+
+
+def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logger) -> int:
+    """Top up one lane. Returns the number of publications created."""
+    if lane.is_group and not lane.members:
         if logger:
-            logger.info("[autofill %s] group has no active members — skipping", unit.label)
+            logger.info("[autofill %s] group has no active members — skipping", lane.label)
         return 0
 
-    settings = unit.settings
+    # A lane reaches only members whose platform HAS this surface: an Instagram + Facebook
+    # group with a story lane creates Instagram sends and nothing for the Page.
+    #
+    # Here rather than inside group_eligible_candidates so the SOLO path is gated by the
+    # same line. A story lane on a Telegram channel must be refused by the WORKER — the
+    # dashboard hides the option, but the worker must never depend on the UI for
+    # correctness.
+    # .get(), matching _platform_capability_params: a platform PLATFORM_CAPS does not
+    # recognize has no surfaces, which is the safe direction — that member sits the lane
+    # out. A bare subscript would raise KeyError all the way out of run_autofill and stop
+    # EVERY lane in the install, not just the unrecognized platform's.
+    members = [
+        m for m in lane.members
+        if lane.surface in getattr(
+            PLATFORM_CAPS.get(m["platform"]), "surfaces", frozenset()
+        )
+    ]
+    if not members:
+        if logger:
+            logger.info("[autofill %s] no active member can take a %s — skipping",
+                        lane.label, lane.surface)
+        return 0
+    lane.members = members
+
+    settings = lane.settings
     cadence = parse_cadence(settings["cadence_config"])
     if cadence is None:
         if logger:
-            logger.info("[autofill %s] no valid cadence — skipping", unit.label)
+            logger.info("[autofill %s] no valid cadence — skipping", lane.label)
         return 0
 
-    member_ids = [m["id"] for m in unit.members]
-    if unit.is_group:
-        ahead = group_scheduled_ahead_count(conn, member_ids, now_iso)
-        last_future = group_latest_future_scheduled(conn, member_ids, now_iso)
+    member_ids = [m["id"] for m in lane.members]
+    if lane.is_group:
+        ahead = group_scheduled_ahead_count(conn, member_ids, now_iso, lane.surface)
+        last_future = group_latest_future_scheduled(conn, member_ids, now_iso, lane.surface)
     else:
-        ahead = scheduled_ahead_count(conn, member_ids[0], now_iso)
-        last_future = latest_future_scheduled(conn, member_ids[0], now_iso)
+        ahead = scheduled_ahead_count(conn, member_ids[0], now_iso, lane.surface)
+        last_future = latest_future_scheduled(conn, member_ids[0], now_iso, lane.surface)
 
     if ahead >= settings["min_queue_depth"]:
         return 0  # queue is healthy
@@ -766,17 +912,32 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     # few all sit in a band this cadence has no slot for, auto-fill would place nothing while
     # hundreds of usable posts sat further down the ranking. The SLOTS do the limiting instead —
     # which is already how the group and BPP paths have always worked.
-    if unit.is_group:
-        candidates = group_eligible_candidates(conn, settings, unit.members, now, None)
+    if lane.is_group:
+        candidates = group_eligible_candidates(
+            conn, settings, lane.members, now, None, surface=lane.surface
+        )
     else:
-        ch = unit.members[0]
-        candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, None)]
+        ch = lane.members[0]
+        # reuse_default/timezone_name come from the LANE's settings, never from the
+        # channel row — exactly as the group arm takes them from the group. Since
+        # migration 0028 the dashboard writes autofill_lanes.reuse_min_age_days and
+        # nothing writes channels.reuse_min_age_days, so omitting it here made the solo
+        # channel's reuse window write-only: eligible_candidates would fall back to the
+        # frozen column and both of the channel's lanes would silently share it.
+        candidates = [
+            (r, [ch]) for r in
+            eligible_candidates(
+                conn, ch, now, None, surface=lane.surface,
+                reuse_default=settings["reuse_min_age_days"],
+                timezone_name=settings["timezone"],
+            )
+        ]
 
     if not candidates:
         if logger:
             logger.info(
                 "[autofill %s] queue low (%d/%d) but no eligible content",
-                unit.label, ahead, settings["min_queue_depth"],
+                lane.label, ahead, settings["min_queue_depth"],
             )
         return 0
 
@@ -799,9 +960,12 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     # BPP: give some slots to posts the OWNER marked as worth reposting, on their own cadence
     # in days. Nothing here judges content — the mark is the judgement, made by a person
     # looking at the stats (see worker/bpp.py for why an algorithm cannot).
-    every_days = _setting(settings, "bpp_every_days")
+    # Feed only. Recycling a best-performing post as a Story is not a thing the owner
+    # asked for, and _last_bpp_date / _unit_publication_count are both surface-blind — a
+    # story recycle would silently move the FEED lane's next BPP due date.
+    every_days = _setting(settings, "bpp_every_days") if lane.surface == "feed" else 0
     if every_days > 0 and placed:
-        placed = _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post,
+        placed = _apply_bpp(conn, lane, settings, now, placed, candidates, bands_by_post,
                             band_of, covered, every_days, logger)
 
     stranded = _stranded_by_band(candidates, bands_by_post, covered)
@@ -809,21 +973,21 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
         detail = ", ".join(f"{count} tagged {band}" for band, count in sorted(stranded.items()))
         logger.info(
             "[autofill %s] %s held back — this cadence has no slot in that band. Add a time "
-            "in the dashboard, or retag the posts.", unit.label, detail,
+            "in the dashboard, or retag the posts.", lane.label, detail,
         )
 
     if not placed:
         if logger:
             logger.info(
                 "[autofill %s] queue low (%d/%d) but nothing could be placed",
-                unit.label, ahead, settings["min_queue_depth"],
+                lane.label, ahead, settings["min_queue_depth"],
             )
         return 0
 
     # All-or-nothing. sqlite3's default isolation means these inserts sit in an implicit
     # transaction, and run.py catches errors and REUSES this connection — so without the
     # rollback a failure mid-group (e.g. a member channel deleted in the dashboard since
-    # _autofill_units read it; foreign keys are ON) would be silently committed by the
+    # _autofill_lanes read it; foreign keys are ON) would be silently committed by the
     # next cycle's heartbeat, leaving one member scheduled and the other not: exactly the
     # drift groups exist to prevent. The open transaction would also hold SQLite's writer
     # lock for a full poll interval, blocking the dashboard.
@@ -835,15 +999,19 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
                 # not the schedule, so one member of a group may need approval and
                 # another not.
                 status = "pending_approval" if member["requires_approval"] else "scheduled"
-                conn.execute(
-                    """INSERT INTO publications
-                         (post_id, channel_id, scheduled_at, status, created_by,
-                          is_recycled)
-                       VALUES (?, ?, ?, ?, 'autofill', ?)""",
-                    (row["post_id"], member["id"], slot.isoformat(), status,
-                     1 if is_bpp else 0),
-                )
-                made += 1
+                # One row for a feed send; one row PER SLIDE for a story send. They share
+                # the slot's timestamp, so ascending publication id gives the publish
+                # order worker/db.py's `ORDER BY scheduled_at, id` relies on.
+                for asset_id in _slide_asset_ids(conn, row["post_id"], lane.surface):
+                    conn.execute(
+                        """INSERT INTO publications
+                             (post_id, channel_id, scheduled_at, status, created_by,
+                              is_recycled, surface, asset_id)
+                           VALUES (?, ?, ?, ?, 'autofill', ?, ?, ?)""",
+                        (row["post_id"], member["id"], slot.isoformat(), status,
+                         1 if is_bpp else 0, lane.surface, asset_id),
+                    )
+                    made += 1
         conn.commit()
     except Exception:
         conn.rollback()
@@ -852,16 +1020,16 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
         logger.info(
             "[autofill %s] queue %d/%d -> added %d publication(s) across %d channel(s) "
             "(target %d)",
-            unit.label, ahead, settings["min_queue_depth"], made, len(unit.members),
+            lane.label, ahead, settings["min_queue_depth"], made, len(lane.members),
             settings["target_queue_depth"],
         )
     return made
 
 
 def run_autofill(conn, config: Config, now, logger=None) -> int:
-    """Top up every auto-fill-enabled unit. Returns total publications created."""
+    """Top up every enabled lane. Returns total publications created."""
     now_iso = now.isoformat()
     return sum(
-        _fill_unit(conn, unit, config, now, now_iso, logger)
-        for unit in _autofill_units(conn)
+        _fill_unit(conn, lane, config, now, now_iso, logger)
+        for lane in _autofill_lanes(conn)
     )

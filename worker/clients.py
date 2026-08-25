@@ -103,6 +103,11 @@ class PlatformCaps:
     # the safe default: worst case autofill under-selects rather than queuing a video a
     # channel can never publish (which fails terminally forever — see select_candidates).
     video_surfaces: frozenset[str] = frozenset()
+    # Which destinations this platform's publish path accepts, for ANY media kind.
+    # video_surfaces answers the narrower question "where can a VIDEO go" and is a
+    # subset of this. Defaults to feed-only: a platform that has not thought about
+    # Stories must not be offered one.
+    surfaces: frozenset[str] = frozenset({"feed"})
     # False when the credential alone identifies the destination, so there is no separate
     # account id to store or ask for (Discord's webhook URL is both address and secret).
     uses_account_id: bool = True
@@ -141,6 +146,7 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
     "instagram": PlatformCaps(
         supports_text=False, max_carousel=10, caption_chars={},
         video_surfaces=frozenset({"feed", "story"}),
+        surfaces=frozenset({"feed", "story"}),
     ),
     # Facebook Pages: attached_media multi-photo posts cap at 10. No text-only format
     # here either — a Page status update is a different product surface we don't publish.
@@ -149,6 +155,7 @@ PLATFORM_CAPS: dict[str, PlatformCaps] = {
     "facebook": PlatformCaps(
         supports_text=False, max_carousel=10, caption_chars={},
         video_surfaces=frozenset({"feed", "reel"}), feed_video_is_constrained=False,
+        surfaces=frozenset({"feed", "reel"}),
     ),
     # Threads: text-first. 500-character text limit, 2-20 carousel children,
     # 250 API-published posts per rolling 24h (verified 2026-07-25).

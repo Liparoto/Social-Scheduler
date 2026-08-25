@@ -368,17 +368,17 @@ def test_collect_all_is_read_only_under_query_only(db_path):
 
 
 # ---- channel groups ------------------------------------------------------------------
-# A group owns real scheduling configuration — one cadence, one queue depth, one reuse
-# window — that is NOT recoverable from the channels pointing at it. Before this was
-# collected, a restored backup silently returned every grouped channel to solo auto-fill:
-# each would then pick its own content on its own days, which is exactly what grouping
-# exists to prevent.
+# A group's identity and membership are NOT recoverable from the channels pointing at it.
+# Before this was collected, a restored backup silently returned every grouped channel to
+# solo auto-fill: each would then pick its own content on its own days, which is exactly
+# what grouping exists to prevent.
+#
+# The group's SCHEDULE is asserted on the lanes below instead — since migration 0028 it
+# lives one row per surface in autofill_lanes, and the same-named columns here are frozen.
 
 def test_channel_groups_are_backed_up(conn):
     gid = conn.execute(
-        "INSERT INTO channel_groups (name, timezone, autofill_enabled, cadence_config,"
-        "  min_queue_depth, target_queue_depth, reuse_min_age_days)"
-        " VALUES ('Personal', 'America/Los_Angeles', 1, '{\"mon\":1}', 2, 5, 90)"
+        "INSERT INTO channel_groups (name, timezone) VALUES ('Personal','America/Los_Angeles')"
     ).lastrowid
     conn.commit()
 
@@ -389,10 +389,7 @@ def test_channel_groups_are_backed_up(conn):
     assert group.group_id == gid
     assert group.name == "Personal"
     assert group.timezone == "America/Los_Angeles"
-    assert group.autofill_enabled is True
-    assert group.cadence_config == '{"mon":1}'
-    assert (group.min_queue_depth, group.target_queue_depth) == (2, 5)
-    assert group.reuse_min_age_days == 90
+    assert group.is_active is True
 
 
 def test_a_channels_group_membership_is_backed_up(conn):
@@ -452,3 +449,83 @@ def test_bpp_marks_are_backed_up(conn):
     assert by_id[marked].is_bpp is True
     assert by_id[marked].bpp_marked_at == "2026-08-06T12:00:00+00:00"
     assert by_id[plain].is_bpp is False, "an unmarked post must not come back marked"
+
+
+# ---- auto-fill lanes -----------------------------------------------------------------
+# Since migration 0028 the auto-fill config lives per (owner, surface) in autofill_lanes,
+# and the columns it superseded on channels/channel_groups are frozen and unwritten. An
+# export that kept emitting those columns would state a cadence the worker is not running
+# — confidently, in a human-readable file — and would never show a Story lane at all.
+
+def test_autofill_lanes_are_backed_up(conn):
+    cid = conn.execute(
+        "INSERT INTO channels (platform, account_name, timezone, remote_account_id,"
+        "  access_token) VALUES ('instagram','Solo IG','America/Los_Angeles','a','t')"
+    ).lastrowid
+    gid = conn.execute(
+        "INSERT INTO channel_groups (name, timezone) VALUES ('Personal','America/New_York')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO autofill_lanes (channel_id, surface, enabled, cadence_config,"
+        "  min_queue_depth, target_queue_depth, reuse_min_age_days)"
+        " VALUES (?, 'story', 1, '{\"mon\":1}', 2, 4, 30)", (cid,)
+    )
+    conn.execute(
+        "INSERT INTO autofill_lanes (group_id, surface, enabled, cadence_config,"
+        "  min_queue_depth, target_queue_depth, reuse_min_age_days)"
+        " VALUES (?, 'feed', 0, '{\"fri\":1}', 3, 7, 90)", (gid,)
+    )
+    conn.commit()
+
+    lanes = collect_all(conn, GENERATED_AT).autofill_lanes
+
+    by_surface = {lane.surface: lane for lane in lanes}
+    assert set(by_surface) == {"story", "feed"}
+
+    story = by_surface["story"]
+    assert (story.owner_kind, story.owner_id, story.owner_name) == ("channel", cid, "Solo IG")
+    assert story.enabled is True
+    assert story.cadence_config == '{"mon":1}'
+    assert (story.min_queue_depth, story.target_queue_depth) == (2, 4)
+    assert story.reuse_min_age_days == 30
+
+    feed = by_surface["feed"]
+    assert (feed.owner_kind, feed.owner_id, feed.owner_name) == ("group", gid, "Personal")
+    assert feed.enabled is False
+    assert feed.reuse_min_age_days == 90
+
+
+def test_both_lanes_of_one_owner_are_backed_up(conn):
+    """The whole point of lanes: one owner runs a feed rotation and a Story rotation on
+    independent cadences. A backup that showed only one of them would misreport the
+    install just as badly as showing the frozen column did."""
+    cid = conn.execute(
+        "INSERT INTO channels (platform, account_name, timezone, remote_account_id,"
+        "  access_token) VALUES ('instagram','Solo IG','America/Los_Angeles','a','t')"
+    ).lastrowid
+    for surface, target in (("feed", 7), ("story", 3)):
+        conn.execute(
+            "INSERT INTO autofill_lanes (channel_id, surface, enabled, target_queue_depth)"
+            " VALUES (?,?,1,?)", (cid, surface, target)
+        )
+    conn.commit()
+
+    lanes = collect_all(conn, GENERATED_AT).autofill_lanes
+
+    assert {(lane.surface, lane.target_queue_depth) for lane in lanes} == {
+        ("feed", 7), ("story", 3)
+    }
+
+
+def test_the_superseded_autofill_columns_are_not_exported(conn):
+    """Frozen since 0028. Emitting them makes the snapshot state a cadence the worker is
+    not running, which is worse than omitting them — the reader has no way to tell."""
+    from worker.export.collect import ExportedChannel, ExportedChannelGroup
+
+    frozen = {
+        "autofill_enabled", "cadence_config",
+        "min_queue_depth", "target_queue_depth", "reuse_min_age_days",
+    }
+    for cls in (ExportedChannel, ExportedChannelGroup):
+        leaked = frozen & set(cls.__dataclass_fields__)
+        assert not leaked, f"{cls.__name__} still exports frozen columns: {sorted(leaked)}"

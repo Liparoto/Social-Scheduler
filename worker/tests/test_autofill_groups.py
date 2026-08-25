@@ -9,32 +9,64 @@ from worker.autofill import capable_post_ids, eligible_candidates
 NOW = datetime(2026, 7, 22, 18, 0, tzinfo=timezone.utc)
 
 
+# The value written to the SUPERSEDED reuse_min_age_days columns on channels and
+# channel_groups. Since migration 0028 nothing writes them and nothing may read them, so
+# they hold a window long enough that any code still reading one drops every recyclable
+# post and fails its test loudly. Writing the SAME number to the column and the lane —
+# which this file used to do — is what let a solo lane's reuse setting stay write-only
+# with a green suite.
+COLUMN_REUSE_SENTINEL = 9999
+
+
 # ---- seed helpers ---------------------------------------------------------------
 def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
                  autofill=0, tz="America/New_York", approval=0,
                  cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
-                 min_depth=3, target=5, reuse=180, active=1):
-    return conn.execute(
+                 min_depth=3, target=5, reuse=180, active=1,
+                 column_reuse=COLUMN_REUSE_SENTINEL):
+    channel_id = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, requires_approval,
               remote_account_id, access_token, group_id, is_active)
            VALUES (?,?,?,?,?,?,?,?,?,'acct1','tok',?,?)""",
-        (platform, name, tz, autofill, cadence, min_depth, target, reuse, approval,
+        (platform, name, tz, autofill, cadence, min_depth, target, column_reuse, approval,
          group_id, active),
     ).lastrowid
+    if group_id is None:
+        # A grouped channel fills through its group's lane — giving it one of its own
+        # here would create a stray row the loader must (and does, per
+        # test_a_grouped_channels_own_lane_is_ignored) ignore, so only the ungrouped
+        # case needs one to keep this suite's assertions meaningful.
+        conn.execute(
+            """INSERT INTO autofill_lanes
+                 (channel_id, surface, enabled, cadence_config,
+                  min_queue_depth, target_queue_depth, reuse_min_age_days)
+               VALUES (?, 'feed', ?, ?, ?, ?, ?)""",
+            (channel_id, autofill, cadence, min_depth, target, reuse),
+        )
+    return channel_id
 
 
 def make_group(conn, *, name="Personal", autofill=1, tz="America/New_York",
                cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
-               min_depth=3, target=5, reuse=180, active=1):
-    return conn.execute(
+               min_depth=3, target=5, reuse=180, active=1,
+               column_reuse=COLUMN_REUSE_SENTINEL):
+    group_id = conn.execute(
         """INSERT INTO channel_groups
              (name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, is_active)
            VALUES (?,?,?,?,?,?,?,?)""",
-        (name, tz, autofill, cadence, min_depth, target, reuse, active),
+        (name, tz, autofill, cadence, min_depth, target, column_reuse, active),
     ).lastrowid
+    conn.execute(
+        """INSERT INTO autofill_lanes
+             (group_id, surface, enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days)
+           VALUES (?, 'feed', ?, ?, ?, ?, ?)""",
+        (group_id, autofill, cadence, min_depth, target, reuse),
+    )
+    return group_id
 
 
 def make_post(conn, *, post_type="single", caption="x", targets=(),
@@ -73,7 +105,8 @@ def test_capable_post_ids_ignores_targeting_and_cooldown(conn):
     ig = make_channel(conn, platform="instagram")
     untargeted = make_post(conn, targets=())
     assert untargeted in capable_post_ids(conn, ch(conn, ig))
-    assert [r["post_id"] for r in eligible_candidates(conn, ch(conn, ig), NOW, None)] == []
+    assert [r["post_id"] for r in
+            eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed")] == []
 
 
 def test_video_post_is_capable_for_instagram_but_not_threads(conn):
@@ -96,7 +129,7 @@ def test_long_caption_is_capable_for_instagram_but_not_threads(conn):
 def test_eligible_candidates_accepts_policy_overrides(conn):
     """A group supplies its own reuse_min_age_days and timezone; the member channel's
     values must not be consulted when overrides are passed."""
-    ig = make_channel(conn, platform="instagram", reuse=180)
+    ig = make_channel(conn, platform="instagram", column_reuse=180)
     p = make_post(conn, targets=(ig,))
     conn.execute(
         "INSERT INTO publications (post_id, channel_id, scheduled_at, status, published_at) "
@@ -106,15 +139,16 @@ def test_eligible_candidates_accepts_policy_overrides(conn):
     conn.commit()
 
     # 21 days ago. Channel default (180) excludes it; a group override of 7 admits it.
-    assert [r["post_id"] for r in eligible_candidates(conn, ch(conn, ig), NOW, None)] == []
-    got = eligible_candidates(conn, ch(conn, ig), NOW, None, reuse_default=7)
+    assert [r["post_id"] for r in
+            eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed")] == []
+    got = eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed", reuse_default=7)
     assert [r["post_id"] for r in got] == [p]
 
 
 def test_eligible_candidates_limit_none_means_unlimited(conn):
     ig = make_channel(conn, platform="instagram")
     ids = {make_post(conn, targets=(ig,)) for _ in range(5)}
-    got = eligible_candidates(conn, ch(conn, ig), NOW, None)
+    got = eligible_candidates(conn, ch(conn, ig), NOW, None, surface="feed")
     assert {r["post_id"] for r in got} == ids
 
 
@@ -122,8 +156,23 @@ def test_eligible_candidates_limit_none_means_unlimited(conn):
 from worker.autofill import group_eligible_candidates  # noqa: E402
 
 
-def grp(conn, group_id):
-    return conn.execute("SELECT * FROM channel_groups WHERE id=?", (group_id,)).fetchone()
+def grp(conn, group_id, surface="feed"):
+    """The lane SETTINGS _fill_unit would hand group_eligible_candidates — the lane row
+    merged with the owner's timezone and bpp dials — not the raw channel_groups row.
+
+    Handing over the raw group row would read `channel_groups.reuse_min_age_days`, a
+    column frozen and unwritten since migration 0028, and every assertion below would be
+    about a number the worker never consults.
+    """
+    from worker.autofill import _lane_settings
+    group = conn.execute(
+        "SELECT * FROM channel_groups WHERE id=?", (group_id,)
+    ).fetchone()
+    lane = conn.execute(
+        "SELECT * FROM autofill_lanes WHERE group_id=? AND surface=?",
+        (group_id, surface),
+    ).fetchone()
+    return _lane_settings(lane, group)
 
 
 def members(conn, group_id):
@@ -141,7 +190,9 @@ def pair(conn, **kw):
 
 
 def picked(conn, gid, limit=10):
-    got = group_eligible_candidates(conn, grp(conn, gid), members(conn, gid), NOW, limit)
+    got = group_eligible_candidates(
+        conn, grp(conn, gid), members(conn, gid), NOW, limit, surface="feed"
+    )
     return [(r["post_id"], sorted(m["id"] for m in ms)) for r, ms in got]
 
 
@@ -214,9 +265,9 @@ def test_blackout_on_the_group_timezone_blocks_the_group(conn):
 
 
 def test_group_reuse_override_governs_over_member_reuse(conn):
-    """The group's reuse_min_age_days must win over the members' own column. Members
-    default to reuse=180; the group here is 7. A publish 21 days ago is recyclable
-    under the group's policy but would still be in cooldown under either member's own."""
+    """The group LANE's reuse_min_age_days must win over the members' own column. Each
+    member's column holds COLUMN_REUSE_SENTINEL; the group's lane here is 7. A publish 21
+    days ago is recyclable under the lane's policy and in cooldown under any column."""
     gid, ig, th = pair(conn, reuse=7)
     p = make_post(conn, targets=(ig, th))
     conn.execute(
@@ -315,7 +366,9 @@ def test_group_selection_respects_limit(conn):
 
 def test_group_with_no_active_members_selects_nothing(conn):
     gid = make_group(conn)
-    assert group_eligible_candidates(conn, grp(conn, gid), [], NOW, 5) == []
+    assert group_eligible_candidates(
+        conn, grp(conn, gid), [], NOW, 5, surface="feed"
+    ) == []
 
 
 # ---- Task 4: group top-up -------------------------------------------------------
@@ -457,7 +510,7 @@ def test_failed_group_insert_persists_nothing_and_leaves_no_open_transaction(con
     would also hold the writer lock for a whole poll interval, blocking the dashboard.
 
     The failure is simulated with a trigger that aborts the second member's insert. The
-    real-world trigger is a channel deleted in the dashboard between _autofill_units
+    real-world trigger is a channel deleted in the dashboard between _autofill_lanes
     reading its members and _fill_unit inserting (foreign keys are ON).
     """
     gid, ig, th = pair(conn, min_depth=1, target=1)

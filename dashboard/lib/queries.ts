@@ -5,6 +5,7 @@ import { isBlocked } from "./format";
 import { FINISHED_STATUSES_SQL } from "./queue-sections";
 import type {
   Asset,
+  AutofillLane,
   CaptionVariant,
   Channel,
   ChannelGroup,
@@ -291,7 +292,7 @@ export function getGroupMembers(groupId: number): Channel[] {
     .all(groupId) as Channel[];
 }
 
-/** Ready, feed-targeted posts per time_of_day band, across a set of channels.
+/** Ready posts targeted at `surface`, per time_of_day band, across a set of channels.
  *
  *  Feeds the auto-fill form's coverage warning: a band with content but no slot in the
  *  cadence means those posts silently stop being auto-filled, and the queue goes on looking
@@ -300,8 +301,15 @@ export function getGroupMembers(groupId: number): Channel[] {
  *  Deliberately approximate — it does NOT re-run cooldown, period or caption-length
  *  eligibility. Making it exact would mean running the full selection pass on every page
  *  render to sharpen a number whose only job is "this band has content and nowhere to put it".
+ *
+ *  Surface matters: a warning that lies is worse than no warning. Counting feed posts
+ *  for a story lane would flag bands the lane has no problem with, and this warning is
+ *  the only safety net the strict band rule has.
  */
-export function getBandCounts(channelIds: number[]): Record<string, number> {
+export function getBandCounts(
+  channelIds: number[],
+  surface: Surface,
+): Record<string, number> {
   if (channelIds.length === 0) return {};
   const placeholders = channelIds.map(() => "?").join(",");
   const rows = getDb()
@@ -315,10 +323,10 @@ export function getBandCounts(channelIds: number[]): Record<string, number> {
           AND EXISTS (SELECT 1 FROM post_targets ptg
                        WHERE ptg.post_id = p.id
                          AND ptg.channel_id IN (${placeholders})
-                         AND ptg.surface = 'feed')
+                         AND ptg.surface = ?)
         GROUP BY t.name`,
     )
-    .all(...channelIds) as { band: string; n: number }[];
+    .all(...channelIds, surface) as { band: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.band, r.n]));
 }
 
@@ -358,6 +366,81 @@ export function updateChannelGroup(
 export function deleteChannelGroup(id: number): boolean {
   const info = getDb().prepare("DELETE FROM channel_groups WHERE id = ?").run(id);
   return info.changes > 0;
+}
+
+type LaneOwner = { kind: "channel" | "group"; id: number };
+
+function ownerColumn(owner: LaneOwner): "channel_id" | "group_id" {
+  return owner.kind === "group" ? "group_id" : "channel_id";
+}
+
+/** Every lane belonging to one owner, feed first. */
+export function getAutofillLanes(owner: LaneOwner): AutofillLane[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM autofill_lanes WHERE ${ownerColumn(owner)} = ? ORDER BY surface`,
+    )
+    .all(owner.id) as AutofillLane[];
+}
+
+type AutofillLaneFields = Partial<
+  Pick<
+    AutofillLane,
+    "enabled" | "cadence_config" | "min_queue_depth" | "target_queue_depth" | "reuse_min_age_days"
+  >
+>;
+
+// The only columns upsertAutofillLane is allowed to write. fields' TS type is erased at
+// runtime, so this Set is what actually keeps an unexpected key out of the SQL string —
+// both the column list and the @-placeholder name are built from these keys. Today both
+// call sites (the channel and channel-group PATCH routes) build `lane` from hardcoded
+// literal property names, never by spreading a request body, so there is no live
+// injection path — but that is caller discipline, not a guarantee, and this function
+// needs to be safe on its own.
+const AUTOFILL_LANE_FIELD_KEYS = new Set<keyof AutofillLaneFields>([
+  "enabled",
+  "cadence_config",
+  "min_queue_depth",
+  "target_queue_depth",
+  "reuse_min_age_days",
+]);
+
+/** Create this owner's lane for `surface`, or update the fields given.
+ *
+ *  An omitted field is left at its current value, which is what lets the form save one
+ *  lane without disturbing the other. Keyed on the partial unique index from migration
+ *  0028, so a concurrent double-save cannot produce two rows for one surface.
+ *
+ *  Throws on any key outside AUTOFILL_LANE_FIELD_KEYS rather than dropping it silently:
+ *  this runs in a server-side route handler, where a thrown error becomes a loud 500,
+ *  and a caller passing an unexpected key is a bug worth surfacing immediately rather
+ *  than a save that quietly didn't stick.
+ */
+export function upsertAutofillLane(
+  owner: LaneOwner,
+  surface: Surface,
+  fields: AutofillLaneFields,
+): void {
+  const keys = Object.keys(fields) as (keyof AutofillLaneFields)[];
+  for (const k of keys) {
+    if (!AUTOFILL_LANE_FIELD_KEYS.has(k)) {
+      throw new Error(`upsertAutofillLane: unknown lane field "${k}"`);
+    }
+  }
+
+  const db = getDb();
+  const column = ownerColumn(owner);
+  db.prepare(
+    `INSERT INTO autofill_lanes (${column}, surface) VALUES (?, ?)
+       ON CONFLICT DO NOTHING`,
+  ).run(owner.id, surface);
+
+  if (keys.length === 0) return;
+  const assignments = keys.map((k) => `${k} = @${k}`).join(", ");
+  db.prepare(
+    `UPDATE autofill_lanes SET ${assignments}
+      WHERE ${column} = @ownerId AND surface = @surface`,
+  ).run({ ...fields, ownerId: owner.id, surface });
 }
 
 export function setChannelGroup(channelId: number, groupId: number | null): void {
