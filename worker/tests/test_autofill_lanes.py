@@ -328,3 +328,23 @@ def test_a_feed_lane_still_writes_exactly_one_row_with_a_null_asset(conn, config
     assert len(rows) == 1
     assert rows[0]["surface"] == "feed"
     assert rows[0]["asset_id"] is None
+
+
+def test_a_story_lane_never_queues_a_bpp_recycle(conn, config):
+    """BPP dials live on the OWNER, so a story lane inherits them through settings. It
+    must skip the BPP step anyway: recycling a best-performing post as a Story was never
+    asked for, and _last_bpp_date is surface-blind, so a story recycle would also move
+    the feed lane's next BPP due date."""
+    cid = make_channel(conn)
+    conn.execute("UPDATE channels SET bpp_every_days = 1 WHERE id = ?", (cid,))
+    make_lane(conn, channel_id=cid, surface="story", min_depth=3, target=3)
+    pid = make_post(conn, targets=[(cid, "story")])
+    conn.execute("UPDATE posts SET is_bpp = 1 WHERE id = ?", (pid,))
+    conn.commit()
+
+    run_autofill(conn, config, _now())
+
+    recycled = conn.execute(
+        "SELECT COUNT(*) FROM publications WHERE is_recycled = 1"
+    ).fetchone()[0]
+    assert recycled == 0, "BPP is a feed-only concept"

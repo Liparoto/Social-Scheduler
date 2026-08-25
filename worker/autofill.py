@@ -932,7 +932,10 @@ def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logg
     # BPP: give some slots to posts the OWNER marked as worth reposting, on their own cadence
     # in days. Nothing here judges content — the mark is the judgement, made by a person
     # looking at the stats (see worker/bpp.py for why an algorithm cannot).
-    every_days = _setting(settings, "bpp_every_days")
+    # Feed only. Recycling a best-performing post as a Story is not a thing the owner
+    # asked for, and _last_bpp_date / _unit_publication_count are both surface-blind — a
+    # story recycle would silently move the FEED lane's next BPP due date.
+    every_days = _setting(settings, "bpp_every_days") if lane.surface == "feed" else 0
     if every_days > 0 and placed:
         placed = _apply_bpp(conn, lane, settings, now, placed, candidates, bands_by_post,
                             band_of, covered, every_days, logger)
