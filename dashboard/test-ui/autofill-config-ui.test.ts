@@ -14,7 +14,9 @@ import {
   lanePatchBody,
   newSlotDays,
   panelSummary,
+  panelSurfaces,
   saveBlockedReason,
+  unofferedLaneNote,
   toLanePanels,
 } from "../lib/autofill-lanes.ts";
 import { DAYS, parseCadence, serializeCadence } from "../lib/cadence.ts";
@@ -57,6 +59,7 @@ test("a surface with no saved lane falls back to a disabled default, not to the 
       targetQueueDepth: 7,
       reuseMinAgeDays: 90,
       bandCounts: {},
+      offered: true,
     },
   ];
   const story = laneFor(lanes, "story");
@@ -68,7 +71,7 @@ test("a surface with no saved lane falls back to a disabled default, not to the 
 test("laneFor returns the saved lane when there is one", () => {
   const lanes = [
     { surface: "story" as const, enabled: true, cadenceConfig: "{}", minQueueDepth: 1,
-      targetQueueDepth: 4, reuseMinAgeDays: 30, bandCounts: { evening: 2 } },
+      targetQueueDepth: 4, reuseMinAgeDays: 30, bandCounts: { evening: 2 }, offered: true },
   ];
   assert.equal(laneFor(lanes, "story").targetQueueDepth, 4);
   assert.deepEqual(laneFor(lanes, "story").bandCounts, { evening: 2 });
@@ -110,9 +113,12 @@ test("toLanePanels gives every offered surface an entry, with that surface's own
 });
 
 test("toLanePanels never offers a surface the owner cannot send to", () => {
+  // A lane that is switched OFF for a surface no longer on offer stays hidden: it cannot
+  // run and cannot start running, so there is nothing to say about it. (A lane still
+  // switched ON is a different case, and is kept — see the stranded-lane tests below.)
   const saved = [
     {
-      id: 1, channel_id: 5, group_id: null, surface: "story" as const, enabled: 1,
+      id: 1, channel_id: 5, group_id: null, surface: "story" as const, enabled: 0,
       cadence_config: null, min_queue_depth: 1, target_queue_depth: 2,
       reuse_min_age_days: 30,
     },
@@ -368,4 +374,95 @@ test("saving an empty times cadence writes NULL, so the lane stays unconfigured"
     bpp: 0,
   });
   assert.equal(body.cadence_config, null);
+});
+
+// ---------------------------------------------------------------------------
+// A saved lane whose surface stopped being offered. Remove the only Instagram member from
+// a mixed group and the Story lane's ROW survives while the panel stops listing it: the
+// worker correctly does nothing ("no active member can take a story — skipping"), but the
+// lane is still switched on, so re-adding an Instagram channel months later resumes Stories
+// on a cadence the owner can neither see nor switch off. It stays reachable, and is never
+// auto-disabled — the owner's config is theirs to change.
+
+const STRANDED_STORY = {
+  id: 9, channel_id: null, group_id: 3, surface: "story" as const, enabled: 1,
+  cadence_config: '{"slots":[{"time":"12:00","days":["mon"]}]}',
+  min_queue_depth: 1, target_queue_depth: 4, reuse_min_age_days: 30,
+};
+
+test("an ENABLED lane on a surface no longer offered is still shown, so it can be switched off", () => {
+  const panels = toLanePanels(["feed"], [STRANDED_STORY], () => ({}));
+  assert.deepEqual(panels.map((p) => p.surface), ["feed", "story"]);
+  const story = laneFor(panels, "story");
+  assert.equal(story.enabled, true, "shown as it is — never quietly turned off for them");
+  assert.equal(story.cadenceConfig, STRANDED_STORY.cadence_config);
+});
+
+test("the unoffered lane is marked as such, and the offered ones are not", () => {
+  const panels = toLanePanels(["feed"], [STRANDED_STORY], () => ({}));
+  assert.equal(laneFor(panels, "feed").offered, true);
+  assert.equal(laneFor(panels, "story").offered, false);
+});
+
+test("a DISABLED lane on a surface no longer offered stays hidden — nothing to warn about", () => {
+  const panels = toLanePanels(
+    ["feed"],
+    [{ ...STRANDED_STORY, enabled: 0 }],
+    () => ({}),
+  );
+  assert.deepEqual(panels.map((p) => p.surface), ["feed"]);
+});
+
+test("a surface that is neither offered nor saved is never invented", () => {
+  const panels = toLanePanels(["feed"], [], () => ({}));
+  assert.deepEqual(panels.map((p) => p.surface), ["feed"]);
+});
+
+test("an offered surface is unaffected, saved or not", () => {
+  const panels = toLanePanels(["feed", "story"], [STRANDED_STORY], () => ({}));
+  assert.deepEqual(panels.map((p) => p.surface), ["feed", "story"], "no duplicate story");
+  assert.equal(laneFor(panels, "story").offered, true);
+  assert.equal(laneFor(panels, "story").enabled, true);
+  assert.equal(laneFor(panels, "feed").offered, true, "unsaved but offered is still offered");
+});
+
+// The switch has to list the stranded lane too, or "still in the panel" means nothing.
+
+test("the surface switch lists offered surfaces plus any stranded lane, offered first", () => {
+  const panels = toLanePanels(["feed"], [STRANDED_STORY], () => ({}));
+  assert.deepEqual(panelSurfaces(["feed"], panels), ["feed", "story"]);
+  assert.deepEqual(
+    panelSurfaces(["feed", "story"], toLanePanels(["feed", "story"], [STRANDED_STORY], () => ({}))),
+    ["feed", "story"],
+    "an offered surface is never listed twice",
+  );
+  assert.deepEqual(panelSurfaces(["feed"], toLanePanels(["feed"], [], () => ({}))), ["feed"]);
+});
+
+test("the note says why it cannot run and what switching it off buys, in plain words", () => {
+  const note = unofferedLaneNote("story", "group");
+  assert.match(note, /Story/);
+  assert.match(note, /group/);
+  // The two things the owner cannot work out on their own: it is not running now, and it
+  // WILL start again by itself if a capable channel is ever added.
+  assert.match(note, /not running|cannot run/i);
+  assert.match(note, /again|resume/i);
+  assert.doesNotMatch(note, /surface|lane|autofill_lanes/i, "panel copy is plain English");
+});
+
+test("the collapsed panel of a feed-only group still reports a stranded Story lane", () => {
+  // The one part of the wiring a static render CAN see: the panel keys off offered
+  // surfaces PLUS stranded lanes, so the summary names a lane props.surfaces omits.
+  const html = renderToStaticMarkup(
+    React.createElement(AutofillConfig, {
+      target: { kind: "group" as const, id: 3 },
+      lanes: toLanePanels(["feed"], [STRANDED_STORY], () => ({})),
+      surfaces: ["feed"] as const,
+      bppEveryDays: 0,
+      bppPoolSize: 0,
+      bandTimes: { morning: "09:00", afternoon: "13:00", evening: "18:00" },
+    }),
+  );
+  assert.match(html, /Story/, "a lane that is still switched on must not vanish");
+  assert.match(html, /12:00/, "and its cadence has to be visible, not just its name");
 });

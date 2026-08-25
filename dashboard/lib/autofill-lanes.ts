@@ -22,6 +22,10 @@ export interface LanePanelData {
    *  coverage warning: a band with posts but no reachable slot would silently stop being
    *  auto-filled. */
   bandCounts: Record<string, number>;
+  /** Whether this owner can actually SEND to this surface right now. False only for a
+   *  stranded lane — one still switched on for a surface no member can take any more (see
+   *  toLanePanels). The panel shows those so they can be reached; nothing else may. */
+  offered: boolean;
 }
 
 /** What an unconfigured lane starts as: off, with the same defaults migration 0028 gives
@@ -35,6 +39,8 @@ export const DEFAULT_LANE = {
   targetQueueDepth: 0,
   reuseMinAgeDays: 180,
   bandCounts: {} as Record<string, number>,
+  // laneFor's fallback is only ever asked for a surface the panel is already offering.
+  offered: true,
 };
 
 /** The lane for `surface`, or a fresh disabled default when there is no row for it yet.
@@ -62,28 +68,64 @@ export function surfaceLabel(surface: Surface): string {
  * never fire until after the first save. `bandCountsFor` is passed in rather than
  * imported so this stays a pure function the tests can drive without a database.
  *
- * A saved lane for a surface that is no longer on offer (an Instagram channel left the
- * group, say) is dropped here: the panel would have no switch to reach it with.
+ * A saved lane for a surface that is no longer on offer — the only Instagram member left
+ * a mixed group, say — is kept ONLY while it is still enabled, marked `offered: false`.
+ * Dropping it hid a lane that is still switched on: the worker does the right thing today
+ * ("no active member can take a story — skipping"), but adding an Instagram channel back
+ * months later resumes Stories on a cadence the owner could neither see nor switch off.
+ * It is shown as it is and never auto-disabled — this function does not edit config.
+ *
+ * A saved-but-disabled lane on an unoffered surface stays hidden: it cannot run and cannot
+ * start running, so there is nothing to tell the owner.
  */
 export function toLanePanels(
   surfaces: Surface[],
   saved: AutofillLane[],
   bandCountsFor: (surface: Surface) => Record<string, number>,
 ): LanePanelData[] {
-  return surfaces.map((surface) => {
-    const row = saved.find((l) => l.surface === surface);
-    const bandCounts = bandCountsFor(surface);
-    if (!row) return { surface, ...DEFAULT_LANE, bandCounts };
-    return {
-      surface,
-      enabled: row.enabled === 1,
-      cadenceConfig: row.cadence_config,
-      minQueueDepth: row.min_queue_depth,
-      targetQueueDepth: row.target_queue_depth,
-      reuseMinAgeDays: row.reuse_min_age_days,
-      bandCounts,
-    };
+  const fromRow = (row: AutofillLane, offered: boolean): LanePanelData => ({
+    surface: row.surface,
+    enabled: row.enabled === 1,
+    cadenceConfig: row.cadence_config,
+    minQueueDepth: row.min_queue_depth,
+    targetQueueDepth: row.target_queue_depth,
+    reuseMinAgeDays: row.reuse_min_age_days,
+    bandCounts: bandCountsFor(row.surface),
+    offered,
   });
+
+  const offered = surfaces.map((surface) => {
+    const row = saved.find((l) => l.surface === surface);
+    return row
+      ? fromRow(row, true)
+      : { surface, ...DEFAULT_LANE, bandCounts: bandCountsFor(surface) };
+  });
+  const stranded = saved
+    .filter((l) => l.enabled === 1 && !surfaces.includes(l.surface))
+    .map((l) => fromRow(l, false));
+  return [...offered, ...stranded];
+}
+
+/** Which surfaces the panel's switch lists: everything on offer, plus any stranded lane
+ *  that has to stay reachable. Offered first, so the switch reads the same as it always
+ *  did and the odd one out is last. */
+export function panelSurfaces(offered: Surface[], lanes: LanePanelData[]): Surface[] {
+  const extra = lanes
+    .map((l) => l.surface)
+    .filter((s) => !offered.includes(s));
+  return [...offered, ...extra];
+}
+
+/** The note on a stranded lane. Two facts the owner cannot work out from the panel: it is
+ *  not running now, and it will start again on its own if a capable channel is ever added
+ *  back — which is the only reason switching it off matters. */
+export function unofferedLaneNote(surface: Surface, noun: string): string {
+  return (
+    `Nothing in this ${noun} can post a ${surfaceLabel(surface)} right now, so this is ` +
+    `not running. It is still switched on, though — add a channel that can post a ` +
+    `${surfaceLabel(surface)} and it will start filling again on this schedule. ` +
+    `Switch it off and save to stop that.`
+  );
 }
 
 /** One lane in a line: its cadence and the depths it fills between, or "Off". */

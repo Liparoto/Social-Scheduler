@@ -17,8 +17,10 @@ import {
   lanePatchBody,
   newSlotDays,
   panelSummary,
+  panelSurfaces,
   saveBlockedReason,
   surfaceLabel,
+  unofferedLaneNote,
 } from "@/lib/autofill-lanes";
 import type { Surface } from "@/lib/types";
 
@@ -40,7 +42,11 @@ interface Props {
   lanes: LanePanelData[];
   /** Which surfaces this owner can offer. Always includes "feed"; includes "story" only
    *  when a story-capable channel is in scope, so a lane that could never fire is never
-   *  configurable. One entry means no switch at all. */
+   *  configurable. One entry means no switch at all.
+   *
+   *  The switch may still show one MORE than this: a lane left switched on for a surface
+   *  that stopped being offered stays reachable so it can be turned off — see
+   *  toLanePanels and panelSurfaces. */
   surfaces: Surface[];
   bppEveryDays: number;
   /** Marked posts this unit can actually send. */
@@ -123,8 +129,12 @@ export function AutofillConfig(props: Props) {
       : `/api/channels/${props.target.id}`;
   const noun = props.target.kind === "group" ? "group" : "channel";
   const [open, setOpen] = useState(false);
-  const [surface, setSurface] = useState<Surface>(props.surfaces[0] ?? "feed");
-  const multi = props.surfaces.length > 1;
+  // Everything on offer, plus any lane still switched on for a surface that is not — the
+  // whole panel keys off this rather than props.surfaces, or a stranded lane would have no
+  // switch to reach it with and no line in the summary saying it exists.
+  const shown = panelSurfaces(props.surfaces, props.lanes);
+  const [surface, setSurface] = useState<Surface>(shown[0] ?? "feed");
+  const multi = shown.length > 1;
 
   return (
     <div className="mt-4 rounded-lg border border-border bg-surface-sunken/50 p-3">
@@ -137,7 +147,7 @@ export function AutofillConfig(props: Props) {
             about the other one exactly when the owner wants to compare them. */}
         <span className="text-xs font-medium text-ink-soft">
           Auto-fill{" "}
-          <span className="text-faint">· {panelSummary(props.lanes, props.surfaces)}</span>
+          <span className="text-faint">· {panelSummary(props.lanes, shown)}</span>
         </span>
         <span className="text-xs text-muted">{open ? "Hide" : "Edit"}</span>
       </button>
@@ -151,7 +161,7 @@ export function AutofillConfig(props: Props) {
                 aria-label="Which rotation to edit"
                 className="inline-flex gap-0.5 rounded-md border border-border bg-surface p-0.5"
               >
-                {props.surfaces.map((s) => (
+                {shown.map((s) => (
                   <button
                     key={s}
                     type="button"
@@ -168,7 +178,7 @@ export function AutofillConfig(props: Props) {
                 ))}
               </div>
               <p className="mt-1.5 text-[11px] text-muted">
-                {props.surfaces.map(surfaceLabel).join(" and ")} fill independently — each
+                {shown.map(surfaceLabel).join(" and ")} fill independently — each
                 has its own cadence, queue depths and reuse rule. Saving one leaves the
                 other untouched.
               </p>
@@ -283,6 +293,15 @@ function LaneEditor({
         Automatically keep this {noun}&rsquo;s{" "}
         {multi ? `${surfaceLabel(lane.surface)} ` : ""}queue topped up
       </label>
+
+      {/* A lane left switched on for a surface nothing here can post any more. Shown as
+          saved and never auto-disabled — but it WILL start filling again by itself if a
+          capable channel is added back, which is the part the owner cannot see. */}
+      {!lane.offered ? (
+        <p className="rounded-md border border-status-publishing/40 bg-surface p-2 text-[11px] text-status-publishing">
+          {unofferedLaneNote(lane.surface, noun)}
+        </p>
+      ) : null}
 
       <div className="flex gap-4 text-xs text-ink-soft">
         <label className="flex items-center gap-1.5">
