@@ -122,3 +122,28 @@ def test_supports_video_is_derived_not_stored():
     assert PLATFORM_CAPS["facebook"].supports_video is True
     assert PLATFORM_CAPS["threads"].supports_video is False
     assert PLATFORM_CAPS["threads"].video_surfaces == frozenset()
+
+
+def test_every_platform_declares_at_least_the_feed_surface():
+    from worker.clients import PLATFORM_CAPS
+
+    for name, caps in PLATFORM_CAPS.items():
+        assert "feed" in caps.surfaces, f"{name} must be able to publish to a feed"
+
+
+def test_instagram_is_the_only_story_capable_platform():
+    """Mirrors publisher._validate's story rule. When a second platform gains Stories,
+    this test and PLATFORM_CAPS change together — and publisher.py does not have to."""
+    from worker.clients import PLATFORM_CAPS
+
+    story_capable = {n for n, c in PLATFORM_CAPS.items() if "story" in c.surfaces}
+    assert story_capable == {"instagram"}
+
+
+def test_video_surfaces_never_claims_a_surface_the_platform_lacks():
+    """video_surfaces is about which video destinations exist; surfaces is about which
+    destinations exist at all. A video-only surface would be unpublishable."""
+    from worker.clients import PLATFORM_CAPS
+
+    for name, caps in PLATFORM_CAPS.items():
+        assert caps.video_surfaces <= caps.surfaces, f"{name} has a video-only surface"

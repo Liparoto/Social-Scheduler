@@ -309,7 +309,7 @@ def _validate(post, assets, dry_run: bool, asset_base_url: str | None, platform:
         # A Story is one media regardless of the post's content shape, so the post_type
         # checks below (which describe the SOURCE) don't apply. _load_targets has already
         # narrowed `assets` to this row's single slide.
-        if platform != "instagram":
+        if "story" not in caps.surfaces:
             raise _NonRetryable(f"{platform} has no Stories surface in this worker")
         if len(assets) != 1:
             raise _NonRetryable(f"a story needs exactly 1 asset, has {len(assets)}")
