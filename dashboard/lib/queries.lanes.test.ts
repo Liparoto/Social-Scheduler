@@ -96,3 +96,28 @@ test("feed and story lanes on one owner are independent rows", async () => {
   );
   assert.deepEqual(bySurface, { feed: 5, story: 12 });
 });
+
+test("a rogue field key is rejected, never written or spliced into the SQL", async () => {
+  const { q, db } = await setup();
+  const channelId = db
+    .prepare("INSERT INTO channels (platform, account_name) VALUES ('instagram','IG')")
+    .run().lastInsertRowid as number;
+  const owner = { kind: "channel" as const, id: channelId };
+
+  assert.throws(() => {
+    // The cast simulates a caller that built `fields` from something other than a
+    // hardcoded literal (e.g. spreading a request body) — exactly the scenario the
+    // TS Partial<Pick<...>> constraint cannot stop at runtime.
+    q.upsertAutofillLane(
+      owner,
+      "feed",
+      { enabled: 1, "id = 1; --": "x" } as unknown as Parameters<typeof q.upsertAutofillLane>[2],
+    );
+  }, /unknown lane field/);
+
+  assert.equal(
+    q.getAutofillLanes(owner).length,
+    0,
+    "a rejected call must not leave a lane row behind either",
+  );
+});

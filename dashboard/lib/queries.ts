@@ -383,22 +383,51 @@ export function getAutofillLanes(owner: LaneOwner): AutofillLane[] {
     .all(owner.id) as AutofillLane[];
 }
 
+type AutofillLaneFields = Partial<
+  Pick<
+    AutofillLane,
+    "enabled" | "cadence_config" | "min_queue_depth" | "target_queue_depth" | "reuse_min_age_days"
+  >
+>;
+
+// The only columns upsertAutofillLane is allowed to write. fields' TS type is erased at
+// runtime, so this Set is what actually keeps an unexpected key out of the SQL string —
+// both the column list and the @-placeholder name are built from these keys. Today both
+// call sites (the channel and channel-group PATCH routes) build `lane` from hardcoded
+// literal property names, never by spreading a request body, so there is no live
+// injection path — but that is caller discipline, not a guarantee, and this function
+// needs to be safe on its own.
+const AUTOFILL_LANE_FIELD_KEYS = new Set<keyof AutofillLaneFields>([
+  "enabled",
+  "cadence_config",
+  "min_queue_depth",
+  "target_queue_depth",
+  "reuse_min_age_days",
+]);
+
 /** Create this owner's lane for `surface`, or update the fields given.
  *
  *  An omitted field is left at its current value, which is what lets the form save one
  *  lane without disturbing the other. Keyed on the partial unique index from migration
  *  0028, so a concurrent double-save cannot produce two rows for one surface.
+ *
+ *  Throws on any key outside AUTOFILL_LANE_FIELD_KEYS rather than dropping it silently:
+ *  this runs in a server-side route handler, where a thrown error becomes a loud 500,
+ *  and a caller passing an unexpected key is a bug worth surfacing immediately rather
+ *  than a save that quietly didn't stick.
  */
 export function upsertAutofillLane(
   owner: LaneOwner,
   surface: Surface,
-  fields: Partial<
-    Pick<
-      AutofillLane,
-      "enabled" | "cadence_config" | "min_queue_depth" | "target_queue_depth" | "reuse_min_age_days"
-    >
-  >,
+  fields: AutofillLaneFields,
 ): void {
+  const keys = Object.keys(fields) as (keyof AutofillLaneFields)[];
+  for (const k of keys) {
+    if (!AUTOFILL_LANE_FIELD_KEYS.has(k)) {
+      throw new Error(`upsertAutofillLane: unknown lane field "${k}"`);
+    }
+  }
+
   const db = getDb();
   const column = ownerColumn(owner);
   db.prepare(
@@ -406,7 +435,6 @@ export function upsertAutofillLane(
        ON CONFLICT DO NOTHING`,
   ).run(owner.id, surface);
 
-  const keys = Object.keys(fields) as (keyof typeof fields)[];
   if (keys.length === 0) return;
   const assignments = keys.map((k) => `${k} = @${k}`).join(", ");
   db.prepare(
