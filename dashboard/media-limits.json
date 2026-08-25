@@ -59,6 +59,33 @@
           "note": "Meta IG User Media reference ('Story Image Specifications' section), read 2026-08-24: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/. Verbatim: 'File size: 8 MB maximum'. Aspect ratio DELIBERATELY OMITTED: unlike feed images ('Must be within a 4:5 to 1.91:1 range'), this section only says 'We recommended 9:16 to avoid cropping or blank space' - a recommendation, not a stated range, so there is no verified bound to enforce."
         }
       }
+    },
+    "threads": {
+      "feed": {
+        "image": {
+          "max_bytes": 8388608,
+          "max_aspect": [10, 1],
+          "formats": ["jpeg", "png"],
+          "note": "Meta Threads API docs, 'Image Specifications' section, read 2026-08-24: https://developers.facebook.com/documentation/threads/posts (page's own metadata reads 'Apr 14, 2026'). Verbatim: 'Format: JPEG and PNG image types are the officially supported formats for image posts.'; 'File Size: 8 MB maximum.'; 'Aspect Ratio Limit: 10:1'. Byte count follows the same binary-MB assumption as Instagram's identical '8 MB maximum' figure (see instagram.feed.image's note) for consistency, not a literal Meta-stated byte count. min_aspect and min_width/max_width DELIBERATELY OMITTED: the page states only a single-sided 'Aspect Ratio Limit: 10:1' (no minimum stated anywhere, unlike Instagram's explicit '4:5 to 1.91:1' range), and separately 'Minimum Width: 320 (will be scaled up to the minimum if necessary)' / 'Maximum Width: 1440 (will be scaled down to the maximum if necessary)' - Meta auto-scales an out-of-range width rather than refusing it, the exact reasoning instagram.feed.image's note already gives for omitting width there. Video Specifications are also on this page (container/codec/duration/1GB/300s) but are NOT recorded anywhere in this file: worker/clients.py's PLATFORM_CAPS['threads'].video_surfaces is empty (frozenset()) - this worker has no Threads video publish path to gate."
+        }
+      }
+    },
+    "discord": {
+      "feed": {
+        "image": {
+          "max_bytes": null,
+          "varies": "Discord's own developer docs, read 2026-08-24: https://discord.com/developers/docs/reference#uploading-files. Verbatim: 'The file upload size limit applies to each file in a request. The default limit is 10 MiB for all users, but may be higher for users depending on their Nitro status or by the server's Boost Tier.' Two independent, per-account/per-server factors (the poster's Nitro tier, the destination server's Boost Tier) this install has no way to read at runtime - the only Discord credential here is a webhook URL (worker/clients.py: uses_account_id=False), which carries no user or guild context to query either factor from. No single number is honest here, so max_bytes is left null and this entry exists only to record that the limit is KNOWN to vary, not merely unresearched - a violation from this entry would WARN (per worker/media_limits.py's check(): severity is 'warn' whenever 'varies' is set), though since max_bytes is null no size check ever actually fires; the entry documents the finding rather than enforcing anything.",
+          "note": "https://discord.com/developers/docs/reference#uploading-files, read 2026-08-24. See the 'varies' field above for the full quote and reasoning."
+        }
+      }
+    },
+    "telegram": {
+      "feed": {
+        "image": {
+          "max_bytes": 10485760,
+          "note": "core.telegram.org/bots/api, 'Sending files' section, read directly from the raw page 2026-08-24 (fetched past the AI-summary layer, which was dropping this section). Verbatim: 'Post the file using multipart/form-data in the usual way that files are uploaded via the browser. 10 MB max size for photos, 50 MB for other files.' (The by-URL path, not used here, is smaller: 'Provide Telegram with an HTTP URL for the file to be sent... 5 MB max size for photos and 20 MB max for other types of content.') This worker uploads bytes directly - PLATFORM_CAPS['telegram'].uploads_media_bytes=True in worker/clients.py - so the direct-upload figure applies, not the URL figures. The 10 MB (not 50 MB) direct figure is used because this worker only ever calls sendPhoto/sendMediaGroup (see reference.md's Telegram section) - never sendDocument - so every Telegram asset is a 'photo' in Telegram's own vocabulary, not one of the 'other files' the 50 MB figure covers. Byte count is 10 * 1024 * 1024, the same binary-MB convention as every other entry in this file. A local Bot API server would raise this to 2000 MB, but nothing in this codebase runs one."
+        }
+      }
     }
   }
 }

@@ -471,6 +471,142 @@ been. Confirm and re-date this section after the first real Facebook video and R
   `PLATFORM_CAPS["telegram"].uploads_media_bytes = True`, so Telegram publications never
   trigger the cloudflared tunnel.
 
+### Media limits — TikTok, Telegram, Discord, Threads (Task 6, verified 2026-08-24)
+
+Same discipline as the Instagram media-limits section above: live docs, source + date on
+every recorded number, and an explicit list of what could not be verified. Where a page
+could not be trusted on the first read (the AI-summarized fetch tool dropped or fabricated
+content twice below), the raw HTML was fetched with `curl` and grepped by hand instead —
+noted per platform.
+
+**TikTok — recorded NOTHING in `media-limits.json`, deliberately.** Read
+`https://developers.tiktok.com/doc/content-posting-api-get-started` and
+`https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info`,
+both 2026-08-24. The get-started guide states no static video specs at all (no max file
+size, duration, resolution, or aspect ratio) and instead says: *"To initiate a direct post
+to a creator's account, you must first use the Query Creator Info endpoint to get the
+target creator's latest information."* That endpoint's response includes
+`max_video_post_duration_sec`, documented as *"The longest video duration in seconds that
+the TikTok creator can post. Different users have different maximum video-duration
+privileges."* — i.e. the limit is per-creator and only available by calling the API at
+publish time, not a fact about the platform. This is exactly the case
+`worker/media_limits.py`'s own governing rule (ABSENT MEANS NOT ENFORCED) and the
+project's existing precedent (Meta's `content_publishing_limit`, read at runtime rather
+than hardcoded — see the rate-limit section near the top of this file) both cover: a
+number that is honest only per-account is not a static fact to freeze into a JSON file. No
+`tiktok` key was added to `media-limits.json`, and none should be until/unless this
+worker starts calling `creator_info` itself and gating on its response directly, the same
+way `publisher._QUOTA_GATED` gates Instagram/Threads today.
+
+**Telegram — `telegram.feed.image`, `max_bytes: 10485760` (10 MB, direct-upload photo
+figure).** Source: `https://core.telegram.org/bots/api`, "Sending files" section, read
+2026-08-24 — via raw HTML (`curl` + grep), not the summarizing fetch tool, which twice
+reported this section as absent from a page it had in fact fully retrieved. Verbatim:
+*"Post the file using multipart/form-data in the usual way that files are uploaded via the
+browser. 10 MB max size for photos, 50 MB for other files."* and, for the unused by-URL
+path, *"Provide Telegram with an HTTP URL for the file to be sent. Telegram will download
+and send the file. 5 MB max size for photos and 20 MB max for other types of content."*
+This confirms the plan's lead exactly. **Why the 10 MB figure and not 50 MB or 5 MB:**
+`worker/clients.py`'s `PLATFORM_CAPS["telegram"].uploads_media_bytes = True` — this
+install posts bytes directly, never by URL, so the 5 MB/20 MB URL figures don't apply.
+And `worker/telegram_api.py` only ever calls `sendPhoto`/`sendMediaGroup` (see this file's
+Telegram section above) — never `sendDocument` — so every asset this worker sends is a
+"photo" in Telegram's own vocabulary, making 10 MB (not the 50 MB "other files" figure)
+the number that actually gates a real send. The local-Bot-API-server figure (2000 MB) does
+not apply either — nothing in this codebase runs one.
+
+**Discord — `discord.feed.image`, `max_bytes: null` with a `varies` note (WARN severity,
+never REFUSE).** Source: `https://discord.com/developers/docs/reference#uploading-files`,
+read 2026-08-24 (Discord's own **API reference**, not the support-site FAQ the plan's lead
+cited — `support.discord.com` returned HTTP 403 to every fetch attempt, browser UA
+included, so the developer-docs page was used instead; it is the more directly relevant
+source anyway, since this worker calls the same REST API it documents). Verbatim: *"The
+file upload size limit applies to each file in a request. The default limit is 10 MiB for
+all users, but may be higher for users depending on their Nitro status or by the server's
+Boost Tier."* This confirms the plan's lead (varies by Nitro tier and server boost) from a
+first-party source, though the exact figure at each tier/boost level was not indepedently
+re-confirmed (see could-not-verify list below) — it didn't need to be, since no single
+number can be enforced honestly regardless of what it is. **Why `max_bytes` is `null`
+rather than any number:** the only Discord credential this worker holds is a webhook URL
+(`PLATFORM_CAPS["discord"].uses_account_id = False`) — there is no user token or guild
+context to query either the poster's Nitro status or the destination server's Boost Tier
+from, so there is no way to pick a correct number at runtime, and hardcoding the 10 MiB
+default would refuse an attachment a boosted server or a Nitro poster could actually send.
+This is the case `worker/media_limits.py`'s `varies` field exists for: the entry is
+recorded (so the investigation isn't silently missing) but sets no enforceable bound, so
+`check()` never raises `too_large` for Discord regardless of file size — see the
+`discord.feed.image` matrix case in `dashboard/lib/media-limits-matrix.json` that pins
+this down with an oversized asset expecting `[]`.
+
+**Threads — `threads.feed.image` only; no video entry.** Source:
+`https://developers.facebook.com/documentation/threads/posts`, "Image Specifications"
+section (page's own metadata reads "Apr 14, 2026"), read 2026-08-24 — again via raw HTML,
+since the summarizing fetch tool twice returned an answer that was actually Instagram's
+numbers relabeled as Threads' (see could-not-verify note below; do not trust that
+tool's output for this page without independent confirmation). Verbatim: *"Format: JPEG
+and PNG image types are the officially supported formats for image posts."*; *"File Size:
+8 MB maximum."*; *"Aspect Ratio Limit: 10:1"*. Recorded: `max_bytes: 8388608`,
+`max_aspect: [10, 1]`, `formats: ["jpeg", "png"]`. **Video Specifications are on the same
+page** (MOV/MP4, HEVC/H264, AAC, 23-60 FPS, 1920px max width, 0.01:1-10:1 aspect, 100 Mbps
+video / 128 kbps audio, 300s/5min max duration, 1 GB max size) but were **not recorded
+anywhere** — `worker/clients.py`'s `PLATFORM_CAPS["threads"].video_surfaces` is empty
+(`frozenset()`) and `dashboard/lib/platforms.ts`'s Threads entry has `videoSurfaces: []`
+too, so there is no Threads video publish path in this worker for a limit to gate. The
+same reasoning independently applies to Discord and Telegram — both also have
+`videoSurfaces: []` — which is why neither got a video entry either, beyond the byte-size
+image entries above.
+
+**Deliberately omitted from `threads.feed.image`, and why (same reasoning as
+`instagram.feed.image`'s existing note):**
+- **`min_aspect`.** The page states a single-sided *"Aspect Ratio Limit: 10:1"* with no
+  minimum anywhere on the page — unlike Instagram's explicit *"4:5 to 1.91:1 range"*.
+  Inventing a symmetric floor (e.g. 0.1:1) would be exactly the guessed-limit failure mode
+  this task exists to avoid, so only the stated upper bound (`max_aspect: [10, 1]`) was
+  recorded.
+- **`min_width`/`max_width`.** *"Minimum Width: 320 (will be scaled up to the minimum if
+  necessary)"* and *"Maximum Width: 1440 (will be scaled down to the maximum if
+  necessary)"* — Meta auto-scales out-of-range width rather than refusing it, identical to
+  Instagram's feed image. Recording this as a hard bound would refuse images Meta accepts.
+- **Color space (`sRGB`, auto-converted if not).** No field in the schema for it, and it
+  isn't a refusal condition per the page's own wording ("will be... converted").
+
+**Could NOT verify (searched for, not found, or not independently reconfirmable):**
+- **TikTok's actual current numeric limits** (chunk sizes, format list) beyond what
+  `reference.md`'s existing TikTok section already records from a prior read — out of
+  scope here since the whole point of this section is that TikTok's *media* limits are
+  per-creator, not a fixed spec to look up.
+- **Discord's exact MB figure per Nitro tier and per Boost Tier level.** Confirmed only
+  that it varies and that the unboosted/non-Nitro default is 10 MiB — the support-site FAQ
+  that would enumerate the exact per-tier numbers (`support.discord.com/hc/en-us/articles/
+  25444343291031-File-Attachments-FAQ`) returned HTTP 403 to every fetch attempt made
+  during this research, both the summarizing tool and a direct `curl` with a browser
+  user-agent. Not needed for this task (the entry is `null`+`varies` either way) but
+  flagged here in case a future task needs the exact numbers.
+- **Whether Telegram's or Threads' "8 MB"/"10 MB" figures are decimal MB (10⁶) or binary
+  MiB (2²⁰).** Neither page states a base. Followed this file's existing precedent
+  (binary, matching `instagram.feed.image`'s identical ambiguity and its resolution) for
+  consistency rather than introducing a second, unverifiable interpretation.
+- **Telegram video limits.** Not researched at all: this worker has no Telegram video
+  publish path (no `sendVideo` call in `worker/telegram_api.py`, no `video` in
+  `videoSurfaces` for telegram in `dashboard/lib/platforms.ts`), so there was nothing to
+  gate.
+- **A definitive, first-party Threads image spec independent of the page's own
+  "Aspect Ratio Limit: 10:1" wording.** That phrase itself is slightly unusual for an
+  *image* spec (Instagram's equivalent video wording is "Required aspect ratio is between
+  X and Y"), and there's no further elaboration on the page about which direction (wide vs
+  tall) the limit constrains. Recorded literally as a `max_aspect` upper bound since that
+  is the only defensible reading of a single stated number, but flagged here as read
+  verbatim rather than independently cross-checked against a second source.
+
+**A note on tooling reliability during this research:** the AI-summarizing fetch tool gave
+demonstrably wrong or incomplete answers twice in this section alone — once claiming
+`core.telegram.org/bots/api`'s "Sending files" section wasn't present on a page it had
+fully retrieved, and once returning Instagram's image spec (8 MB, 320-1440px, 10:1) as if
+it were Threads', apparently pattern-matching across a web search rather than reading the
+actual Threads page. Every number actually recorded in `media-limits.json` from this
+section was re-confirmed against raw HTML fetched with `curl` and grepped by hand before
+being written down. Worth remembering the next time this file's numbers need re-verifying.
+
 ### Schema note (Discord/Telegram)
 No new tables. `migrations/0009_discord_telegram.sql` widened `channels.platform`'s
 check constraint to accept `'discord'` and `'telegram'` alongside the existing
