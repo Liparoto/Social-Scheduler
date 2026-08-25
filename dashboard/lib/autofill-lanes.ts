@@ -1,4 +1,4 @@
-import { parseCadence, summarize } from "./cadence";
+import { type Cadence, parseCadence, serializeCadence, summarize } from "./cadence";
 import type { AutofillLane, Surface } from "./types";
 
 /** One lane as the config panel wants it: camelCase, `enabled` as a real boolean, and the
@@ -98,4 +98,42 @@ export function panelSummary(lanes: LanePanelData[], surfaces: Surface[]): strin
   return surfaces
     .map((s) => `${surfaceLabel(s)} ${laneSummary(laneFor(lanes, s))}`)
     .join(" — ");
+}
+
+/** What the panel's Save button collects, before it becomes a request body. */
+export interface LaneDraft {
+  enabled: boolean;
+  cadence: Cadence;
+  minDepth: number;
+  target: number;
+  reuseDays: number;
+  bpp: number;
+}
+
+/**
+ * The PATCH body for saving ONE lane, on either the channel or the channel-group route.
+ *
+ * Two rules live here rather than in the JSX, because both are write-path correctness and
+ * neither is reachable by a static render:
+ *
+ *  - `surface` is always named. The routes treat a body without one as feed (it predates
+ *    lanes), so omitting it would silently write the Story panel's values onto the feed.
+ *  - `bpp_every_days` is OMITTED on a non-feed lane, not sent unchanged. BPP recycling is
+ *    an owner-level, feed-only dial — migration 0028 deliberately left the bpp_* columns
+ *    off the lane — and the routes write any key that is present, so echoing it back would
+ *    let the Story panel rewrite a setting it never showed.
+ *
+ * Every key here must be one the routes accept: upsertAutofillLane THROWS on a field
+ * outside its five writable columns, so a stray key is a 500 on save.
+ */
+export function lanePatchBody(lane: LanePanelData, draft: LaneDraft) {
+  return {
+    surface: lane.surface,
+    autofill_enabled: draft.enabled,
+    cadence_config: serializeCadence(draft.cadence),
+    min_queue_depth: draft.minDepth,
+    target_queue_depth: draft.target,
+    reuse_min_age_days: draft.reuseDays,
+    ...(lane.surface === "feed" ? { bpp_every_days: draft.bpp } : {}),
+  };
 }

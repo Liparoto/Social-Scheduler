@@ -9,16 +9,24 @@ import {
   deriveBand,
   intervalNote,
   parseCadence,
-  serializeCadence,
   uncoveredBandWarning,
 } from "@/lib/cadence";
-import { type LanePanelData, laneFor, panelSummary, surfaceLabel } from "@/lib/autofill-lanes";
+import {
+  type LanePanelData,
+  laneFor,
+  lanePatchBody,
+  panelSummary,
+  surfaceLabel,
+} from "@/lib/autofill-lanes";
 import type { Surface } from "@/lib/types";
 
 // The lane model lives in lib/ so the SERVER pages can call it — a "use client" module's
 // non-component exports become client references and throw if a Server Component calls
-// them. Re-exported here because this is where a reader of the panel looks for it.
-export { DEFAULT_LANE, laneFor, toLanePanels } from "@/lib/autofill-lanes";
+// them. These two are re-exported because this is where a reader of the panel looks for
+// them, and both are client-side. toLanePanels deliberately is NOT: its only callers are
+// Server Components, and re-exporting it here would offer them the exact import path that
+// throws.
+export { DEFAULT_LANE, laneFor } from "@/lib/autofill-lanes";
 export type { LanePanelData } from "@/lib/autofill-lanes";
 
 interface Props {
@@ -239,20 +247,11 @@ function LaneEditor({
     await fetch(endpoint, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        // Names the lane being written. The routes treat a body with no surface as feed,
-        // so this is what keeps a Story save off the feed's row.
-        surface: lane.surface,
-        autofill_enabled: enabled,
-        cadence_config: serializeCadence(cadence),
-        min_queue_depth: minDepth,
-        target_queue_depth: target,
-        reuse_min_age_days: reuseDays,
-        // Omitted from a Story save rather than sent unchanged: the routes only write a
-        // field that is present, so leaving it out cannot rewrite a setting this lane
-        // never showed.
-        ...(isFeed ? { bpp_every_days: bpp } : {}),
-      }),
+      // Which lane is named, and whether BPP travels with it, are write-path rules with
+      // no visible markup — so they live in a pure function the tests can assert on.
+      body: JSON.stringify(
+        lanePatchBody(lane, { enabled, cadence, minDepth, target, reuseDays, bpp }),
+      ),
     });
     setSaved(true);
     startT(() => router.refresh());

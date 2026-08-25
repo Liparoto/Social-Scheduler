@@ -9,7 +9,7 @@ import {
   DEFAULT_TIMES,
   laneFor,
 } from "../components/autofill-config.tsx";
-import { panelSummary, toLanePanels } from "../lib/autofill-lanes.ts";
+import { lanePatchBody, panelSummary, toLanePanels } from "../lib/autofill-lanes.ts";
 import { DAYS, parseCadence, serializeCadence } from "../lib/cadence.ts";
 
 // The two mode defaults are what the owner lands on the first time they switch modes — the
@@ -194,4 +194,73 @@ test("a single-surface channel's collapsed panel is exactly what it always was",
   assert.match(html, /Off/);
   assert.doesNotMatch(html, /Story/, "no Story lane is offered where none can fire");
   assert.doesNotMatch(html, /Feed/, "and no surface label appears where there is no choice");
+});
+
+// ---------------------------------------------------------------------------
+// The PATCH body. This is the half of "BPP is feed-only" that can actually corrupt saved
+// state: BPP recycling is an OWNER-level dial (migration 0028 deliberately kept the bpp_*
+// columns off the lane), so a Story save that echoed it back would let a panel rewrite a
+// setting it never showed. Omitted, not sent-unchanged — the routes only write a key that
+// is present.
+
+const LANE_PATCH_KEYS = [
+  "surface",
+  "autofill_enabled",
+  "cadence_config",
+  "min_queue_depth",
+  "target_queue_depth",
+  "reuse_min_age_days",
+  "bpp_every_days",
+];
+
+const patchInput = {
+  enabled: true,
+  cadence: DEFAULT_TIMES,
+  minDepth: 3,
+  target: 7,
+  reuseDays: 90,
+  bpp: 14,
+};
+
+test("a Story save omits bpp_every_days entirely, rather than echoing it back", () => {
+  const body = lanePatchBody(laneFor([], "story"), patchInput);
+  assert.equal(body.surface, "story", "without this the routes default the write to feed");
+  assert.equal(
+    "bpp_every_days" in body,
+    false,
+    "present-but-unchanged is not good enough: the routes write any key that is present",
+  );
+});
+
+test("a feed save carries bpp_every_days", () => {
+  const body = lanePatchBody(laneFor([], "feed"), patchInput);
+  assert.equal("bpp_every_days" in body, true);
+  assert.equal(body.bpp_every_days, 14);
+});
+
+test("the body never carries a key the routes do not accept", () => {
+  // upsertAutofillLane THROWS on a key outside its five writable fields, so an extra key
+  // here is a 500 on save, not a silently ignored field.
+  for (const surface of ["feed", "story"] as const) {
+    for (const key of Object.keys(lanePatchBody(laneFor([], surface), patchInput))) {
+      assert.ok(LANE_PATCH_KEYS.includes(key), `unexpected key in the PATCH body: ${key}`);
+    }
+  }
+});
+
+test("the serialized body is exactly what the panel sent before it was extracted", () => {
+  // Pins the shape AND the key order, so the extraction cannot quietly change the wire
+  // payload the two PATCH routes already parse.
+  assert.equal(
+    JSON.stringify(lanePatchBody(laneFor([], "feed"), patchInput)),
+    `{"surface":"feed","autofill_enabled":true,"cadence_config":${JSON.stringify(
+      serializeCadence(DEFAULT_TIMES),
+    )},"min_queue_depth":3,"target_queue_depth":7,"reuse_min_age_days":90,"bpp_every_days":14}`,
+  );
+  assert.equal(
+    JSON.stringify(lanePatchBody(laneFor([], "story"), patchInput)),
+    `{"surface":"story","autofill_enabled":true,"cadence_config":${JSON.stringify(
+      serializeCadence(DEFAULT_TIMES),
+    )},"min_queue_depth":3,"target_queue_depth":7,"reuse_min_age_days":90}`,
+  );
 });
