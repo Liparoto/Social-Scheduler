@@ -75,6 +75,27 @@ test("REFUSAL BRANCH (synthetic data): a 30-minute video is refused once every v
   assert.equal(anyDestinationAccepts(asset, stub), false);
 });
 
+test("REGRESSION GUARD (real data): a 3-hour video is still accepted — proves platforms are enumerated from PLATFORMS (capability), not from the JSON's own keys", () => {
+  // This is NOT really a test about 3-hour videos. Every platform that has ANY recorded
+  // video limit refuses this outright — Instagram at 15 minutes, Facebook at 20 — so this
+  // asset is accepted ONLY because TikTok is walked as a candidate destination even though
+  // it has NO key at all in dashboard/media-limits.json (its limits are per-creator,
+  // fetched at runtime — see anyDestinationAccepts's comment). anyDestinationAccepts
+  // enumerates candidates from lib/platforms.ts's PLATFORMS list, gated by
+  // videoSurfaces()/supportsImages(), specifically SO THAT a platform with no JSON entry
+  // (TikTok) still gets asked. If that loop were "simplified" back to
+  // Object.keys(raw.platforms) — walking only platforms the JSON happens to mention —
+  // TikTok would silently drop out of the union and this assertion would flip to `false`.
+  // Neither of the other two tests above would catch that regression: the 18-minute case
+  // is decided by Facebook alone (TikTok irrelevant), and the synthetic 30-minute stub
+  // deliberately gives TikTok its own key, so JSON-key iteration and PLATFORMS iteration
+  // agree on it. This is the one case where they diverge. Do not delete this as a
+  // redundant/silly edge case — it is the only regression guard for that specific,
+  // previously-reviewed design decision.
+  const asset = { media_kind: "video", duration_ms: 3 * 60 * 60 * 1000, width: 1920, height: 1080 };
+  assert.equal(anyDestinationAccepts(asset), true);
+});
+
 test("REFUSAL BRANCH (synthetic data): a video under every stub cap is accepted", () => {
   // Sanity check on the stub itself — proves the low caps above don't refuse everything
   // unconditionally (which would make the refusal test above vacuous).
