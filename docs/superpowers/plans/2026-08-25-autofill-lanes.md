@@ -963,23 +963,36 @@ def test_a_long_caption_blocks_the_feed_lane_but_not_the_story_lane(conn):
     assert pid in story, "a story sends no caption, so the limit does not apply"
 
 
-def test_a_story_lane_on_a_mixed_group_reaches_only_story_capable_members(conn):
-    from worker.autofill import group_eligible_candidates
-
+def test_a_story_lane_on_a_mixed_group_reaches_only_story_capable_members(conn, config):
+    """Drives run_autofill rather than the inner function, because the capability gate
+    lives in _fill_unit — which is what makes it cover the SOLO path too, not just
+    groups. Asserts on channel_id only: at this point in the build the insert does not
+    yet write `surface` (Task 6 adds that), so filtering on it here would assert nothing."""
     gid = make_group(conn)
     ig = make_channel(conn, platform="instagram", name="IG", group_id=gid)
     fb = make_channel(conn, platform="facebook", name="FB", group_id=gid)
+    make_lane(conn, group_id=gid, surface="story", min_depth=3, target=2)
     make_post(conn, targets=[(ig, "story"), (fb, "story")])
-    group = conn.execute("SELECT * FROM channel_groups WHERE id = ?", (gid,)).fetchone()
-    members = conn.execute(
-        "SELECT * FROM channels WHERE group_id = ? ORDER BY id", (gid,)
-    ).fetchall()
+    conn.commit()
 
-    out = group_eligible_candidates(conn, group, members, _now(), None, surface="story")
-    assert out, "the Instagram member can take a Story"
-    _row, recipients = out[0]
-    assert [m["id"] for m in recipients] == [ig], "Facebook has no Stories surface"
-    assert fb not in [m["id"] for m in recipients]
+    run_autofill(conn, config, _now())
+
+    reached = {r["channel_id"] for r in conn.execute(
+        "SELECT DISTINCT channel_id FROM publications WHERE created_by = 'autofill'"
+    ).fetchall()}
+    assert reached == {ig}, "Facebook has no Stories surface — it must get nothing"
+
+
+def test_a_story_lane_on_a_story_incapable_solo_channel_fills_nothing(conn, config):
+    """The reason the gate is in _fill_unit and not in group_eligible_candidates. A solo
+    Telegram story lane must be refused by the WORKER; it must not depend on the
+    dashboard never offering one."""
+    cid = make_channel(conn, platform="telegram", name="TG")
+    make_lane(conn, channel_id=cid, surface="story", min_depth=3, target=2)
+    make_post(conn, targets=[(cid, "story")])
+    conn.commit()
+
+    assert run_autofill(conn, config, _now()) == 0
 ```
 
 Add this helper near the top of the file, beside `CADENCE`:
@@ -1035,24 +1048,34 @@ Leave the already-queued exclusion (lines 212-216) surface-blind. That is delibe
             continue
 ```
 
-`group_eligible_candidates` (line 385) gains the same keyword-only `surface`, passes it to every `eligible_candidates` call (lines 417-420), and filters members to those whose platform declares the surface:
+`group_eligible_candidates` (line 385) gains the same keyword-only `surface` and passes it to every `eligible_candidates` call (lines 417-420). It does **not** filter members — see the next step.
+
+- [ ] **Step 5: Gate the lane on platform capability, in `_fill_unit`**
+
+A lane fills only members whose platform actually HAS its surface. Put this in `_fill_unit`, immediately after the empty-group check near `worker/autofill.py:739`, and use the filtered `members` for everything downstream — `member_ids`, the queue-depth calls, the candidate calls, and the log line's channel count:
 
 ```python
-    # A story lane on a mixed group fills only its story-capable members. An Instagram +
-    # Facebook group creates Instagram sends and nothing for the Page.
+    # A lane reaches only members whose platform HAS this surface: an Instagram + Facebook
+    # group with a story lane creates Instagram sends and nothing for the Page.
+    #
+    # Here rather than inside group_eligible_candidates so the SOLO path is gated by the
+    # same line. A story lane on a Telegram channel must be refused by the WORKER — the
+    # dashboard hides the option, but the worker must never depend on the UI for
+    # correctness.
     members = [
-        m for m in members
-        if surface in PLATFORM_CAPS[m["platform"]].surfaces
+        m for m in lane.members
+        if lane.surface in PLATFORM_CAPS[m["platform"]].surfaces
     ]
     if not members:
-        return []
+        if logger:
+            logger.info("[autofill %s] no active member can take a %s — skipping",
+                        lane.label, lane.surface)
+        return 0
 ```
 
-Place this at the top of the function body, before `capable_post_ids` is called.
+- [ ] **Step 6: Update the call sites in `_fill_unit`**
 
-- [ ] **Step 5: Update the call sites in `_fill_unit`**
-
-At `worker/autofill.py:768-775`:
+At `worker/autofill.py:768-775`, using the filtered `members` from step 5:
 
 ```python
     if lane.is_group:
@@ -1067,27 +1090,27 @@ At `worker/autofill.py:768-775`:
         ]
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 7: Run the tests**
 
 Run: `.venv/bin/pytest worker/tests/test_autofill_lanes.py -v`
 
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
-- [ ] **Step 7: Run the whole worker suite**
+- [ ] **Step 8: Run the whole worker suite**
 
 Run: `.venv/bin/pytest worker/tests -q`
 
 Expected: PASS. Existing suites call `eligible_candidates` directly in places; add `surface="feed"` at each such call. The `TypeError` from the missing keyword is intentional — it is how you find them all.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add worker/autofill.py worker/tests/test_autofill_lanes.py
 git commit -m "feat(autofill-lanes): select candidates for the lane's surface
 
 select_candidates takes a surface instead of hardcoding 'feed'. Story lanes skip
-the caption-length gate, because a Story sends no caption, and reach only members
-whose platform declares the surface."
+the caption-length gate, because a Story sends no caption. _fill_unit gates every
+lane, solo and group alike, on the platform actually having the surface."
 ```
 
 ---
