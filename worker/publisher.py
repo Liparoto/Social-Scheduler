@@ -262,10 +262,14 @@ def _check_media_limits(assets, platform: str, surface: str) -> None:
     the send — a "warn" (a limit that varies by account) is left for the platform itself
     to enforce.
 
-    Checked against assets[0] only, same as the picker: today every gated surface
-    (Instagram/Facebook Reels, Instagram Story) is single-asset by construction (a video
-    post is exactly one asset; a story row is narrowed to one slide by _load_targets), so
-    there is nothing later in a carousel to miss.
+    Checked against assets[0] only, same as the picker. That was once safe by
+    construction — every gated surface (Facebook Reels, then Instagram Story) was
+    single-asset (a video post is exactly one asset; a story row is narrowed to one slide
+    by _load_targets) — but it no longer is: instagram.feed.image, added after that
+    reasoning was first written, can be a 10-slide carousel, and this checks slide 1
+    only. Slides 2-10 are simply UNCHECKED here, same as every slide was before this gate
+    existed at all — not a regression, and not something this pass fixes; checking every
+    slide is future work.
     """
     if not assets:
         return

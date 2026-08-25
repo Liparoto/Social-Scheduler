@@ -245,7 +245,13 @@ export async function POST(req: NextRequest) {
         : null,
       thumbnail_path: null,
       mime_type: mime,
-      byte_size: buf.length,
+      // The DERIVATIVE's byte length, not the original's (buf.length) — every other
+      // recorded field here (width/height/duration_ms below) already describes the
+      // derivative, since that's the file that's actually published. Leaving this at
+      // buf.length was the bug: a 400MB 4K clip downscaled to ~120MB kept reporting
+      // byte_size=400MB, so instagram.feed.video's 300MB cap refused a file Meta would
+      // never actually receive.
+      byte_size: derivBuf.length,
       publish_path: publishRel,
       conform_mode: "downscale",
       needs_review: 1,
