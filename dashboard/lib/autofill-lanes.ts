@@ -292,11 +292,19 @@ export function lanePatchBody(lane: LanePanelData, draft: LaneDraft) {
   // unconfigured, and it has to READ as unconfigured on the next load — parseCadence
   // answers 18:00 for a slot list it finds empty, which would quietly put the borrowed
   // time back the moment the owner saved an off lane's queue depths.
-  const empty = draft.cadence.mode === "times" && draft.cadence.slots.length === 0;
+  //
+  // Judged on the SERIALIZED cadence, not on the rows in hand: serializeCadence drops a
+  // slot whose time is not HH:MM, so a single blank row serializes to an empty slot list
+  // too. saveBlockedReason stops an ENABLED lane reaching here that way, but a disabled
+  // one is free to, and that is enough to bring the phantom 18:00 back.
+  const config = serializeCadence(draft.cadence);
+  const empty =
+    draft.cadence.mode === "times" &&
+    ((JSON.parse(config) as { slots?: unknown[] }).slots ?? []).length === 0;
   return {
     surface: lane.surface,
     autofill_enabled: draft.enabled,
-    cadence_config: empty ? null : serializeCadence(draft.cadence),
+    cadence_config: empty ? null : config,
     min_queue_depth: draft.minDepth,
     target_queue_depth: draft.target,
     reuse_min_age_days: draft.reuseDays,

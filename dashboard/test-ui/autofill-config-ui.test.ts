@@ -587,3 +587,27 @@ test("a selection that stops being shown falls back — this is the switched-off
 test("an empty shown list still resolves to a real surface rather than undefined", () => {
   assert.equal(activeSurface([], "story"), "feed");
 });
+
+test("a row whose time is blank also saves as NULL, not as an empty slot list", () => {
+  // The `empty` test has to judge the SERIALIZED cadence, not the rows in hand:
+  // serializeCadence drops a slot whose time is not HH:MM, so one blank row yields
+  // {"mode":"times","slots":[]} — which parseCadence reads back as the phantom 18:00 on
+  // the next load. Enabled lanes are blocked from saving this, but a DISABLED one is not,
+  // and that is enough to put the borrowed time back.
+  const body = lanePatchBody(laneFor([], "story"), {
+    enabled: false,
+    cadence: { mode: "times", slots: [{ time: "", days: [...DAYS] }] },
+    minDepth: 0,
+    target: 0,
+    reuseDays: 180,
+    bpp: 0,
+  });
+  assert.equal(body.cadence_config, null);
+});
+
+test("an interval cadence is never mistaken for an empty one", () => {
+  const body = lanePatchBody(laneFor([], "feed"), {
+    enabled: true, cadence: DEFAULT_INTERVAL, minDepth: 0, target: 0, reuseDays: 180, bpp: 0,
+  });
+  assert.equal(body.cadence_config, serializeCadence(DEFAULT_INTERVAL));
+});
