@@ -170,17 +170,26 @@ def test_planned_slots_count_toward_the_gap_not_just_sent_ones():
 
 # ---- integration --------------------------------------------------------------------
 
+_CADENCE = '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}'
+
+
 def _channel(conn, *, bpp_days=0, target=4, min_depth=3, reuse=30):
-    return conn.execute(
+    cid = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, remote_account_id,
               access_token, bpp_every_days)
-           VALUES ('instagram','Chan','UTC',1,
-                   '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}',
-                   ?,?,?,'acct1','tok',?)""",
-        (min_depth, target, reuse, bpp_days),
+           VALUES ('instagram','Chan','UTC',1,?,?,?,?,'acct1','tok',?)""",
+        (_CADENCE, min_depth, target, reuse, bpp_days),
     ).lastrowid
+    conn.execute(
+        """INSERT INTO autofill_lanes
+             (channel_id, surface, enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days)
+           VALUES (?, 'feed', 1, ?, ?, ?, ?)""",
+        (cid, _CADENCE, min_depth, target, reuse),
+    )
+    return cid
 
 
 def _post(conn, channel_id, *, is_bpp=0, kind="evergreen"):
@@ -356,11 +365,16 @@ def _group(conn, *, bpp_days=0, target=4, min_depth=3):
         """INSERT INTO channel_groups
              (name, timezone, autofill_enabled, cadence_config, min_queue_depth,
               target_queue_depth, reuse_min_age_days, bpp_every_days)
-           VALUES ('G','UTC',1,
-                   '{"days":["mon","tue","wed","thu","fri","sat","sun"],"time":"18:00"}',
-                   ?,?,30,?)""",
-        (min_depth, target, bpp_days),
+           VALUES ('G','UTC',1,?,?,?,30,?)""",
+        (_CADENCE, min_depth, target, bpp_days),
     ).lastrowid
+    conn.execute(
+        """INSERT INTO autofill_lanes
+             (group_id, surface, enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days)
+           VALUES (?, 'feed', 1, ?, ?, ?, 30)""",
+        (gid, _CADENCE, min_depth, target),
+    )
     members = [
         conn.execute(
             "INSERT INTO channels (platform, account_name, timezone, group_id,"

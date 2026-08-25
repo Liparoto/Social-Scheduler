@@ -23,7 +23,7 @@ def picks(conn, channel_id, limit):
 # ---- seed helpers ---------------------------------------------------------------
 def make_channel(conn, *, autofill=1, min_depth=3, target=5, cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
                  tz="America/New_York", approval=0, platform="instagram"):
-    return conn.execute(
+    channel_id = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, requires_approval,
@@ -31,6 +31,14 @@ def make_channel(conn, *, autofill=1, min_depth=3, target=5, cadence='{"days":["
            VALUES (?,'Chan',?,?,?,?,?,180,?, 'acct1','tok')""",
         (platform, tz, autofill, cadence, min_depth, target, approval),
     ).lastrowid
+    conn.execute(
+        """INSERT INTO autofill_lanes
+             (channel_id, surface, enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days)
+           VALUES (?, 'feed', ?, ?, ?, ?, 180)""",
+        (channel_id, autofill, cadence, min_depth, target),
+    )
+    return channel_id
 
 
 def make_post(conn, channel_id=None, created_at="2026-01-01T00:00:00+00:00",
@@ -512,15 +520,25 @@ def test_autofill_can_queue_more_than_one_post_a_day(conn, config):
     """A channel posting three times a day must get three sends on one date. The
     single-time path advances a whole day after each placement, so this needs the
     multi-time cadence to take effect end to end — not just in the slot helper."""
+    daily_cadence = (
+        '{"days":["mon","tue","wed","thu","fri","sat","sun"],'
+        '"times":["09:00","13:00","18:00"]}'
+    )
     cid = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, remote_account_id,
               access_token)
            VALUES ('instagram','Chan','UTC',1, ?, 3, 6, 30, 'acct1','tok')""",
-        ('{"days":["mon","tue","wed","thu","fri","sat","sun"],'
-         '"times":["09:00","13:00","18:00"]}',),
+        (daily_cadence,),
     ).lastrowid
+    conn.execute(
+        """INSERT INTO autofill_lanes
+             (channel_id, surface, enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days)
+           VALUES (?, 'feed', 1, ?, 3, 6, 30)""",
+        (cid, daily_cadence),
+    )
     for _ in range(8):
         make_post(conn, cid)
     conn.commit()

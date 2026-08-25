@@ -14,7 +14,7 @@ def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
                  autofill=0, tz="America/New_York", approval=0,
                  cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
                  min_depth=3, target=5, reuse=180, active=1):
-    return conn.execute(
+    channel_id = conn.execute(
         """INSERT INTO channels
              (platform, account_name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, requires_approval,
@@ -23,18 +23,39 @@ def make_channel(conn, *, platform="instagram", name="Chan", group_id=None,
         (platform, name, tz, autofill, cadence, min_depth, target, reuse, approval,
          group_id, active),
     ).lastrowid
+    if group_id is None:
+        # A grouped channel fills through its group's lane — giving it one of its own
+        # here would create a stray row the loader must (and does, per
+        # test_a_grouped_channels_own_lane_is_ignored) ignore, so only the ungrouped
+        # case needs one to keep this suite's assertions meaningful.
+        conn.execute(
+            """INSERT INTO autofill_lanes
+                 (channel_id, surface, enabled, cadence_config,
+                  min_queue_depth, target_queue_depth, reuse_min_age_days)
+               VALUES (?, 'feed', ?, ?, ?, ?, ?)""",
+            (channel_id, autofill, cadence, min_depth, target, reuse),
+        )
+    return channel_id
 
 
 def make_group(conn, *, name="Personal", autofill=1, tz="America/New_York",
                cadence='{"days":["mon","wed","fri"],"time":"18:00"}',
                min_depth=3, target=5, reuse=180, active=1):
-    return conn.execute(
+    group_id = conn.execute(
         """INSERT INTO channel_groups
              (name, timezone, autofill_enabled, cadence_config,
               min_queue_depth, target_queue_depth, reuse_min_age_days, is_active)
            VALUES (?,?,?,?,?,?,?,?)""",
         (name, tz, autofill, cadence, min_depth, target, reuse, active),
     ).lastrowid
+    conn.execute(
+        """INSERT INTO autofill_lanes
+             (group_id, surface, enabled, cadence_config,
+              min_queue_depth, target_queue_depth, reuse_min_age_days)
+           VALUES (?, 'feed', ?, ?, ?, ?, ?)""",
+        (group_id, autofill, cadence, min_depth, target, reuse),
+    )
+    return group_id
 
 
 def make_post(conn, *, post_type="single", caption="x", targets=(),
@@ -457,7 +478,7 @@ def test_failed_group_insert_persists_nothing_and_leaves_no_open_transaction(con
     would also hold the writer lock for a whole poll interval, blocking the dashboard.
 
     The failure is simulated with a trigger that aborts the second member's insert. The
-    real-world trigger is a channel deleted in the dashboard between _autofill_units
+    real-world trigger is a channel deleted in the dashboard between _autofill_lanes
     reading its members and _fill_unit inserting (foreign keys are ON).
     """
     gid, ig, th = pair(conn, min_depth=1, target=1)

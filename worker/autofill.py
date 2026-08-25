@@ -436,36 +436,90 @@ def group_eligible_candidates(conn, group, members, now, limit: int | None, *,
 
 
 @dataclass
-class AutofillUnit:
-    """One thing auto-fill tops up. A channel_group with its active members, or a single
-    ungrouped channel standing alone. `settings` carries cadence_config, timezone,
-    min/target_queue_depth and reuse_min_age_days — the group and the channel share those
-    column names precisely so this stays one code path."""
+class AutofillLane:
+    """One thing auto-fill tops up: an owner (a channel_group with its active members, or
+    an ungrouped channel standing alone) PLUS a surface.
+
+    A group with a feed lane and a story lane is two lanes, topped up independently —
+    separate queue-depth maths, separate candidate pools, separate slot walks. That
+    independence is the whole feature: see docs/design-autofill-lanes.md.
+
+    `settings` is the lane row merged with the owner's `timezone` and `bpp_*` dials, which
+    stay stored on the owner. The merge is not cosmetic: `_setting` swallows a missing
+    column and returns its default, so a `settings` that dropped `bpp_every_days` would
+    not raise — the BPP step would read 0, conclude "off", and silently stop recycling
+    with nothing logged.
+    """
 
     label: str
-    settings: object
+    surface: str
+    settings: dict
     members: list
     is_group: bool
 
 
-def _autofill_units(conn) -> list[AutofillUnit]:
-    """Groups first, then ungrouped channels. A channel with group_id set is NEVER also
-    returned as a solo unit, so it can't be topped up twice in one cycle."""
-    units: list[AutofillUnit] = []
-    for g in conn.execute(
-        "SELECT * FROM channel_groups WHERE is_active = 1 AND autofill_enabled = 1"
+# Owner columns that travel with every lane, because the file already reads them off
+# `settings` and they describe the ACCOUNT rather than the schedule.
+_OWNER_SETTINGS = ("timezone", "bpp_every_days", "bpp_strong_pct", "bpp_broad_pct")
+
+
+def _lane_settings(lane_row, owner_row) -> dict:
+    """The lane's own columns, plus the owner settings listed above.
+
+    Tolerant of an owner that lacks a column: channel_groups never got bpp_strong_pct /
+    bpp_broad_pct (0022 added them to channels only), and a clone may be mid-migration.
+    A missing dial is simply absent, which `_setting` already handles.
+    """
+    out = {key: lane_row[key] for key in lane_row.keys()}
+    for key in _OWNER_SETTINGS:
+        try:
+            out[key] = owner_row[key]
+        except (IndexError, KeyError):
+            pass
+    return out
+
+
+def _autofill_lanes(conn) -> list[AutofillLane]:
+    """Every enabled lane whose owner is active. Groups first, then ungrouped channels.
+
+    A channel with group_id set is NEVER also returned as a solo lane — it fills through
+    its group — so it cannot be topped up twice in one cycle even if a stray lane row
+    exists on it.
+    """
+    lanes: list[AutofillLane] = []
+    for lane_row in conn.execute(
+        """SELECT l.*, g.name AS owner_label
+             FROM autofill_lanes l
+             JOIN channel_groups g ON g.id = l.group_id
+            WHERE l.enabled = 1 AND g.is_active = 1
+            ORDER BY g.id, l.surface"""
     ).fetchall():
+        group = conn.execute(
+            "SELECT * FROM channel_groups WHERE id = ?", (lane_row["group_id"],)
+        ).fetchone()
         members = conn.execute(
             "SELECT * FROM channels WHERE group_id = ? AND is_active = 1 ORDER BY id",
-            (g["id"],),
+            (lane_row["group_id"],),
         ).fetchall()
-        units.append(AutofillUnit(g["name"], g, list(members), True))
-    for ch in conn.execute(
-        """SELECT * FROM channels
-            WHERE is_active = 1 AND autofill_enabled = 1 AND group_id IS NULL"""
+        lanes.append(AutofillLane(
+            lane_row["owner_label"], lane_row["surface"],
+            _lane_settings(lane_row, group), list(members), True,
+        ))
+    for lane_row in conn.execute(
+        """SELECT l.*, c.account_name AS owner_label
+             FROM autofill_lanes l
+             JOIN channels c ON c.id = l.channel_id
+            WHERE l.enabled = 1 AND c.is_active = 1 AND c.group_id IS NULL
+            ORDER BY c.id, l.surface"""
     ).fetchall():
-        units.append(AutofillUnit(ch["account_name"], ch, [ch], False))
-    return units
+        channel = conn.execute(
+            "SELECT * FROM channels WHERE id = ?", (lane_row["channel_id"],)
+        ).fetchone()
+        lanes.append(AutofillLane(
+            lane_row["owner_label"], lane_row["surface"],
+            _lane_settings(lane_row, channel), [channel], False,
+        ))
+    return lanes
 
 
 def _setting(settings, name: str, default=0):
@@ -734,22 +788,22 @@ def _assign(slots, items, bands_by_post, band_of, need, covered, *, pool=None,
     return out
 
 
-def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logger) -> int:
-    """Top up one unit. Returns the number of publications created."""
-    if unit.is_group and not unit.members:
+def _fill_unit(conn, lane: AutofillLane, config: Config, now, now_iso: str, logger) -> int:
+    """Top up one lane. Returns the number of publications created."""
+    if lane.is_group and not lane.members:
         if logger:
-            logger.info("[autofill %s] group has no active members — skipping", unit.label)
+            logger.info("[autofill %s] group has no active members — skipping", lane.label)
         return 0
 
-    settings = unit.settings
+    settings = lane.settings
     cadence = parse_cadence(settings["cadence_config"])
     if cadence is None:
         if logger:
-            logger.info("[autofill %s] no valid cadence — skipping", unit.label)
+            logger.info("[autofill %s] no valid cadence — skipping", lane.label)
         return 0
 
-    member_ids = [m["id"] for m in unit.members]
-    if unit.is_group:
+    member_ids = [m["id"] for m in lane.members]
+    if lane.is_group:
         ahead = group_scheduled_ahead_count(conn, member_ids, now_iso)
         last_future = group_latest_future_scheduled(conn, member_ids, now_iso)
     else:
@@ -766,17 +820,17 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     # few all sit in a band this cadence has no slot for, auto-fill would place nothing while
     # hundreds of usable posts sat further down the ranking. The SLOTS do the limiting instead —
     # which is already how the group and BPP paths have always worked.
-    if unit.is_group:
-        candidates = group_eligible_candidates(conn, settings, unit.members, now, None)
+    if lane.is_group:
+        candidates = group_eligible_candidates(conn, settings, lane.members, now, None)
     else:
-        ch = unit.members[0]
+        ch = lane.members[0]
         candidates = [(r, [ch]) for r in eligible_candidates(conn, ch, now, None)]
 
     if not candidates:
         if logger:
             logger.info(
                 "[autofill %s] queue low (%d/%d) but no eligible content",
-                unit.label, ahead, settings["min_queue_depth"],
+                lane.label, ahead, settings["min_queue_depth"],
             )
         return 0
 
@@ -801,7 +855,7 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
     # looking at the stats (see worker/bpp.py for why an algorithm cannot).
     every_days = _setting(settings, "bpp_every_days")
     if every_days > 0 and placed:
-        placed = _apply_bpp(conn, unit, settings, now, placed, candidates, bands_by_post,
+        placed = _apply_bpp(conn, lane, settings, now, placed, candidates, bands_by_post,
                             band_of, covered, every_days, logger)
 
     stranded = _stranded_by_band(candidates, bands_by_post, covered)
@@ -809,21 +863,21 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
         detail = ", ".join(f"{count} tagged {band}" for band, count in sorted(stranded.items()))
         logger.info(
             "[autofill %s] %s held back — this cadence has no slot in that band. Add a time "
-            "in the dashboard, or retag the posts.", unit.label, detail,
+            "in the dashboard, or retag the posts.", lane.label, detail,
         )
 
     if not placed:
         if logger:
             logger.info(
                 "[autofill %s] queue low (%d/%d) but nothing could be placed",
-                unit.label, ahead, settings["min_queue_depth"],
+                lane.label, ahead, settings["min_queue_depth"],
             )
         return 0
 
     # All-or-nothing. sqlite3's default isolation means these inserts sit in an implicit
     # transaction, and run.py catches errors and REUSES this connection — so without the
     # rollback a failure mid-group (e.g. a member channel deleted in the dashboard since
-    # _autofill_units read it; foreign keys are ON) would be silently committed by the
+    # _autofill_lanes read it; foreign keys are ON) would be silently committed by the
     # next cycle's heartbeat, leaving one member scheduled and the other not: exactly the
     # drift groups exist to prevent. The open transaction would also hold SQLite's writer
     # lock for a full poll interval, blocking the dashboard.
@@ -852,16 +906,16 @@ def _fill_unit(conn, unit: AutofillUnit, config: Config, now, now_iso: str, logg
         logger.info(
             "[autofill %s] queue %d/%d -> added %d publication(s) across %d channel(s) "
             "(target %d)",
-            unit.label, ahead, settings["min_queue_depth"], made, len(unit.members),
+            lane.label, ahead, settings["min_queue_depth"], made, len(lane.members),
             settings["target_queue_depth"],
         )
     return made
 
 
 def run_autofill(conn, config: Config, now, logger=None) -> int:
-    """Top up every auto-fill-enabled unit. Returns total publications created."""
+    """Top up every enabled lane. Returns total publications created."""
     now_iso = now.isoformat()
     return sum(
-        _fill_unit(conn, unit, config, now, now_iso, logger)
-        for unit in _autofill_units(conn)
+        _fill_unit(conn, lane, config, now, now_iso, logger)
+        for lane in _autofill_lanes(conn)
     )
