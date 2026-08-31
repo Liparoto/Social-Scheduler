@@ -119,3 +119,57 @@ def test_no_channels_yet_prints_the_id_instead_of_failing(conn, config, capsys):
     out = capsys.readouterr().out
     assert PAGE_ID in out
     assert "Add channel" in out
+
+
+FAKE_TOKEN = "EAAG" + "x" * 180  # shaped like a real Meta token, long enough to pass
+
+
+def test_a_token_file_written_by_notepad_still_yields_a_clean_token(tmp_path, capsys):
+    # Notepad and PowerShell redirection prepend a UTF-8 BOM, and every editor adds a
+    # trailing newline. Meta would treat both as part of the token and refuse it.
+    f = tmp_path / "token.txt"
+    f.write_bytes(b"\xef\xbb\xbf" + FAKE_TOKEN.encode() + b"\r\n")
+    assert ex._read_token("Paste:", str(f)) == FAKE_TOKEN
+
+
+def test_a_swallowed_paste_is_named_instead_of_reaching_meta(monkeypatch):
+    # The Windows-terminal bug this commit exists for: getpass silently drops the
+    # Ctrl+V and a 1-character "token" goes to Meta, which answers with a code 190
+    # that reads like the token was WRONG rather than missing.
+    monkeypatch.setattr(ex, "_prompt_secret", lambda label: "v")
+    with pytest.raises(ex.ExchangeError, match="--token-file"):
+        ex._read_token("Paste:", None)
+
+
+def test_a_token_with_a_line_break_is_rejected(tmp_path):
+    # A copy that wrapped or grabbed surrounding text would fail later at Meta with
+    # no hint that the paste itself was the problem.
+    f = tmp_path / "token.txt"
+    f.write_text(FAKE_TOKEN[:100] + "\n" + FAKE_TOKEN[100:])
+    with pytest.raises(ex.ExchangeError, match="space or line break"):
+        ex._read_token("Paste:", str(f))
+
+
+def test_a_missing_token_file_is_an_exchange_error_not_a_traceback(tmp_path):
+    with pytest.raises(ex.ExchangeError, match="Could not read"):
+        ex._read_token("Paste:", str(tmp_path / "nope.txt"))
+
+
+def test_a_page_token_pasted_as_a_user_token_gets_a_translated_error(config, monkeypatch):
+    # `me/accounts` on a Page token fails with "nonexisting field (accounts)", which
+    # says nothing about the actual mistake: the wrong dropdown in the Explorer.
+    def _fake_get(url, params):
+        raise ex.ExchangeError('Meta said: nonexisting field (accounts) (code 100)')
+
+    monkeypatch.setattr(ex, "_get", _fake_get)
+    with pytest.raises(ex.ExchangeError, match="PAGE token, not a USER token"):
+        ex.list_pages(config, "tok")
+
+
+def test_arg_value_reads_both_spellings(monkeypatch):
+    # Both `--token-file x` and `--token-file=x` circulate in the docs; supporting one
+    # and silently ignoring the other would fall back to the broken hidden prompt.
+    monkeypatch.setattr(ex.sys, "argv", ["prog", "--token-file", "a.txt", "--platform=facebook"])
+    assert ex._arg_value("--token-file") == "a.txt"
+    assert ex._arg_value("--platform") == "facebook"
+    assert ex._arg_value("--absent") is None
