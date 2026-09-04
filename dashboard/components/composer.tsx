@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { channelColor, formatParts, videoPreviewSrc } from "@/lib/format";
+import { channelColor, formatParts } from "@/lib/format";
 import { ChannelAvatar } from "@/components/ui";
 import { platformLabel, supportsText, supportsVideo, captionLimit, PLATFORMS } from "@/lib/platforms";
 import { destinationDisabledReason } from "@/lib/media-limits";
@@ -17,6 +17,7 @@ import { TikTokCaptionNotice } from "@/components/tiktok-caption-notice";
 import { PeriodAttach } from "@/components/period-attach";
 import { TagEditor } from "@/components/tag-editor";
 import { FramingButton } from "@/components/framing-button";
+import { PostPreview } from "@/components/post-preview";
 import { CoverFramePicker } from "@/components/cover-frame-picker";
 import { PostNowReadinessNotice } from "@/components/post-now-readiness";
 import { SlideReorder, type Slide } from "@/components/slide-reorder";
@@ -722,65 +723,16 @@ export function Composer({
 
       {/* ---- Live preview (sticky) ---- */}
       <div className="lg:sticky lg:top-6 self-start space-y-4">
-        <div className="rounded-card border border-border bg-surface p-4">
-          <h3 className="mb-3 font-display text-xs font-semibold uppercase tracking-wide text-muted">
-            Preview
-          </h3>
-          <div className="overflow-hidden rounded-lg border border-border">
-            {textOnly ? (
-              <div className="flex items-center gap-2 border-b border-border bg-surface-sunken px-3 py-2">
-                <span className="data text-xs font-medium uppercase tracking-wide text-muted">
-                  Text post
-                </span>
-              </div>
-            ) : (
-              <div className="aspect-square bg-surface-sunken">
-                {assets[0] ? (
-                  hasVideo ? (
-                    // videoPreviewSrc's #t= fragment forces Safari to paint a frame on
-                    // load (Chrome already does this for free); the owner's chosen
-                    // cover frame is already in hand here, so the preview shows the
-                    // same frame as the cover picker above instead of frame 0.
-                    <video
-                      src={videoPreviewSrc(assets[0].asset.id, assets[0].asset.cover_frame_ms)}
-                      className="h-full w-full object-cover"
-                      muted
-                      playsInline
-                      controls
-                    />
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={`/api/media/${assets[0].asset.id}`}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  )
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-faint">
-                    First image appears here
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="p-3">
-              <p className="whitespace-pre-wrap text-sm text-ink">
-                {caption || <span className="text-faint">Your caption…</span>}
-              </p>
-              {firstComment ? (
-                <p className="mt-2 border-t border-border pt-2 text-xs text-muted">
-                  <span className="text-faint">First comment: </span>
-                  {firstComment}
-                </p>
-              ) : null}
-            </div>
-          </div>
-          {assets.length > 1 ? (
-            <p className="data mt-2 text-center text-[11px] text-faint">
-              Carousel · {assets.length} images
-            </p>
-          ) : null}
-        </div>
+        {/* Both surfaces, at their real shapes. Replaces a fixed aspect-square,
+            object-cover box fed from `/api/media/{id}` with no variant — i.e. the
+            untouched ORIGINAL, CSS-cropped to a shape Instagram never publishes. See
+            post-preview.tsx's header for why that was worse than showing nothing. */}
+        <PostPreview
+          assets={assets.map((a) => a.asset)}
+          caption={caption}
+          firstComment={firstComment}
+          textOnly={textOnly}
+        />
 
         {/* When, before where. The date & time controls live far down the left column,
             below the fold — arriving from the calendar's empty-day "+" the date is already
