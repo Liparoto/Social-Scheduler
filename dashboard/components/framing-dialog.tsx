@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { cropLossFraction, needsStoryCanvas } from "@/lib/story-geometry";
+import { cropLossFraction, needsStoryCanvas, STORY_RATIO } from "@/lib/story-geometry";
 import type { Asset } from "@/lib/types";
 
 /*
@@ -20,9 +20,20 @@ import type { Asset } from "@/lib/types";
   controls once a choice exists.
 */
 
-/** Big enough to actually judge. The old control was 40x40. */
-const FEED_PREVIEW = "h-[200px] w-[200px]";
-const STORY_PREVIEW = "h-[284px] w-[160px]";
+/*
+  Big enough to actually judge (the old control was 40x40), and CAPPED AGAINST THE VIEWPORT
+  so it stays that way on a short window.
+
+  The fixed 200px/284px heights made the panel ~496px tall regardless of the room available.
+  On a laptop window shorter than that the panel scrolled — but the whole panel is one
+  scroll container, so scrolling down to reach "Blurred fill" / "Crop to fill" carried the
+  preview those buttons control off the top of the screen. A framing picker where you cannot
+  see the photo and the button at the same time cannot do its job; at 420px tall the story
+  buttons were off-screen outright. min() lets the previews shrink instead of pushing the
+  controls out of reach, and aspect-ratio keeps each frame honest while it shrinks.
+*/
+const FEED_PREVIEW_BOX = { height: "min(200px, 26vh)", aspectRatio: 1 };
+const STORY_PREVIEW_BOX = { height: "min(284px, 34vh)", aspectRatio: STORY_RATIO };
 
 /** object-CONTAIN, never object-cover: padding and bars must be visible AS padding and
  *  bars. The sunken backdrop makes letterboxing legible against the page. */
@@ -141,7 +152,7 @@ export function FramingDialog({
             <section>
               <h3 className="mb-0.5 text-xs font-medium text-ink">Feed</h3>
               <p className="mb-2 text-[11px] text-muted">4:5 to 1.91:1</p>
-              <div className={FEED_PREVIEW}>
+              <div style={FEED_PREVIEW_BOX}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={`/api/media/${asset.id}?variant=publish&v=${bust}`}
@@ -205,7 +216,7 @@ export function FramingDialog({
                 </p>
               ) : (
                 <>
-                  <div className={STORY_PREVIEW}>
+                  <div style={STORY_PREVIEW_BOX}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={`/api/media/${asset.id}?variant=story&mode=${storyMode}&v=${bust}`}
