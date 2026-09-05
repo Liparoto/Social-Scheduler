@@ -29,6 +29,9 @@ const STORY_PREVIEW = "h-[284px] w-[160px]";
 const PREVIEW_IMG =
   "h-full w-full rounded border border-border bg-surface-sunken object-contain";
 
+/** Incremented per dialog mount; see `bust` below. */
+let dialogOpenCount = 0;
+
 const optionBtn = (active: boolean) =>
   `rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
     active
@@ -39,18 +42,32 @@ const optionBtn = (active: boolean) =>
 export function FramingDialog({
   asset,
   scheduledSendCount,
+  onChanged,
   onClose,
 }: {
   asset: Asset;
   /** Scheduled-but-unsent publications this asset's framing governs — a real consequence
    *  of changing it, so it is stated rather than discovered. */
   scheduledSendCount: number;
+  /** Fired after a choice is persisted, with BOTH modes as they now stand.
+   *
+   *  router.refresh() below is not enough on its own for every host. It re-renders server
+   *  components, but the composer keeps its assets in client state (useState<UploadedAsset[]>),
+   *  so its Asset rows — and therefore story_mode — never change. A host that renders from
+   *  its own copy needs to be told. */
+  onChanged?: (next: {
+    feedMode: Asset["conform_mode"];
+    storyMode: Asset["story_mode"];
+  }) => void;
   onClose: () => void;
 }) {
   const router = useRouter();
   const [feedMode, setFeedMode] = useState(asset.conform_mode);
   const [storyMode, setStoryMode] = useState(asset.story_mode);
-  const [bust, setBust] = useState(0);
+  // Seeded per mount rather than at 0: the media route serves derivatives with
+  // max-age=3600, so a dialog reopened after a change would otherwise re-request the
+  // byte-identical `v=0` URL and show the framing the owner already replaced.
+  const [bust, setBust] = useState(() => ++dialogOpenCount);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -61,7 +78,12 @@ export function FramingDialog({
   const storyNeedsCanvas = isImage && needsStoryCanvas(w, h);
   const cropLoss = Math.round(cropLossFraction(w, h) * 100);
 
-  async function choose(url: string, body: object, apply: () => void) {
+  async function choose(
+    url: string,
+    body: object,
+    apply: () => void,
+    next: { feedMode?: Asset["conform_mode"]; storyMode?: Asset["story_mode"] },
+  ) {
     setError(null);
     setBusy(true);
     try {
@@ -76,6 +98,10 @@ export function FramingDialog({
       }
       apply();
       setBust((b) => b + 1); // cache-bust the previews so the new render is fetched
+      onChanged?.({
+        feedMode: next.feedMode ?? feedMode,
+        storyMode: next.storyMode ?? storyMode,
+      });
       router.refresh();
     } finally {
       setBusy(false);
@@ -130,8 +156,11 @@ export function FramingDialog({
                   aria-pressed={feedMode === "crop"}
                   className={optionBtn(feedMode === "crop")}
                   onClick={() =>
-                    choose(`/api/assets/${asset.id}/conform`, { mode: "crop" }, () =>
-                      setFeedMode("crop"),
+                    choose(
+                      `/api/assets/${asset.id}/conform`,
+                      { mode: "crop" },
+                      () => setFeedMode("crop"),
+                      { feedMode: "crop" },
                     )
                   }
                 >
@@ -143,8 +172,11 @@ export function FramingDialog({
                   aria-pressed={feedMode === "pad"}
                   className={optionBtn(feedMode === "pad")}
                   onClick={() =>
-                    choose(`/api/assets/${asset.id}/conform`, { mode: "pad" }, () =>
-                      setFeedMode("pad"),
+                    choose(
+                      `/api/assets/${asset.id}/conform`,
+                      { mode: "pad" },
+                      () => setFeedMode("pad"),
+                      { feedMode: "pad" },
                     )
                   }
                 >
@@ -192,6 +224,7 @@ export function FramingDialog({
                           `/api/assets/${asset.id}/story-framing`,
                           { mode: "blurred" },
                           () => setStoryMode("blurred"),
+                          { storyMode: "blurred" },
                         )
                       }
                     >
@@ -207,6 +240,7 @@ export function FramingDialog({
                           `/api/assets/${asset.id}/story-framing`,
                           { mode: "crop" },
                           () => setStoryMode("crop"),
+                          { storyMode: "crop" },
                         )
                       }
                     >

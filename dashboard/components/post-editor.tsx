@@ -186,6 +186,10 @@ export function PostEditor({
   // The base variant (platform "") is what a channel without its own override publishes,
   // so it is the caption the preview should show. Falls back the same way the publish
   // path does rather than showing an empty box when only overrides exist.
+  // Ordered the way the strip draws it, including an order not yet saved.
+  const previewAssets = slideOrder.order
+    .map((id) => assets.find((a) => a.id === id))
+    .filter((a): a is Asset => Boolean(a));
   const previewCaption =
     captions.find((c) => !c.platform)?.body ?? captions[0]?.body ?? post.caption ?? "";
   // Derived, not written back into `targets` state — same reasoning as library-view.tsx's
@@ -498,7 +502,11 @@ export function PostEditor({
           the worker publishes. The context strip above shows square thumbnails, which is
           right for picking a slide and useless for judging a crop. */}
       <PostPreview
-        assets={assets}
+        // slideOrder.order, NOT `assets`: the strip above renders the unsaved client order,
+        // so passing the server order put two contradicting orderings on one screen — drag
+        // slide 3 to the front without saving and the strip showed the new order while the
+        // preview underneath still called the old photo "Slide 1 of 3".
+        assets={previewAssets}
         caption={previewCaption}
         firstComment={firstComment}
         scheduledSendCounts={scheduledSendCounts}

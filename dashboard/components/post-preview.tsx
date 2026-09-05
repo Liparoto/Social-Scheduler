@@ -19,7 +19,7 @@ import type { Asset } from "@/lib/types";
   that shows a third shape nobody will ever see is worse than no preview, because it is
   believed.
 
-  Three rules this component exists to keep:
+  Rules this component exists to keep:
 
     * every image is fetched through the SAME variant the worker publishes
       (`?variant=publish` for feed, `?variant=story` for a Story), never the original;
@@ -27,7 +27,8 @@ import type { Asset } from "@/lib/types";
       40x40 object-cover control in the old conform-control is the documented case of a
       preview that could not distinguish the very options it existed to compare;
     * one slide index drives BOTH panels, so you are always comparing the same photo in
-      two shapes rather than two photos.
+      two shapes rather than two photos;
+    * anything it STATES is measured, not predicted. See MEASURING below.
 */
 
 /*
@@ -42,13 +43,15 @@ import type { Asset } from "@/lib/types";
 */
 const PANELS = "grid grid-cols-[1.55fr_1fr] gap-4 max-w-[520px]";
 
-const FRAME =
-  "overflow-hidden rounded-lg border border-border bg-surface-sunken";
+const FRAME = "overflow-hidden rounded-lg border border-border bg-surface-sunken";
 /** object-CONTAIN, always. See the header comment. */
 const FRAME_MEDIA = "h-full w-full object-contain";
 
 const arrowBtn =
   "rounded-md border border-border px-2 py-1 text-xs text-ink transition-colors hover:bg-surface-sunken disabled:opacity-30";
+
+/** What the frame falls back to before anything has loaded and nothing can be predicted. */
+const UNKNOWN_RATIO = 1;
 
 export function PostPreview({
   assets,
@@ -68,11 +71,38 @@ export function PostPreview({
   textOnly?: boolean;
 }) {
   const [index, setIndex] = useState(0);
-  // assetId -> the ratio of the derivative the browser actually received. Ground truth,
-  // and it cannot drift from conform.ts the way a second copy of the maths could. The
-  // predicted ratio below only sizes the frame until this arrives.
+  /*
+    MEASURING. assetId -> the ratio of the derivative the browser actually received.
+
+    Predicting a shape from `assets.width/height` is not good enough to make a CLAIM from,
+    because those columns hold the source's PRE-EXIF-rotation dimensions: the upload route
+    reads `sharp(buf).metadata()` without `.rotate()`, which for EXIF orientation 5-8 (a
+    routine vertical phone photo) reports width and height the wrong way round — the exact
+    trap conform.ts:41-49 documents at length. A prediction is therefore fine for sizing a
+    frame that is about to be corrected, and NOT fine for deciding whether two slides
+    disagree. Everything this component asserts is measured; predictions only avoid a
+    layout jump on the way there.
+  */
   const [measured, setMeasured] = useState<Record<number, number>>({});
   const [framing, setFraming] = useState<Asset | null>(null);
+  /*
+    Framing is editable from inside this component, and the media route serves derivatives
+    with `Cache-Control: private, max-age=3600`. Without a cache-buster the panels keep
+    showing the OLD derivative at a byte-identical URL immediately after the owner changes
+    it — i.e. the preview goes stale exactly when it is being used to fix something, which
+    is the one moment it must not. FramingDialog busts its own previews for this reason;
+    this is the same fix for the panels that host it.
+  */
+  const [bust, setBust] = useState(0);
+  /*
+    ...and the mode itself has to be tracked locally, because a server refresh cannot reach
+    it. FramingDialog ends with router.refresh(), which re-renders server components — but
+    the COMPOSER holds its assets in client state (useState<UploadedAsset[]>), so its Asset
+    rows never change and `asset.story_mode` stays at the old value forever. That would
+    request the wrong canvas AND print a label that names the wrong choice, which is worse
+    than a stale image: it is a false statement.
+  */
+  const [storyOverride, setStoryOverride] = useState<Record<number, Asset["story_mode"]>>({});
 
   // A slide can disappear under us (removed in the composer while the preview is open).
   const safeIndex = Math.min(index, Math.max(0, assets.length - 1));
@@ -117,17 +147,27 @@ export function PostPreview({
 
   const isImage = asset.media_kind === "image";
   const isCarousel = assets.length > 1;
+  const storyMode = storyOverride[asset.id] ?? asset.story_mode;
 
-  // Predicted from the source dimensions; replaced by the real measurement on load. Falls
-  // back to square only when the dimensions were never recorded AND nothing has loaded.
-  const ratio = measured[asset.id] ?? feedRatio(asset.width, asset.height) ?? 1;
+  const ratio = measured[asset.id] ?? predictRatio(asset) ?? UNKNOWN_RATIO;
 
-  // Each asset conforms independently, so a carousel can end up mixed-shape.
-  const mixedShapes = feedShapesDisagree(
-    assets.map((a) => (a.media_kind === "image" ? measured[a.id] ?? feedRatio(a.width, a.height) : null)),
-  );
+  // Every image slide, measured. mixedShapes may ONLY be computed from these: mixing one
+  // measured value with N predicted ones is how a carousel of identical phone portraits
+  // ends up accused of being mixed (see MEASURING above).
+  const imageSlides = assets.filter((a) => a.media_kind === "image");
+  const measuredSlides = imageSlides.map((a) => measured[a.id]);
+  const allMeasured = imageSlides.length > 0 && measuredSlides.every((r) => r !== undefined);
+  const mixedShapes = allMeasured && feedShapesDisagree(measuredSlides);
+  const distinctShapes = allMeasured
+    ? [...new Set(measuredSlides.map((r) => (r as number).toFixed(2)))]
+    : [];
 
-  const storyIsNative = isImage && !needsStoryCanvas(asset.width ?? 0, asset.height ?? 0);
+  // Only claimed when the dimensions are actually known: needsStoryCanvas() returns false
+  // for 0x0, so asserting on it would print "Already 9:16" for an asset whose dimensions
+  // were never recorded (the upload route swallows a sharp failure).
+  const storyDimsKnown = Boolean(asset.width && asset.height);
+  const storyIsNative =
+    isImage && storyDimsKnown && !needsStoryCanvas(asset.width!, asset.height!);
 
   function recordRatio(id: number, w: number, h: number) {
     if (!w || !h) return;
@@ -135,13 +175,34 @@ export function PostPreview({
     setMeasured((prev) => (prev[id] === real ? prev : { ...prev, [id]: real }));
   }
 
+  /*
+    A ref callback is required ALONGSIDE onLoad, not instead of it.
+
+    The media route serves derivatives with max-age=3600, so on any revisit the image is
+    already in the browser cache and finishes loading BEFORE React attaches its onLoad
+    handler — the handler then never fires. Measuring only in onLoad therefore worked on a
+    cold cache and silently stopped working on every subsequent visit, which is the worst
+    possible failure for a component whose contract is "what it states is measured": it
+    would quietly fall back to the unreliable stored dimensions with nothing to show for it.
+    The ref runs at commit and reads a complete image immediately; onLoad covers the
+    still-downloading case. recordRatio() bails when the value is unchanged, so the ref
+    re-running on later renders cannot loop.
+  */
+  const measureImage = (id: number) => (el: HTMLImageElement | null) => {
+    if (el?.complete) recordRatio(id, el.naturalWidth, el.naturalHeight);
+  };
+  const measureVideo = (id: number) => (el: HTMLVideoElement | null) => {
+    // readyState >= HAVE_METADATA means videoWidth/videoHeight are populated.
+    if (el && el.readyState >= 1) recordRatio(id, el.videoWidth, el.videoHeight);
+  };
+
   return (
     <div className="rounded-card border border-border bg-surface p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <PreviewHeading />
         {isImage ? (
           // The slide it acts on is the one on screen; the nav row below already names
-          // that, so the label does not repeat it and stay narrow enough for the
+          // that, so the label does not repeat it and stays narrow enough for the
           // composer's 360px column.
           <button
             type="button"
@@ -187,9 +248,10 @@ export function PostPreview({
             {isImage ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={`/api/media/${asset.id}?variant=publish`}
+                src={`/api/media/${asset.id}?variant=publish&v=${bust}`}
                 alt={`Slide ${safeIndex + 1} as it will appear in the feed`}
                 className={FRAME_MEDIA}
+                ref={measureImage(asset.id)}
                 onLoad={(e) =>
                   recordRatio(asset.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
                 }
@@ -204,6 +266,7 @@ export function PostPreview({
                 muted
                 playsInline
                 controls
+                ref={measureVideo(asset.id)}
                 onLoadedMetadata={(e) =>
                   recordRatio(asset.id, e.currentTarget.videoWidth, e.currentTarget.videoHeight)
                 }
@@ -222,7 +285,7 @@ export function PostPreview({
             {isImage ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={`/api/media/${asset.id}?variant=story&mode=${asset.story_mode}`}
+                src={`/api/media/${asset.id}?variant=story&mode=${storyMode}&v=${bust}`}
                 alt={`Slide ${safeIndex + 1} as it will appear as a Story`}
                 className={FRAME_MEDIA}
               />
@@ -241,9 +304,11 @@ export function PostPreview({
               // there is no 9:16 canvas to show. Say so rather than imply this frame is
               // what Instagram will produce.
               <>Video goes to a Story as-is — Instagram applies its own fit.</>
+            ) : !storyDimsKnown ? (
+              <>Framing shown as rendered — this image&apos;s dimensions were not recorded.</>
             ) : storyIsNative ? (
               <>Already 9:16 — published untouched.</>
-            ) : asset.story_mode === "blurred" ? (
+            ) : storyMode === "blurred" ? (
               <>Blurred fill — the whole photo, over a blurred copy of itself.</>
             ) : (
               <>Crop to fill — trimmed to 9:16.</>
@@ -259,24 +324,78 @@ export function PostPreview({
       </div>
 
       {mixedShapes ? (
-        // Deliberately does NOT predict what Instagram does with a mixed-shape carousel:
-        // that is not verified anywhere in reference.md, and this project does not
-        // publish remembered numbers as fact. The actionable part is the mismatch itself.
+        /*
+          States the mismatch and stops. It deliberately does NOT predict what Instagram
+          does with a mixed-shape carousel (not verified in reference.md), and it no longer
+          suggests "set them to matching framing" — that advice was unachievable. Conform
+          only reshapes a source OUTSIDE 4:5-1.91:1, so for two in-range slides the Crop and
+          Pad buttons are no-ops and no control in this app can make them match. Naming the
+          shapes is the part the owner can actually act on, by choosing different photos.
+        */
         <p className="mt-3 rounded-lg bg-accent-weak px-3 py-2 text-[11px] text-accent-strong">
-          These slides are not all the same shape. Each photo is framed on its own, so a
-          carousel can end up mixed — set them to matching framing if you want them uniform.
+          These slides are not all the same shape ({distinctShapes.join(":1, ")}:1). Each
+          photo is framed on its own, so a carousel can end up mixed.
         </p>
       ) : null}
+
+      {/*
+        Measures every OTHER image slide, so mixedShapes above can be computed from real
+        derivatives rather than from the unreliable stored dimensions. 1px and behind the
+        card rather than `display:none`, so there is no dependence on how a browser treats
+        fetches for undisplayed images. Same URLs as the panels, so the visible slide costs
+        no extra request.
+      */}
+      <div aria-hidden className="pointer-events-none absolute h-px w-px overflow-hidden opacity-0">
+        {imageSlides
+          .filter((a) => measured[a.id] === undefined)
+          .map((a) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={`measure-${a.id}-${bust}`}
+              src={`/api/media/${a.id}?variant=publish&v=${bust}`}
+              alt=""
+              ref={measureImage(a.id)}
+              onLoad={(e) =>
+                recordRatio(a.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+              }
+            />
+          ))}
+      </div>
 
       {framing ? (
         <FramingDialog
           asset={framing}
           scheduledSendCount={scheduledSendCounts[framing.id] ?? 0}
+          onChanged={(next) => {
+            // Track the story mode locally (a server refresh cannot reach the composer's
+            // client-held assets) and bust the URLs so the new derivative is fetched.
+            setStoryOverride((prev) => ({ ...prev, [framing.id]: next.storyMode }));
+            setMeasured((prev) => {
+              if (prev[framing.id] === undefined) return prev;
+              const next = { ...prev };
+              delete next[framing.id];
+              return next;
+            });
+            setBust((b) => b + 1);
+          }}
           onClose={() => setFraming(null)}
         />
       ) : null}
     </div>
   );
+}
+
+/**
+ * The shape the feed frame will be, before anything has loaded. Sizing only — never a claim.
+ *
+ * Images are clamped into the feed's range because conformImage() clamps them. Video is NOT:
+ * the upload path only downscales it (conform_mode "downscale"), which preserves the ratio,
+ * so applying the image bounds would render a 9:16 Reel at 0.80 until its metadata lands.
+ */
+function predictRatio(asset: Asset): number | null {
+  if (asset.media_kind === "image") return feedRatio(asset.width, asset.height);
+  if (!asset.width || !asset.height) return null;
+  return asset.width / asset.height;
 }
 
 function PreviewHeading() {
