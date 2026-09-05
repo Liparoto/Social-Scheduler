@@ -31,6 +31,7 @@ import { EmojiPicker } from "@/components/emoji-picker";
 import { TagEditor } from "./tag-editor";
 import { PeriodAttach } from "./period-attach";
 import { FramingButton } from "./framing-button";
+import { PostPreview } from "./post-preview";
 import { CoverFramePicker } from "./cover-frame-picker";
 import { MediaBadge, MediaLightbox, type LightboxAsset } from "./media-lightbox";
 import { UnmergeModal } from "./unmerge-modal";
@@ -182,6 +183,15 @@ export function PostEditor({
   // every chip with, so a stale target can't silently survive a save just because it was
   // already sitting in the database before this check existed.
   const firstAsset = assets[0];
+  // The base variant (platform "") is what a channel without its own override publishes,
+  // so it is the caption the preview should show. Falls back the same way the publish
+  // path does rather than showing an empty box when only overrides exist.
+  // Ordered the way the strip draws it, including an order not yet saved.
+  const previewAssets = slideOrder.order
+    .map((id) => assets.find((a) => a.id === id))
+    .filter((a): a is Asset => Boolean(a));
+  const previewCaption =
+    captions.find((c) => !c.platform)?.body ?? captions[0]?.body ?? post.caption ?? "";
   // Derived, not written back into `targets` state — same reasoning as library-view.tsx's
   // effectiveChans: nothing to keep in sync if the incompatible set ever changes.
   const effectiveTargets = useMemo(
@@ -487,6 +497,21 @@ export function PostEditor({
           </div>
         </div>
       </section>
+
+      {/* How this posts — both surfaces at their real shapes, from the same derivatives
+          the worker publishes. The context strip above shows square thumbnails, which is
+          right for picking a slide and useless for judging a crop. */}
+      <PostPreview
+        // slideOrder.order, NOT `assets`: the strip above renders the unsaved client order,
+        // so passing the server order put two contradicting orderings on one screen — drag
+        // slide 3 to the front without saving and the strip showed the new order while the
+        // preview underneath still called the old photo "Slide 1 of 3".
+        assets={previewAssets}
+        caption={previewCaption}
+        firstComment={firstComment}
+        scheduledSendCounts={scheduledSendCounts}
+        textOnly={post.post_type === "text"}
+      />
 
       {/* Kind */}
       <section className={card}>

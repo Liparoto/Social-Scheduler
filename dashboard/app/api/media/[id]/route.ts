@@ -5,6 +5,8 @@ import { config } from "@/lib/config";
 import { contentDisposition, downloadFilename } from "@/lib/download-filename";
 import { getAsset } from "@/lib/queries";
 import { needsStoryCanvas, renderStoryCanvas, type StoryMode } from "@/lib/story-canvas";
+import { conformImage, type ConformMode } from "@/lib/conform";
+import { needsFeedConform } from "@/lib/feed-geometry";
 
 export const runtime = "nodejs";
 
@@ -166,6 +168,45 @@ export async function GET(
       }
     }
     return serveFile(rel, req);
+  }
+
+  // A FEED derivative for a mode that has not been chosen yet. Exactly the same idea as
+  // the story branch above, and it exists for the same reason: the framing dialog has to
+  // show what Crop and Pad each look like BEFORE either is committed. Without it the only
+  // way to see Pad was to save it, which is how framing got changed by accident just by
+  // looking. Renders on demand, caches, and — the important part — never touches the asset
+  // row: `pub/<hash>-<mode>.jpg` is deliberately a different path from the committed
+  // `pub/<hash>.jpg`, so previewing cannot overwrite what is scheduled to publish.
+  if (variant === "publish" && asset.media_kind === "image") {
+    const requested = req.nextUrl.searchParams.get("mode");
+    if (requested === "crop" || requested === "pad") {
+      // In range means conformImage() resolves "none" and both modes produce identical
+      // pixels — serve the committed derivative rather than render two copies of it.
+      if (!needsFeedConform(asset.width, asset.height)) {
+        return serveFile(asset.publish_path ?? asset.storage_path, req);
+      }
+      const mode: ConformMode = requested;
+      const rel = `pub/${asset.content_hash}-${mode}.jpg`;
+      const abs = path.join(config.assetStorageDir, rel);
+      try {
+        await fs.access(abs);
+      } catch {
+        try {
+          const original = await fs.readFile(
+            path.join(config.assetStorageDir, asset.storage_path)
+          );
+          const conformed = await conformImage(original, mode);
+          await fs.mkdir(path.dirname(abs), { recursive: true });
+          await fs.writeFile(abs, conformed.buffer);
+        } catch {
+          return NextResponse.json(
+            { error: "Could not render a feed preview for this image." },
+            { status: 404 }
+          );
+        }
+      }
+      return serveFile(rel, req);
+    }
   }
 
   // Video defaults to the DERIVATIVE, not the original. An iPhone original is routinely

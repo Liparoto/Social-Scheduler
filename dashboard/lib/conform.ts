@@ -1,10 +1,15 @@
 import sharp, { type Sharp } from "sharp";
+import { FEED_MAX_RATIO, FEED_MIN_RATIO } from "./feed-geometry";
 
 export const IG_MAX_BYTES = 8 * 1024 * 1024;
 export const IG_MAX_WIDTH = 1440;
 export const IG_MIN_WIDTH = 320;
-export const IG_MIN_RATIO = 4 / 5; // 0.8 (portrait bound)
-export const IG_MAX_RATIO = 1.91; // landscape bound
+// Re-exported from feed-geometry.ts rather than declared here. The bounds are needed by a
+// CLIENT component (the post preview, which must frame an image at the shape it will come
+// back as) and this module imports sharp, which cannot be bundled for the browser. One
+// definition, in the module both sides can reach.
+export const IG_MIN_RATIO = FEED_MIN_RATIO; // 0.8 (portrait bound)
+export const IG_MAX_RATIO = FEED_MAX_RATIO; // landscape bound
 
 // "downscale" is never produced by conformImage() below (image-only) — it's included
 // here because it's the video-upload equivalent of this same "how was this asset
