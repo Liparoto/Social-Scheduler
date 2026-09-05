@@ -5,6 +5,7 @@ import {
   FEED_MIN_RATIO,
   feedRatio,
   feedShapesDisagree,
+  needsFeedConform,
 } from "./feed-geometry.ts";
 
 test("a source already inside the feed's range keeps its own shape", () => {
@@ -59,4 +60,25 @@ test("unknown shapes are ignored rather than counted as different", () => {
   // A video slide, or an asset with no recorded dimensions, contributes nothing.
   assert.equal(feedShapesDisagree([0.8, null, 0.8]), false);
   assert.equal(feedShapesDisagree([null, null]), false);
+});
+
+test("a source inside the feed's range needs no conforming", () => {
+  // conformImage() resolves mode "none" for these and leaves the shape alone, so Crop and
+  // Pad are genuinely no-ops — the dialog must not offer them as if they did something.
+  assert.equal(needsFeedConform(1080, 1350), false); // 4:5, the portrait bound
+  assert.equal(needsFeedConform(1000, 1000), false); // square
+  assert.equal(needsFeedConform(4032, 3024), false); // 4:3 phone landscape
+  assert.equal(needsFeedConform(191, 100), false); // the landscape bound itself
+});
+
+test("a source outside the range does need conforming", () => {
+  assert.equal(needsFeedConform(1000, 2000), true); // too tall
+  assert.equal(needsFeedConform(3000, 1000), true); // panorama
+});
+
+test("unknown dimensions claim nothing", () => {
+  // Mirrors feedRatio: no dimensions means no basis for saying either way, and the caller
+  // must not render "nothing to choose" off the back of a guess.
+  assert.equal(needsFeedConform(null, null), false);
+  assert.equal(needsFeedConform(0, 0), false);
 });

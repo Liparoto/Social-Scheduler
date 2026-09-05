@@ -20,6 +20,11 @@ const landscape: Asset = {
 
 const vertical: Asset = { ...landscape, width: 1320, height: 2346 };
 
+// 4032x3024 (1.33:1) sits INSIDE 4:5-1.91:1, so conformImage() leaves it alone and Crop /
+// Pad are no-ops there. Anything asserting the feed options needs a source that is actually
+// reshaped — 1000x2000 (0.5) is well outside the range.
+const tooTall: Asset = { ...landscape, width: 1000, height: 2000 };
+
 function render(asset: Asset, scheduledSendCount = 0) {
   return renderToStaticMarkup(
     React.createElement(FramingDialog, { asset, scheduledSendCount, onClose: () => {} }),
@@ -27,7 +32,7 @@ function render(asset: Asset, scheduledSendCount = 0) {
 }
 
 test("both surfaces are offered, with all four options", () => {
-  const html = render(landscape);
+  const html = render(tooTall);
   assert.match(html, />Feed</);
   assert.match(html, />Story</);
   assert.match(html, />Crop</);
@@ -85,7 +90,7 @@ test("the controls are present even when a choice has already been made", () => 
     story_path: "story/h-crop.jpg",
     story_mode: "crop",
   };
-  const html = render(chosen);
+  const html = render({ ...chosen, width: 1000, height: 2000 });
   assert.match(html, />Blurred fill</, "framing must never become one-way");
   assert.match(html, />Crop to fill</);
   assert.match(html, />Crop</);
@@ -96,4 +101,33 @@ test("a video asset offers no framing at all — sharp cannot reframe one", () =
   const video: Asset = { ...landscape, media_kind: "video", width: 1080, height: 1920 };
   const html = render(video);
   assert.doesNotMatch(html, />Blurred fill</);
+});
+
+// ---- Save, rather than write-on-click ------------------------------------------
+test("a source already in the feed's range offers no crop/pad, and says why", () => {
+  // conformImage() resolves "none" for an in-range source, so the two buttons would be
+  // byte-identical. Offering a choice that cannot differ is the same lie the 40x40
+  // object-cover preview told, and the mirror of the already-9:16 case above.
+  const html = render(landscape);
+  assert.match(html, /nothing to crop or pad/i);
+  assert.doesNotMatch(html, />Crop</);
+  assert.doesNotMatch(html, />Pad</);
+});
+
+test("the feed frame is the shape the derivative will be, not a square", () => {
+  // A square frame letterboxed every non-square image behind pale bands, so an in-range
+  // landscape photo looked like it was about to be padded when nothing touches it.
+  assert.match(render(landscape), /aspect-ratio:1\.333/);
+  // Out of range: clamped to the bound it overshot (0.8), not left at the source's 0.5.
+  assert.match(render(tooTall), /aspect-ratio:0\.8/);
+});
+
+test("nothing is written until Save, so opening the dialog changes nothing", () => {
+  // Every option used to POST on click, which is how framing got changed just by looking.
+  const html = render(tooTall);
+  assert.match(html, />Save framing</);
+  assert.match(html, />Cancel</);
+  // Nothing has changed yet, so there is nothing to save.
+  assert.match(html, /Nothing to save/);
+  assert.match(html, /disabled=""/);
 });

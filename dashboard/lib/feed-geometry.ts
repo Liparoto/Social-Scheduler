@@ -57,3 +57,19 @@ export function feedShapesDisagree(ratios: (number | null)[]): boolean {
   const max = Math.max(...known);
   return max - min > min * FEED_RATIO_TOLERANCE;
 }
+
+/**
+ * True when the source is NOT already inside the feed's range and therefore gets reshaped.
+ *
+ * When this is false, conformImage() resolves mode "none" and leaves the shape untouched —
+ * so Crop and Pad produce byte-identical framing and offering them as a choice is a lie.
+ * Mirrors needsStoryCanvas(), which the Story column already uses for the same purpose.
+ *
+ * Returns false on unknown dimensions: absence of information is not evidence that the
+ * image needs work, and a caller must not print "nothing to choose" off a guess.
+ */
+export function needsFeedConform(width: number | null, height: number | null): boolean {
+  if (!width || !height) return false;
+  const ratio = width / height;
+  return ratio < FEED_MIN_RATIO || ratio > FEED_MAX_RATIO;
+}
