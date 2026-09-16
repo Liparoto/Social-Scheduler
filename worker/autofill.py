@@ -69,8 +69,18 @@ _INSTANT = "strftime('%s', scheduled_at)"
 # on the phone. Themed content was imported in clumps and so came back out in clumps —
 # when Football Season opened, seven football posts queued back to back.
 #
-# So compare created_at only to the DAY — content genuinely older still ranks first, which
-# is the part worth keeping — then scatter within the day by a stable hash of the post id.
+# This once compared created_at to the DAY and scattered only WITHIN a day, on the theory
+# that genuinely older content should still rank first. That theory does not survive a
+# real backlog. With 162 unposted posts already banked, a fresh import ranked behind every
+# one of them — at one slot a day the wedding and honeymoon photos imported in September
+# would not have surfaced until March. And it only moved the clumping up a level: instead
+# of themed runs inside a batch, whole batches came out one after another.
+#
+# So the scatter now spans the entire candidate pool and created_at is not consulted at
+# all. Staleness still decides the thing it can actually measure — a post that has
+# PUBLISHED before ranks behind one that never has (the `last_posted IS NULL` term above,
+# which this only breaks ties beneath). The day a never-posted post was imported is not
+# evidence about the post, only about the day someone sat down to import it.
 #
 # The hash is mixed TWICE, through different moduli. One `(id * K) % M` is a linear map,
 # and by the three-distance theorem sorting by one walks the ids in at most three step
@@ -84,7 +94,6 @@ _INSTANT = "strftime('%s', scheduled_at)"
 # every poll, so the dashboard's preview would not be what auto-fill actually queues, and
 # no test could pin the ordering down.
 _BATCH_SCATTER = """
-          substr(p.created_at, 1, 10) ASC,
           (((p.id * 2654435761) % 104729) * 2246822519) % 65521 ASC,
           p.id ASC
 """

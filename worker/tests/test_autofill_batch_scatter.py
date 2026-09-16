@@ -40,17 +40,37 @@ def test_posts_imported_in_one_batch_are_not_ranked_in_import_order(conn):
     assert order != ids, "a same-day batch must not come out in the order it was imported"
 
 
-def test_content_older_by_a_day_still_ranks_ahead_of_a_newer_batch(conn):
-    """The scatter is a TIEBREAK, not a replacement: staleness still wins. Without this
-    the shuffle would also scramble genuinely-old against genuinely-new content."""
+def test_an_older_batch_and_a_newer_batch_interleave(conn):
+    """The scatter spans the whole never-posted pool, it does not restart each day.
+
+    This REPLACES an earlier test that asserted the opposite — that a day-older batch
+    ranked entirely ahead of a newer one. That rule was a total order wearing a
+    tiebreak's clothes: with 162 unposted posts already banked, a fresh import sat
+    behind every one of them and would not have surfaced for five months. Ranking by
+    the day only moved the clumping problem up a level — instead of themed runs inside
+    a batch, whole batches came out one after another.
+
+    Staleness is still honoured where it is actually measured: a post that has PUBLISHED
+    before ranks behind one that never has (the `last_posted IS NULL` term, which this
+    scatter only breaks ties beneath). What no longer counts is the day a never-posted
+    post happened to be imported.
+    """
     ch = make_channel(conn)
-    older = [make_post(conn, ch, created_at=f"2026-01-05 00:0{i}:00") for i in range(4)]
-    newer = [make_post(conn, ch, created_at=f"2026-06-05 00:0{i}:00") for i in range(4)]
+    older = [make_post(conn, ch, created_at=f"2026-01-05 00:0{i}:00") for i in range(6)]
+    newer = [make_post(conn, ch, created_at=f"2026-06-05 00:0{i}:00") for i in range(6)]
 
     order = _rank(conn, ch)
 
-    assert set(order[:4]) == set(older), "the older day comes first, whatever the scatter"
-    assert set(order[4:]) == set(newer)
+    assert sorted(order) == sorted(older + newer), "every post is still a candidate"
+    assert set(order[:6]) != set(older), (
+        "the older import day drained completely before the newer one — "
+        "that is import-batch order, not a scatter"
+    )
+    first_half_from_newer = len(set(order[:6]) & set(newer))
+    assert first_half_from_newer >= 2, (
+        f"only {first_half_from_newer} of the first 6 slots came from the newer batch; "
+        "a fresh import must surface early, not wait out the whole backlog"
+    )
 
 
 def test_the_scatter_is_stable_across_calls(conn):
