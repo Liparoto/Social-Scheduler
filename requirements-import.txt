@@ -1,0 +1,12 @@
+# OPTIONAL — only needed for the post-prep review tooling
+# (.claude/skills/prepping-posts-for-review, scripts/photo_inventory.py,
+#  scripts/build_approval_page.py). The worker and dashboard never import this,
+# so a clone that does not prep photo batches can skip it entirely.
+#
+#   .venv/bin/pip install -r requirements-import.txt
+#
+# Pillow reads each photo's real capture time and GPS out of its EXIF data, builds the
+# downscaled previews embedded in the approval page, renders contact sheets for reviewing
+# a large folder, and hashes images to spot near-duplicates before they become two posts
+# of the same moment.
+Pillow>=10.3

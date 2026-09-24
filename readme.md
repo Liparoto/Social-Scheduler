@@ -148,6 +148,23 @@ each account under Channels — the tokens deliberately did not come along.
    publishing needs. Skip it if you already have your own on `PATH`.
 6. For publishing, run the worker: `.venv/bin/python -m worker.run` (see below).
 
+## Optional: prepping a batch of photos with an AI assistant
+
+If you connect an AI assistant to your install, this repo ships an optional skill at
+`.claude/skills/prepping-posts-for-review/` that turns a folder of photos into finished posts:
+it reads each photo's real capture time and location, spots near-duplicates, groups the photos
+into posts, drafts captions and hashtags, and builds a **single page showing every post with its
+photos and caption** for you to approve. Nothing reaches your library until you say yes.
+
+It needs one extra Python package, and only if you use it:
+
+```
+.venv/bin/pip install -r requirements-import.txt
+```
+
+Claude Code picks the skill up automatically; point any other assistant at that folder. The
+design notes are in `docs/design-post-prep-skill.md`.
+
 ## Going live (first real post)
 Do a **dry-run** first (`DRY_RUN=1` in `.env`), then follow **`docs/meta-setup.md`** to connect
 a real Instagram account and publish. Verify credentials anytime with
