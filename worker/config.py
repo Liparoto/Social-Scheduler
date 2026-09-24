@@ -219,6 +219,9 @@ class Config:
     )
     tiktok_client_key: str = ""
     tiktok_client_secret: str = ""
+    # Instagram-Login apps have their OWN secret, separate from META_APP_SECRET (the
+    # Facebook one). ig_exchange_token rejects the Facebook secret with code 100.
+    instagram_app_secret: str = ""
     # Time-of-day band clock times (channel-local, "HH:MM"). See docs/design-tag-taxonomy.md.
     # anytime/untagged posts use the channel's own cadence time instead of these.
     tod_morning: str = "09:00"
@@ -265,6 +268,7 @@ class Config:
             ),
             tiktok_client_key=os.environ.get("TIKTOK_CLIENT_KEY", ""),
             tiktok_client_secret=os.environ.get("TIKTOK_CLIENT_SECRET", ""),
+            instagram_app_secret=os.environ.get("INSTAGRAM_APP_SECRET", ""),
             ig_account_series_metrics=os.environ.get(
                 "IG_ACCOUNT_SERIES_METRICS", cls.ig_account_series_metrics
             ),

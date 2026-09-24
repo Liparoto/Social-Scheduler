@@ -209,7 +209,7 @@ def exchange_instagram_token(config: Config, short_lived: str) -> tuple[str, int
         "https://graph.instagram.com/access_token",
         {
             "grant_type": "ig_exchange_token",
-            "client_secret": config.meta_app_secret,
+            "client_secret": config.instagram_app_secret or config.meta_app_secret,
             "access_token": short_lived,
         },
     )
@@ -226,7 +226,11 @@ def instagram_identity(token: str) -> dict[str, Any]:
     '(#2) Service temporarily unavailable' from it (see docs/plan-first-comment.md), so
     a plain identity read is the available proof.
     """
-    return _get("https://graph.instagram.com/me", {"fields": "id,username", "access_token": token})
+    # `id` on /me is app-scoped (26…); `user_id` is the professional-account id (1784…)
+    # that publishing and the channel row use, so that is the one compared and saved.
+    return _get(
+        "https://graph.instagram.com/me", {"fields": "id,user_id,username", "access_token": token}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,18 +399,34 @@ def run_instagram(conn, config: Config, token_file: str | None = None) -> int:
     short = _read_token("Paste the short-lived Instagram token:", token_file)
 
     print("\n1/3  Exchanging for a 60-day token...")
-    token, expires_in = exchange_instagram_token(config, short)
-    days = expires_in // 86400
-    print(f"     Valid for {days} days.")
+    try:
+        token, expires_in = exchange_instagram_token(config, short)
+        days = expires_in // 86400
+        print(f"     Valid for {days} days.")
+    except ExchangeError as exc:
+        # The dashboard's 'Generate token' button can hand out a token that is ALREADY
+        # long-lived, and Meta refuses to exchange those (code 452). If the pasted token
+        # works as-is, keep it; if not, the original error is the useful one.
+        try:
+            instagram_identity(short)
+        except ExchangeError:
+            raise ExchangeError(
+                f"{exc}\n  Generate a fresh token and paste it right away — clicking "
+                "'Generate token' again cancels the previous one."
+            ) from exc
+        print("     Meta would not exchange it, but the token works as-is (dashboard")
+        print("     tokens are usually already long-lived). Keeping it unchanged.")
+        token, days = short, 60
 
     print("2/3  Confirming who it belongs to...")
     me = instagram_identity(token)
-    print(f"     @{me.get('username')} (id {me.get('id')})")
+    account_id = str(me.get("user_id") or me.get("id"))
+    print(f"     @{me.get('username')} (id {account_id})")
 
     print("3/3  Storing it...")
     # Stored as a plain day count rather than a timestamp: the exact hour is not
     # meaningful for a 60-day credential, and the date is what a human needs to see.
-    _save_to_channel(conn, config, "instagram", token, str(me.get("id")), None)
+    _save_to_channel(conn, config, "instagram", token, account_id, None)
     print(
         f"\nRefresh this before {days} days are up (re-run this command with a token "
         "at least 24 hours old), or publishing stops."
