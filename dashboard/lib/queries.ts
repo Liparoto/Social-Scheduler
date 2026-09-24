@@ -171,6 +171,8 @@ export function updateChannel(
     token_expires_at: string | null;
     refresh_token: string | null;
     refresh_token_expires_at: string | null;
+    token_error: string | null;
+    token_next_check_at: string | null;
     requires_approval: number;
     is_active: number;
     autofill_enabled: number;

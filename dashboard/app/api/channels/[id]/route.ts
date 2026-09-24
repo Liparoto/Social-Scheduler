@@ -58,7 +58,15 @@ export async function PATCH(
   }
   if ("remote_account_id" in body) fields.remote_account_id = body.remote_account_id || null;
   if ("linked_page_id" in body) fields.linked_page_id = body.linked_page_id || null;
-  if ("access_token" in body) fields.access_token = body.access_token || null;
+  if ("access_token" in body) {
+    fields.access_token = body.access_token || null;
+    // A new token makes everything the worker learned about the old one wrong. Clearing
+    // these puts the channel at the front of the worker's next token check, so the card
+    // shows the new token's real expiry within a cycle instead of the old one's.
+    fields.token_expires_at = null;
+    fields.token_error = null;
+    fields.token_next_check_at = null;
+  }
   if ("requires_approval" in body) fields.requires_approval = body.requires_approval ? 1 : 0;
   if ("is_active" in body) fields.is_active = body.is_active ? 1 : 0;
   // Auto-fill config now lives per (owner, surface) in autofill_lanes, not in columns.

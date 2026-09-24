@@ -40,7 +40,9 @@ export function ChannelCredentials({
       return;
     }
     setToken("");
-    setMsg("Saved — run the preflight check to verify.");
+    // The worker checks a newly saved token on its next cycle and fills in the
+    // expiry on the card, so the card is the confirmation — no preflight run needed.
+    setMsg("Saved. The worker will check it within a minute — refresh to see its expiry.");
     startT(() => router.refresh());
   }
 

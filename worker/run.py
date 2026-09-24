@@ -212,6 +212,13 @@ def run_once(conn, config: Config, client, *, client_for=None, now=None, logger=
 
     refresh_due_tokens(conn, config, client, now, logger=logger, client_for=client_for)
 
+    # Same job for Meta's 60-day Instagram/Threads tokens: renew them well before they
+    # expire, and flag any that only a human reconnect can fix. Throttled per channel
+    # (about twice a day), so on most cycles this is one SELECT that finds nothing.
+    from .token_upkeep import run_token_upkeep
+
+    run_token_upkeep(conn, config, now, logger=logger)
+
     # Refresh metrics for already-published posts (throttled per publication).
     from .metrics import run_metrics
 

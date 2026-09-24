@@ -20,6 +20,8 @@ function channel(overrides: Partial<Channel> = {}): Channel {
     linked_page_id: null,
     access_token: null,
     token_expires_at: null,
+    token_error: null,
+    token_next_check_at: null,
     requires_approval: 0,
     autofill_enabled: 0,
     cadence_config: null,

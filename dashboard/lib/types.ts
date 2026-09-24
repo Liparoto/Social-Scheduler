@@ -70,6 +70,10 @@ export interface Channel {
   linked_page_id: string | null;
   access_token: string | null;
   token_expires_at: string | null;
+  // Written by the worker's token upkeep (worker/token_upkeep.py). token_error is what a
+  // human must fix; token_next_check_at is NULL until the worker has looked at the token.
+  token_error: string | null;
+  token_next_check_at: string | null;
   requires_approval: number;
   autofill_enabled: number;
   cadence_config: string | null;

@@ -8,7 +8,7 @@ import {
 } from "@/lib/queries";
 import { config } from "@/lib/config";
 import { toLanePanels } from "@/lib/autofill-lanes";
-import type { Surface } from "@/lib/types";
+import type { Channel, Surface } from "@/lib/types";
 import {
   accountIdLabel,
   anySupportsStory,
@@ -29,7 +29,7 @@ import { ChannelTimezone } from "@/components/channel-timezone";
 import { AutofillConfig } from "@/components/autofill-config";
 import { ChannelGroups } from "@/components/channel-groups";
 import { ChannelGroupSelect } from "@/components/channel-group-select";
-import { tzAbbrev } from "@/lib/format";
+import { formatInTz, tzAbbrev } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -183,15 +183,14 @@ export default async function ChannelsPage({
                     </Row>
                   ) : null}
                   <Row label="Access token">
-                    <span className="text-ink-soft">
-                      {c.access_token ? (
-                        <span className="text-status-posted">configured</span>
-                      ) : (
-                        <span className="text-status-failed">missing</span>
-                      )}
-                    </span>
+                    <TokenStatus channel={c} />
                   </Row>
                 </dl>
+                {c.access_token && c.token_error && TOKEN_UPKEEP.has(c.platform) ? (
+                  <p className="mt-2 rounded-md bg-status-failed/10 px-2.5 py-1.5 text-[11px] text-status-failed">
+                    {c.token_error}
+                  </p>
+                ) : null}
 
                 <div className="mt-4 flex flex-wrap gap-2">
                   <ChannelToggle
@@ -305,6 +304,45 @@ export default async function ChannelsPage({
       </div>
     </div>
   );
+}
+
+// Platforms whose tokens the worker checks and renews (worker/token_upkeep.py). TikTok
+// renews on its own 24-hour cycle; Discord and Telegram credentials never expire.
+const TOKEN_UPKEEP = new Set(["instagram", "threads", "facebook"]);
+const DAY_MS = 86_400_000;
+// Matches worker/token_upkeep.RENEW_WITHIN: inside this window the worker is renewing, so
+// the date is worth a glance; outside it there is nothing to do.
+const WARN_WITHIN_DAYS = 14;
+
+/**
+ * One line that answers "will this channel still post next month?". Rendered on the
+ * server (the page is force-dynamic), so Date.now() here cannot disagree with the client.
+ */
+function TokenStatus({ channel: c }: { channel: Channel }) {
+  if (!c.access_token) return <span className="text-status-failed">missing</span>;
+  if (!TOKEN_UPKEEP.has(c.platform)) {
+    return <span className="text-status-posted">configured</span>;
+  }
+  if (c.token_error) return <span className="text-status-failed">needs reconnecting</span>;
+  if (!c.token_next_check_at) return <span className="text-muted">configured · checking…</span>;
+  if (!c.token_expires_at) {
+    // Checked, and Meta reported no expiry: Page tokens are the normal case.
+    return <span className="text-status-posted">never expires</span>;
+  }
+  const expires = new Date(c.token_expires_at);
+  const days = Math.max(0, Math.ceil((expires.getTime() - Date.now()) / DAY_MS));
+  const date = formatInTz(c.token_expires_at, c.timezone, {
+    hour: undefined,
+    minute: undefined,
+  });
+  if (days <= WARN_WITHIN_DAYS) {
+    return (
+      <span className="text-status-blocked">
+        expires {date} ({days} {days === 1 ? "day" : "days"}) · renewing
+      </span>
+    );
+  }
+  return <span className="text-status-posted">good until {date}</span>;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
