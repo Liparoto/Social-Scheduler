@@ -30,6 +30,7 @@ import { AutofillConfig } from "@/components/autofill-config";
 import { ChannelGroups } from "@/components/channel-groups";
 import { ChannelGroupSelect } from "@/components/channel-group-select";
 import { formatInTz, tzAbbrev } from "@/lib/format";
+import { nowIso } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,8 @@ export default async function ChannelsPage({
   // connection looks identical to a successful one that simply has not appeared yet.
   const params = await searchParams;
   const channels = getChannels();
+  // One clock reading for every card's token countdown.
+  const nowMs = Date.parse(nowIso());
   const groups = listChannelGroups().map((g) => {
     const members = getGroupMembers(g.id);
     const memberIds = members.map((m) => m.id);
@@ -183,7 +186,7 @@ export default async function ChannelsPage({
                     </Row>
                   ) : null}
                   <Row label="Access token">
-                    <TokenStatus channel={c} />
+                    <TokenStatus channel={c} nowMs={nowMs} />
                   </Row>
                 </dl>
                 {c.access_token && c.token_error && TOKEN_UPKEEP.has(c.platform) ? (
@@ -316,9 +319,9 @@ const WARN_WITHIN_DAYS = 14;
 
 /**
  * One line that answers "will this channel still post next month?". Rendered on the
- * server (the page is force-dynamic), so Date.now() here cannot disagree with the client.
+ * server (the page is force-dynamic), so its clock cannot disagree with the client's.
  */
-function TokenStatus({ channel: c }: { channel: Channel }) {
+function TokenStatus({ channel: c, nowMs }: { channel: Channel; nowMs: number }) {
   if (!c.access_token) return <span className="text-status-failed">missing</span>;
   if (!TOKEN_UPKEEP.has(c.platform)) {
     return <span className="text-status-posted">configured</span>;
@@ -326,15 +329,29 @@ function TokenStatus({ channel: c }: { channel: Channel }) {
   if (c.token_error) return <span className="text-status-failed">needs reconnecting</span>;
   if (!c.token_next_check_at) return <span className="text-muted">configured · checking…</span>;
   if (!c.token_expires_at) {
-    // Checked, and Meta reported no expiry: Page tokens are the normal case.
-    return <span className="text-status-posted">never expires</span>;
+    // A checked Facebook Page token with no expiry is the normal, healthy case. For
+    // Instagram and Threads a missing date only means "not learned yet" — e.g. Meta
+    // won't renew an Instagram token under a day old, and renewing is how the worker
+    // learns its date — so claiming "never expires" there would be false comfort.
+    return c.platform === "facebook" ? (
+      <span className="text-status-posted">never expires</span>
+    ) : (
+      <span className="text-muted">configured · expiry not known yet</span>
+    );
   }
   const expires = new Date(c.token_expires_at);
-  const days = Math.max(0, Math.ceil((expires.getTime() - Date.now()) / DAY_MS));
+  const msLeft = expires.getTime() - nowMs;
   const date = formatInTz(c.token_expires_at, c.timezone, {
     hour: undefined,
     minute: undefined,
   });
+  // Past the date with no token_error yet means the worker hasn't looked since (the Mac
+  // was off, say). The token is dead either way, and "renewing" would be a lie: an
+  // expired token can only be reconnected.
+  if (msLeft <= 0) {
+    return <span className="text-status-failed">expired {date} · reconnect</span>;
+  }
+  const days = Math.ceil(msLeft / DAY_MS);
   if (days <= WARN_WITHIN_DAYS) {
     return (
       <span className="text-status-blocked">

@@ -4,6 +4,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { accountIdLabel, usesAccountId } from "@/lib/platforms";
 
+// Platforms whose token expiry the worker tracks (worker/token_upkeep.py).
+const TRACKS_EXPIRY = new Set(["instagram", "threads", "facebook"]);
+
 /**
  * Update a channel's credentials (IG user id + access token). Tokens expire / get
  * regenerated, so editing them is a routine need. The token is write-only here — we
@@ -40,9 +43,14 @@ export function ChannelCredentials({
       return;
     }
     setToken("");
-    // The worker checks a newly saved token on its next cycle and fills in the
-    // expiry on the card, so the card is the confirmation — no preflight run needed.
-    setMsg("Saved. The worker will check it within a minute — refresh to see its expiry.");
+    // For Meta channels the worker checks a newly saved token on its next cycle and
+    // fills in the expiry on the card, so the card is the confirmation. Other
+    // platforms have no expiry to show, so they keep the preflight pointer.
+    setMsg(
+      TRACKS_EXPIRY.has(platform)
+        ? "Saved. The worker checks it within a minute — refresh to see its expiry."
+        : "Saved — run the preflight check to verify."
+    );
     startT(() => router.refresh());
   }
 
