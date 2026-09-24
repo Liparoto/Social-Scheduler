@@ -105,7 +105,44 @@ if errorlevel 1 (
 )
 echo.
 
-echo Up to date. Double-click "Start-SocialScheduler-Windows" to run it.
+REM 7. Restart SocialScheduler if it's running, so the new code is the code that runs.
+REM
+REM    A running worker keeps the code it started with - pulling new files changes nothing
+REM    in it - and Start can't help on its own, because it only says "already running".
+REM    Stop then Start is the same restart a person would do by hand, using the same two
+REM    launchers, so there is no second way of stopping the worker to get wrong.
+REM
+REM    NOTE: every new line in this file lives AFTER the git pull above, on purpose. cmd
+REM    reads a batch file as it runs it, and that pull can replace this very file: an older
+REM    copy of Update continues into the newer one at the same byte offset. Keeping
+REM    everything up to the pull byte-identical is what makes that handover land cleanly.
+REM
+REM    WARNING - UNTESTED on Windows: written on macOS.
+set "WAS_RUNNING="
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3939" ^| findstr LISTENING') do set "WAS_RUNNING=1"
+REM The worker writes its pid into its lock file; only trust it if that pid is Python now.
+set "LOCK_PID="
+if exist "data\run\worker.lock" (
+  for /f "usebackq tokens=1" %%p in ("data\run\worker.lock") do set "LOCK_PID=%%p"
+)
+if defined LOCK_PID (
+  tasklist /FI "PID eq !LOCK_PID!" /NH 2>NUL | findstr /I /B /C:"python" >NUL
+  if not errorlevel 1 set "WAS_RUNNING=1"
+)
+
+if not defined WAS_RUNNING (
+  echo Up to date. Double-click "Start-SocialScheduler-Windows" to run it.
+  echo.
+  pause
+  exit /b 0
+)
+
+echo Restarting SocialScheduler so it runs the new version...
+echo.
+call "%~dp0Stop-SocialScheduler-Windows.bat"
+call "%~dp0Start-SocialScheduler-Windows.bat"
+echo.
+echo Up to date. SocialScheduler has been restarted on the new version.
 echo.
 pause
 exit /b 0

@@ -39,11 +39,42 @@ if exist "%RUN_DIR%\worker.pid" (
   if defined WORKER_PID (
     echo Stopping the worker...
     taskkill /PID !WORKER_PID! /T /F >NUL 2>&1
+    if not errorlevel 1 set "STOPPED_ANY=1"
+  )
+)
+
+REM ---- 2b. The worker's own lock: finds it however it was started. ----
+REM Runs BEFORE the Scheduled Task block below, so the pid is still alive when checked
+REM and the final message can say truthfully that a worker was stopped.
+REM
+REM A worker launched by the Scheduled Task or the Startup-folder shortcut leaves no
+REM worker.pid, and a hidden window has no title for the filter above to match. But every
+REM worker writes its own pid into data\run\worker.lock when it takes the one-per-install
+REM lock (worker\single_instance.py), so that file names the real process in every mode.
+REM
+REM A dead worker leaves its pid behind, and Windows reuses pid numbers - so only kill it
+REM if that pid is still a Python process right now. Reading the file is safe while the
+REM worker holds it: the locked byte sits far past the pid field.
+set "LOCK_PID="
+if exist "%RUN_DIR%\worker.lock" (
+  for /f "usebackq tokens=1" %%p in ("%RUN_DIR%\worker.lock") do set "LOCK_PID=%%p"
+)
+if defined LOCK_PID (
+  tasklist /FI "PID eq !LOCK_PID!" /NH 2>NUL | findstr /I /B /C:"python" >NUL
+  if not errorlevel 1 (
+    echo Stopping the worker ^(pid !LOCK_PID!^)...
+    taskkill /PID !LOCK_PID! /T /F >NUL 2>&1
+    set "STOPPED_ANY=1"
+  )
 )
 
 REM The autostart Scheduled Task, when it is registered. Task Scheduler owns that process,
 REM so there is no worker.pid for it and the block above cannot see it -- without this,
 REM Stop would report success while the worker kept running and publishing.
+REM
+REM This block used to sit INSIDE the worker.pid block above (a missing close paren), so
+REM it only ran when a pid file existed - which an autostart worker never has. Fixed
+REM 2026-09-23.
 REM
 REM /End stops the running instance but LEAVES the task registered, so it still starts at
 REM the next logon. Deleting the task is Disable-Worker-Autostart-Windows.bat's job, not
@@ -52,12 +83,8 @@ REM
 REM WARNING - UNTESTED: written on macOS. Mirrors the tested macOS behaviour.
 schtasks /Query /TN "SocialSchedulerWorker" >NUL 2>&1
 if not errorlevel 1 (
-  echo Stopping the worker ^(autostart task^)...
   schtasks /End /TN "SocialSchedulerWorker" >NUL 2>&1
   taskkill /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq run-worker-autostart*" /T /F >NUL 2>&1
-  set "STOPPED_ANY=1"
-    if not errorlevel 1 set "STOPPED_ANY=1"
-  )
 )
 
 REM ---- 3. The dashboard. Kill the recorded process, then sweep the port. The
