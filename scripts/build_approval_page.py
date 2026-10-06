@@ -22,7 +22,8 @@ Plan format (JSON):
           "tags": ["Wedding", "Getting Ready"],  # library topic tags, not hashtags
           "time_of_day": "anytime",
           "green_periods": [],                   # seasonal RESTRICTION; usually empty
-          "note": "optional note to the reviewer"
+          "note": "optional note to the reviewer",
+          "approved": true                       # owner already OK'd it; page marks it done
         }
       ],
       "excluded": {"IMG_1.jpg": "near-duplicate of IMG_2.jpg"}
@@ -217,6 +218,16 @@ def unaccounted_photos(plan: dict, folder_files: list[str]) -> list[str]:
 
 
 def warnings(plan: dict, shapes: dict[str, str], folder_files: list[str]) -> list[str]:
+    notes = [
+        f"{p.get('ref', '?')}: was approved, but changed since — shown as needing review again"
+        for p in plan["posts"] if p.get("approval_dropped")
+    ]
+    return notes + _shape_and_folder_warnings(plan, shapes, folder_files)
+
+
+def _shape_and_folder_warnings(
+    plan: dict, shapes: dict[str, str], folder_files: list[str]
+) -> list[str]:
     """Things worth a second look that should not stop the build.
 
     Separate from validate(): these are judgement calls the owner may well have made on
@@ -293,6 +304,7 @@ def diff_against_previous(plan: dict, previous: dict) -> None:
         refs.sort(key=order.index)
 
         post["is_new"] = not refs
+        approved_before = bool(post.get("approved"))
         post["was_label"] = "new post" if not refs else "was " + " + ".join(refs)
 
         # Caption and hashtag comparisons only mean something when the post has exactly
@@ -303,6 +315,7 @@ def diff_against_previous(plan: dict, previous: dict) -> None:
             post["files_changed"] = not post["is_new"]
             post["caption_changed"] = False
             post["hashtags_changed"] = False
+            _revoke_if_changed(post, approved_before)
             continue
 
         post["files_changed"] = list(source.get("files") or []) != list(post.get("files") or [])
@@ -312,6 +325,17 @@ def diff_against_previous(plan: dict, previous: dict) -> None:
         post["hashtags_changed"] = (
             list(source.get("hashtags") or []) != list(post.get("hashtags") or [])
         )
+        _revoke_if_changed(post, approved_before)
+
+
+def _revoke_if_changed(post: dict, approved_before: bool) -> None:
+    """Approval covers what was on the page. A post that changed since must be re-shown,
+    so it loses its approval here rather than relying on whoever edited the plan."""
+    changed = post.get("is_new") or post.get("files_changed") or post.get(
+        "caption_changed") or post.get("hashtags_changed")
+    if approved_before and changed:
+        post["approved"] = False
+        post["approval_dropped"] = True
 
 
 def post_key(files: list[str]) -> str:
@@ -376,11 +400,13 @@ PAGE_CSS = """
   color-scheme: light dark;
   --bg: #f6f6f4; --card: #ffffff; --ink: #1c1c1a; --muted: #6b6b66;
   --line: #e2e2dd; --accent: #2f6f8f; --chip: #eef1f0;
+  --ok: #2e7d4f; --ok-bg: #e3f2e8;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14151a; --card: #1c1e25; --ink: #eceef2; --muted: #9aa0ab;
     --line: #2c2f38; --accent: #7fc4e0; --chip: #262a33;
+    --ok: #7fd3a0; --ok-bg: #1f3328;
   }
 }
 * { box-sizing: border-box; }
@@ -421,6 +447,9 @@ h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.01em; }
   gap: 10px; margin-bottom: 16px;
 }
 .cell { min-width: 0; }
+/* Landscape photos keep their shape so the reviewer can tell them apart at a glance. */
+.cell.landscape { grid-column: span 2; }
+.cell.landscape img { aspect-ratio: auto; }
 .cell img {
   width: 100%; aspect-ratio: 4 / 5; object-fit: cover; border-radius: 9px;
   background: var(--chip); display: block;
@@ -445,6 +474,14 @@ h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.01em; }
   margin-top: 12px; font-size: 14px; padding: 9px 12px; border-radius: 9px;
   background: var(--chip); border-left: 3px solid var(--accent);
 }
+.post.approved { border-left: 4px solid var(--ok); }
+.post.approved .strip { opacity: 0.8; }
+.status {
+  font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+}
+.status.ok { background: var(--ok-bg); color: var(--ok); }
+.status.todo { background: var(--chip); color: var(--ink); }
+.count.ok { background: var(--ok-bg); color: var(--ok); font-weight: 600; }
 .excluded { margin: 32px 0 0; padding-top: 20px; border-top: 1px solid var(--line); }
 .excluded h2 { font-size: 16px; margin: 0 0 10px; }
 .excluded li { font-size: 14px; color: var(--muted); margin-bottom: 5px; }
@@ -462,14 +499,14 @@ def _attr(value) -> str:
     return html.escape(str(value), quote=True)
 
 
-def _photo_cell(name: str, preview: str | None, index: int) -> str:
+def _photo_cell(name: str, preview: str | None, index: int, shape: str = "") -> str:
     inner = (
         f'<img src="{_attr(preview)}" alt="{_attr(name)}" loading="lazy">'
         if preview
         else '<div class="none">no preview</div>'
     )
     return (
-        '<figure class="cell">'
+        f'<figure class="cell {_attr(shape)}">'
         f"{inner}"
         f'<figcaption>{index}. {_text(name)}</figcaption>'
         "</figure>"
@@ -477,7 +514,10 @@ def _photo_cell(name: str, preview: str | None, index: int) -> str:
 
 
 def render_page(
-    plan: dict, previews: dict[str, str], unaccounted: list[str] | None = None
+    plan: dict,
+    previews: dict[str, str],
+    unaccounted: list[str] | None = None,
+    shapes: dict[str, str] | None = None,
 ) -> str:
     """The self-contained approval page: one card per post, in plan order.
 
@@ -495,6 +535,7 @@ def render_page(
     photo_count = sum(len(p.get("files") or []) for p in posts)
     excluded = plan.get("excluded") or {}
     questions = [p for p in posts if (p.get("question") or "").strip()]
+    approved = [p for p in posts if p.get("approved")]
 
     out: list[str] = []
     out.append("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">")
@@ -522,6 +563,11 @@ def render_page(
         out.append(f'<span class="count">{len(excluded)} left out</span>')
     if plan.get("credit"):
         out.append(f'<span class="count">credit: {_text(plan["credit"])}</span>')
+    if approved:
+        out.append(
+            f'<span class="count ok">✓ {len(approved)} approved · '
+            f'{len(posts) - len(approved)} to review</span>'
+        )
     if questions:
         out.append(f'<span class="count">{len(questions)} needs an answer</span>')
     # Where these are headed is part of what is being approved, not a flag typed later.
@@ -548,9 +594,18 @@ def render_page(
     out.append("</header>")
 
     for post in posts:
-        out.append('<article class="post">')
+        is_approved = bool(post.get("approved"))
+        out.append(f'<article class="post{" approved" if is_approved else ""}">')
         out.append('<div class="post-head">')
         out.append(f'<span class="ref">{_text(post.get("ref", ""))}</span>')
+        # Only labelled once something is approved — on a fresh batch every post needs
+        # review, and a "needs review" tag on all of them says nothing.
+        if is_approved:
+            out.append('<span class="status ok">✓ Approved — no need to look again</span>')
+        elif approved or post.get("approval_dropped"):
+            label = ("Changed since you approved it — please re-check"
+                     if post.get("approval_dropped") else "Needs your review")
+            out.append(f'<span class="status todo">{_text(label)}</span>')
         if post.get("was_label"):
             out.append(f'<span class="was">{_text(post["was_label"])}</span>')
         out.append("</div>")
@@ -569,7 +624,7 @@ def render_page(
 
         out.append('<div class="strip">')
         for i, name in enumerate(post.get("files") or [], start=1):
-            out.append(_photo_cell(name, previews.get(name), i))
+            out.append(_photo_cell(name, previews.get(name), i, (shapes or {}).get(name, "")))
         out.append("</div>")
 
         caption_class = "caption edited" if post.get("caption_changed") else "caption"
@@ -734,7 +789,7 @@ def main() -> int:
     stray = unaccounted_photos(plan, folder_files)
 
     page = out_dir / "approval.html"
-    page.write_text(render_page(plan, previews, unaccounted=stray), encoding="utf-8")
+    page.write_text(render_page(plan, previews, unaccounted=stray, shapes=shapes), encoding="utf-8")
 
     manifest = out_dir / "manifest.json"
     manifest.write_text(

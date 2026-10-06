@@ -46,6 +46,7 @@ there in practice.
 | `green_periods` | **Restricts** the post to that season. Leave empty unless the photo only makes sense then — a Summer window means it waits until June. |
 | `question` | Shown as a "Question for you" block on that post and counted in the header. Use it instead of guessing. |
 | `note` | Context for the reviewer; not published. |
+| `approved` | `true` once the owner has OK'd that post. The page marks it "Approved — no need to look again" and counts what is left to review. A later round that changes its photos, caption or hashtags drops the approval automatically and labels it for re-checking. |
 | `label` | Batch name shown on the page. Defaults to `batch`. |
 | `round` | Bump on every rebuild after feedback. Drives the snapshot filename and the edit-highlight colour. |
 | `ref_prefix` | Post refs become `B-01`, `B-02`. Defaults to `P`. |
