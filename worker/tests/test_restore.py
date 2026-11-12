@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from worker import single_instance
+from worker.config import Config
 from worker.export.__main__ import DB_COPY_NAME, run_export
 from worker.restore import (
     RestoreError,
@@ -27,6 +28,14 @@ from worker.restore import (
 )
 
 NOW = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _main_uses_the_test_install(config, monkeypatch):
+    # main() reads Config.from_env(), i.e. the REAL .env and the real database. Without
+    # this, test_refuses_while_a_worker_holds_the_lock only passed while the real worker
+    # held the real lock; with the worker stopped it restored over the real database.
+    monkeypatch.setattr(Config, "from_env", staticmethod(lambda: config))
 
 
 def _seed_assets(config, conn):
