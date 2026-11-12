@@ -52,12 +52,14 @@ def test_run_once_skips_future_and_backed_off(conn, config, fake_client, make_pu
     assert n == 0
 
 
-def test_run_once_tunnel_unavailable_is_visible_not_fatal(conn, config, fake_client, make_publication, monkeypatch):
+def test_run_once_tunnel_unavailable_is_visible_not_fatal(conn, config, fake_client, make_publication, monkeypatch, tmp_path):
     """A local asset needs the tunnel; if cloudflared is missing the daemon must NOT
     crash — it records a visible reason and leaves the publication scheduled to retry."""
     monkeypatch.setenv("KILL_SWITCH", "0")
     monkeypatch.setenv("DRY_RUN", "0")
     monkeypatch.setattr("worker.run.load_env", lambda override=False: None)
+    # Empty data/bin fallback, so this install's downloaded cloudflared isn't found.
+    monkeypatch.setattr("worker.tunnel.repo_root", lambda: tmp_path)
 
     # public_url=None -> asset must be served via the tunnel; force a missing binary.
     cfg = dataclasses.replace(config, cloudflared_path="cloudflared-not-installed-xyz")

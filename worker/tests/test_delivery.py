@@ -287,7 +287,10 @@ def test_wait_until_resolvable_false_and_backs_off():
     assert slept  # backed off between attempts rather than hammering
 
 
-def test_tunnel_missing_binary_raises_with_guidance(config):
+def test_tunnel_missing_binary_raises_with_guidance(config, monkeypatch, tmp_path):
+    # Point the data/bin fallback at an empty folder: once Start has downloaded this
+    # install's own cloudflared, the real copy would otherwise be found.
+    monkeypatch.setattr("worker.tunnel.repo_root", lambda: tmp_path)
     cfg = dataclasses.replace(config, cloudflared_path="cloudflared-not-installed-xyz")
     t = CloudflaredTunnel(port=1234, config=cfg)
     with pytest.raises(TunnelError) as exc:
