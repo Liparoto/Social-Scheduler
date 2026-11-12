@@ -95,11 +95,11 @@ enable_autostart() {
   <key>Label</key>
   <string>$AGENT</string>
 
+  <!-- worker/SocialScheduler just execs .venv/bin/python -m worker.run. It exists so
+       System Settings → Login Items names this item "SocialScheduler", not "python". -->
   <key>ProgramArguments</key>
   <array>
-    <string>$repo/.venv/bin/python</string>
-    <string>-m</string>
-    <string>worker.run</string>
+    <string>$repo/worker/SocialScheduler</string>
   </array>
 
   <key>WorkingDirectory</key>
