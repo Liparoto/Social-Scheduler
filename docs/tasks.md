@@ -2730,3 +2730,22 @@ decided the queue was already healthy and scheduled nothing.
 - [x] **`scripts/repair_scheduled_at_format.py`** restates legacy rows. Dry-run by default;
       `--apply` writes in one transaction. Text only — a non-zero fraction is kept, because that
       fraction *is* the instant. Other installs likely carry the same mixed data.
+
+---
+
+## Dashboard autostart (macOS) — 2026-11-17  `[ ] planned`
+
+Plan: `docs/plan-dashboard-autostart.md`. The dashboard went down silently while the worker
+login item showed "Running"; only the worker was a LaunchAgent.
+
+### Phase 1 — Agent + Start
+- [ ] `dashboard/SocialScheduler Dashboard` wrapper (exec `next dev -p 3939`)
+- [ ] Start installs `com.socialscheduler.dashboard` (KeepAlive true, PATH, own log) and
+      frees a hand-started nohup dashboard first; nohup fallback if registration fails
+- [ ] Verify: Login Items shows both; kill the dashboard pid → back within ~30s
+
+### Phase 2 — Stop / Disable / Update
+- [ ] Stop: `bootout` the dashboard agent before the port sweep
+- [ ] Disable: remove both agents; update wording
+- [ ] Update: `kickstart -k` the dashboard after `npm install` (after the `git pull` only)
+- [ ] Verify: Stop keeps 3939 dead 60s+; Start restores; Disable removes both; final Start
