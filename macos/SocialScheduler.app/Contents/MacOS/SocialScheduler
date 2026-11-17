@@ -1,0 +1,8 @@
+#!/bin/sh
+# The worker, as launched by the macOS autostart LaunchAgent (com.socialscheduler.worker).
+# It lives inside an .app bundle only so System Settings → Login Items shows the
+# SocialScheduler name and icon instead of a generic "exec". `exec` replaces this
+# shell with Python, so launchd's SIGTERM and exit code reach the worker directly.
+# Do not double-click this app; use Start-SocialScheduler-Mac.command.
+cd "$(dirname "$0")/../../../.." || exit 1
+exec .venv/bin/python -m worker.run "$@"

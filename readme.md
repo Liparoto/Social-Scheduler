@@ -86,8 +86,11 @@ There is no menu — starting SocialScheduler starts the whole thing: the dashbo
 
 The worker is also registered to **start on its own every time you log in**, so it survives a
 reboot — the one thing double-clicking can't do, since after a restart nobody is there to click
-anything. To remove that, double-click **`Disable-Worker-Autostart-Mac.command`** (or
-`...-Windows.bat`).
+anything. On macOS the **dashboard** is registered too, and also **restarts itself whenever it
+stops**, so `localhost:3939` doesn't quietly go dead while posting carries on. They appear in
+System Settings → General → Login Items as **SocialScheduler** (the worker) and
+**SocialScheduler Dashboard**, with the app icon. To remove both, double-click
+**`Disable-Worker-Autostart-Mac.command`** (or `...-Windows.bat`).
 
 Once it's running, the launcher **closes its own window** — the dashboard and worker keep
 running in the background, so nothing is left cluttering your screen and nothing dies if you
@@ -100,13 +103,14 @@ close a window by accident.
 Double-clicking Start again while it's already running just reopens the browser tab — it won't
 start a second copy, so it doubles as an "is it on?" check.
 
-Stop ends both the dashboard and the worker — but only **until your next login**, since the
-worker stays registered to autostart. To keep it from coming back, either set `KILL_SWITCH=1` in
+Stop ends both the dashboard and the worker — but only **until your next login** (or Start),
+since both stay registered to autostart. To keep it from coming back, either set `KILL_SWITCH=1` in
 `.env` (it starts but publishes nothing) or run the `Disable-Worker-Autostart` script for your
 platform, which removes the autostart entirely.
 
 Logs are in `data/logs/`. **`worker.log`** is the one to read — the worker's real, rotating log.
-`dashboard.log` covers the dashboard; `worker-launchd.out` and `worker-daemon.out` only catch
+`dashboard-launchd.out` covers the dashboard on macOS (`dashboard.log` on Windows, or if
+autostart couldn't be set up); `worker-launchd.out` and `worker-daemon.out` only catch
 crash output from before logging starts, so they're usually empty and are the place to look if
 the worker won't start at all. Requires **Node.js** (nodejs.org) and **Python 3** (python.org);
 the launcher tells you if either is missing.

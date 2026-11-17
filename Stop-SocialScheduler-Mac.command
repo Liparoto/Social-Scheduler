@@ -156,7 +156,25 @@ if [ -n "$WORKER_SURVIVORS" ]; then
 fi
 
 # ---- 3. The dashboard. ----
-# Kill the npm wrapper we recorded, then sweep the port. The sweep is not a
+#
+# The dashboard's autostart LaunchAgent comes first. Its KeepAlive is unconditional — it
+# restarts the dashboard after ANY exit — so killing the process (or sweeping the port)
+# would just make launchd start a fresh one seconds later. `bootout` unloads the agent for
+# this session. The plist stays in ~/Library/LaunchAgents, so it loads again at the next
+# login or Start: the same "stopped until next login" the worker has.
+DASH_AGENT="com.socialscheduler.dashboard"
+if launchctl print "gui/$UID/$DASH_AGENT" >/dev/null 2>&1; then
+  echo "Stopping the dashboard (autostart agent)..."
+  launchctl bootout "gui/$UID/$DASH_AGENT" 2>/dev/null
+  STOPPED_ANY=1
+  # bootout returns before the process is gone; wait for the port to be released.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -z "$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)" ] && break
+    sleep 1
+  done
+fi
+
+# Then a dashboard started the old way: kill the npm wrapper we recorded, then sweep the port. The sweep is not a
 # fallback, it's required: `npm run dev` spawns the actual Next.js server as a
 # child, and killing npm can leave that child holding the port.
 DASH_PID="$(live_pid "$RUN_DIR/dashboard.pid")"

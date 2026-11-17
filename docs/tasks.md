@@ -2733,19 +2733,34 @@ decided the queue was already healthy and scheduled nothing.
 
 ---
 
-## Dashboard autostart (macOS) — 2026-11-17  `[ ] planned`
+## Dashboard autostart (macOS) — 2026-11-17  `[x] done`
 
 Plan: `docs/plan-dashboard-autostart.md`. The dashboard went down silently while the worker
 login item showed "Running"; only the worker was a LaunchAgent.
 
-### Phase 1 — Agent + Start
-- [ ] `dashboard/SocialScheduler Dashboard` wrapper (exec `next dev -p 3939`)
-- [ ] Start installs `com.socialscheduler.dashboard` (KeepAlive true, PATH, own log) and
+### Phase 1 — Agent + Start + app icon  `[x] done 2026-11-17`
+- [x] `macos/SocialScheduler.app` (worker) and `macos/SocialScheduler Dashboard.app`
+      (exec `next dev -p 3939`): .app bundles so Login Items shows a name + icon, not "exec"
+- [x] App icon (pine-green tile, calendar, orange send badge) drawn by
+      `scripts/make_app_icon.py`; also `dashboard/app/icon.png` + `apple-icon.png`
+      (replaces the stock Next favicon)
+- [x] Start installs `com.socialscheduler.dashboard` (KeepAlive true, PATH, own log) and
       frees a hand-started nohup dashboard first; nohup fallback if registration fails
-- [ ] Verify: Login Items shows both; kill the dashboard pid → back within ~30s
+- [x] Start re-registers an old worker agent (bare `worker/SocialScheduler`) to the .app,
+      waiting up to 5 min for a graceful stop — never forced mid-publish
+- [x] Verified: `sfltool dumpbtm` lists "SocialScheduler" + "SocialScheduler Dashboard";
+      SIGTERM to the dashboard → back up in 4s under a new pid, no orphan on the port;
+      worker restarted cleanly and is cycling
 
-### Phase 2 — Stop / Disable / Update
-- [ ] Stop: `bootout` the dashboard agent before the port sweep
-- [ ] Disable: remove both agents; update wording
-- [ ] Update: `kickstart -k` the dashboard after `npm install` (after the `git pull` only)
-- [ ] Verify: Stop keeps 3939 dead 60s+; Start restores; Disable removes both; final Start
+### Phase 2 — Stop / Disable / Update  `[x] done 2026-11-17`
+- [x] Stop: `bootout` the dashboard agent before the port sweep (a plain kill would be undone
+      by KeepAlive)
+- [x] Disable: removes both agents + plists; wording now "SocialScheduler autostart"
+- [x] Update: `kickstart -k` the dashboard agent after the worker restart (after the
+      `git pull` only); re-applies icons
+- [x] Icon step moved to `macos/apply-icons.sh` (custom file icon on each bundle's script —
+      Login Items draws the *executable's* icon, and git drops the xattr), run by Start + Update
+- [x] Verified on the owner's Mac: Stop → port 3939 stayed dead 60s, no processes left;
+      Start → both back; Disable → no agents, no plists, port free; Start → restored;
+      `kickstart -k` → new dashboard pid, HTTP 200; `scripts/test-watchdog-guard.sh` passes;
+      owner confirmed the icon in Login Items

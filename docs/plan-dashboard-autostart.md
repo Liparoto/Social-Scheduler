@@ -26,9 +26,13 @@ System Settings → Login Items will list two entries:
 
 ## Design
 
-### New: `dashboard/SocialScheduler Dashboard` (launcher wrapper)
-Like `worker/SocialScheduler`, it exists so Login Items shows a readable name instead of
-"node". It runs `cd dashboard && exec node_modules/.bin/next dev -p 3939`.
+### New: `.app` bundles for both background items (+ app icon)
+`macos/SocialScheduler.app` (worker) and `macos/SocialScheduler Dashboard.app` each hold a
+tiny shell script plus `AppIcon.icns`, so Login Items shows a real name **and icon** instead
+of the generic "exec". The dashboard one runs `exec node_modules/.bin/next dev -p 3939`.
+Existing worker agents pointing at the bare `worker/SocialScheduler` are re-registered by
+Start (graceful stop first, never forced). The icon is drawn by `scripts/make_app_icon.py`
+in the dashboard's brand colors; it also writes the dashboard's browser-tab icon.
 - `exec` launches Next directly (no `npm` middle process), so launchd's stop signal reaches
   the real server and no orphan keeps holding the port.
 - It stays on **dev mode**, same as today. `Update-Mac.command` relies on the dashboard

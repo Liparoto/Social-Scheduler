@@ -1,0 +1,9 @@
+#!/bin/sh
+# The dashboard, as launched by the macOS autostart LaunchAgent (com.socialscheduler.dashboard).
+# Inside an .app bundle only so Login Items shows a real name and icon, not "node".
+# `exec` runs Next.js directly (no npm wrapper), so launchd's stop signal reaches the
+# real server and no orphaned child keeps holding the port. Dev mode on purpose:
+# Update-Mac.command relies on the dashboard picking up new code by itself.
+# Do not double-click this app; use Start-SocialScheduler-Mac.command.
+cd "$(dirname "$0")/../../../../dashboard" || exit 1
+exec ./node_modules/.bin/next dev -p "${PORT:-3939}"

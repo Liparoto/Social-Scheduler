@@ -69,6 +69,8 @@ live_pid() {
 # ---- The autostart LaunchAgent: the worker runs whenever you are logged in. ----
 AGENT="com.socialscheduler.worker"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT.plist"
+WORKER_EXEC="macos/SocialScheduler.app/Contents/MacOS/SocialScheduler"
+DASH_EXEC="macos/SocialScheduler Dashboard.app/Contents/MacOS/SocialScheduler Dashboard"
 
 agent_installed() { launchctl print "gui/$UID/$AGENT" >/dev/null 2>&1; }
 agent_pid()       { launchctl print "gui/$UID/$AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}'; }
@@ -95,11 +97,11 @@ enable_autostart() {
   <key>Label</key>
   <string>$AGENT</string>
 
-  <!-- worker/SocialScheduler just execs .venv/bin/python -m worker.run. It exists so
-       System Settings → Login Items names this item "SocialScheduler", not "python". -->
+  <!-- macos/SocialScheduler.app just execs .venv/bin/python -m worker.run. It is an .app
+       so System Settings → Login Items shows "SocialScheduler" with its icon, not "exec". -->
   <key>ProgramArguments</key>
   <array>
-    <string>$repo/worker/SocialScheduler</string>
+    <string>$repo/$WORKER_EXEC</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -162,6 +164,120 @@ PLIST_EOF
   return 1
 }
 
+# ---- The dashboard's own autostart LaunchAgent. ----
+#
+# A SEPARATE agent from the worker, on purpose: one launchd job watches one process, so a
+# shared one would restart both whenever either stopped — and restarting the worker
+# mid-publish is exactly what Stop and Update go out of their way to avoid.
+#
+# Unlike the worker, KeepAlive is unconditional: the dashboard is brought back after ANY
+# exit, clean or not. The outage that prompted this (2026-11-16) was a clean exit, which a
+# restart-only-on-crash rule would have ignored. Stop therefore uses `bootout` for this
+# agent, never a plain kill — launchd would just start it again.
+DASH_AGENT="com.socialscheduler.dashboard"
+DASH_PLIST="$HOME/Library/LaunchAgents/$DASH_AGENT.plist"
+
+dash_agent_loaded() { launchctl print "gui/$UID/$DASH_AGENT" >/dev/null 2>&1; }
+dash_agent_pid()    { launchctl print "gui/$UID/$DASH_AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}'; }
+
+# PIDs listening on $PORT whose working directory is THIS install's dashboard folder — i.e.
+# a dashboard started the old way (nohup) by this install. Anything else on the port is
+# someone else's and is left alone.
+install_dashboard_listeners() {
+  local pid cwd want
+  want="$(pwd -P)/dashboard"
+  for pid in $(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null); do
+    cwd="$(lsof -a -d cwd -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    [ "$cwd" = "$want" ] && echo "$pid"
+  done
+}
+
+# True when whatever is listening on $PORT was spawned by the dashboard agent. `next dev`
+# forks the process that actually listens, so compare ancestry, not the pid itself.
+dashboard_served_by_agent() {
+  local apid pid p n
+  apid="$(dash_agent_pid)"
+  [ -n "$apid" ] || return 1
+  for pid in $(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null); do
+    p="$pid"; n=0
+    while [ -n "$p" ] && [ "$p" -gt 1 ] && [ $n -lt 5 ]; do
+      [ "$p" = "$apid" ] && return 0
+      p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')"
+      n=$((n + 1))
+    done
+  done
+  return 1
+}
+
+# Write the plist, load it, and confirm launchd actually spawned it.
+enable_dashboard_autostart() {
+  local repo launchd_log i
+  repo="$(pwd -P)"
+  # Own log file, deleted first — same com.apple.provenance trap as the worker's (see
+  # enable_autostart): launchd will not open a file a Terminal process created.
+  launchd_log="$repo/data/logs/dashboard-launchd.out"
+  mkdir -p "$HOME/Library/LaunchAgents" "$repo/data/logs"
+  rm -f "$launchd_log"
+
+  cat > "$DASH_PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$DASH_AGENT</string>
+
+  <!-- macos/SocialScheduler Dashboard.app just execs next dev on port $PORT. It is an .app
+       so Login Items shows "SocialScheduler Dashboard" with its icon, not "node". -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>$repo/$DASH_EXEC</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>$repo/dashboard</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart after ANY exit. Stop uses launchctl bootout, which this does not fight. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- At most one restart every 30s, so a dashboard that can't start doesn't spin. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- launchd's default PATH has no node. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PORT</key>
+    <string>$PORT</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>$launchd_log</string>
+  <key>StandardErrorPath</key>
+  <string>$launchd_log</string>
+</dict>
+</plist>
+PLIST_EOF
+
+  launchctl bootout "gui/$UID/$DASH_AGENT" 2>/dev/null
+  sleep 1
+  launchctl bootstrap "gui/$UID" "$DASH_PLIST" 2>/dev/null || launchctl load -w "$DASH_PLIST" 2>/dev/null
+
+  i=0
+  while [ $i -lt 20 ]; do
+    [ -n "$(dash_agent_pid)" ] && return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # ---- 1. Preflight: the two things that must be installed. ----
 if ! command -v node >/dev/null 2>&1; then
   pause_and_exit "Node.js isn't installed. Get it from https://nodejs.org (choose LTS), then double-click this again."
@@ -215,6 +331,9 @@ fi
 # Kept here anyway so this script stays line-for-line comparable with the Windows one.
 .venv/bin/python -m worker.ffmpeg_setup
 
+# Login Items shows the app icon, not "exec" (see macos/apply-icons.sh).
+macos/apply-icons.sh
+
 # ---- 5b. Already running? Then just bring the browser back and get out of the way. ----
 PORT=3939
 RUN_DIR="data/run"
@@ -224,7 +343,15 @@ mkdir -p "$RUN_DIR" "$LOG_DIR"
 # -sTCP:LISTEN matters: without it lsof also returns every CLIENT connected to the port
 # — a browser tab left open on the dashboard is enough — and Start would refuse to do
 # anything, insisting SocialScheduler was already running when nothing was serving.
-if [ -n "$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)" ]; then
+#
+# Only when the dashboard AGENT is the one serving. A dashboard started the old way (nohup)
+# falls through, so step 8 can retire it and install the agent — otherwise existing installs
+# would never get autostart, because their old dashboard always "looks" running.
+if dashboard_served_by_agent; then
+  # The worker may have been stopped on its own; bring it back too.
+  if agent_installed && [ -z "$(agent_pid)" ]; then
+    launchctl kickstart "gui/$UID/$AGENT" 2>/dev/null
+  fi
   echo "SocialScheduler is already running."
   echo "Opening http://localhost:$PORT"
   echo
@@ -266,6 +393,29 @@ else
   echo "Worker: publishing for real (DRY_RUN=0 in .env)."
 fi
 
+# An agent installed before 2026-11 runs worker/SocialScheduler, a bare script, which Login
+# Items shows with a generic "exec" icon. Re-register it once to run the .app bundle. The
+# worker is asked to stop and given time to finish — same rule as Update-Mac: never force
+# a worker that may be mid-publish. If it is still busy, keep the old item and retry next time.
+if agent_installed && ! grep -qF "$WORKER_EXEC" "$AGENT_PLIST" 2>/dev/null; then
+  echo "Worker: updating its background item (name and icon)..."
+  if [ -n "$(agent_pid)" ]; then
+    launchctl kill TERM "gui/$UID/$AGENT" 2>/dev/null
+    WAITED=0
+    while [ -n "$(agent_pid)" ] && [ "$WAITED" -lt 300 ]; do
+      [ "$WAITED" = "10" ] && echo "        (it's finishing what it was doing — this can take a few minutes)"
+      sleep 2
+      WAITED=$((WAITED + 2))
+    done
+  fi
+  if [ -z "$(agent_pid)" ]; then
+    launchctl bootout "gui/$UID/$AGENT" 2>/dev/null   # the branch below installs the new one
+    sleep 1
+  else
+    echo "        Still busy after 5 minutes — keeping the old item for now; Start will retry."
+  fi
+fi
+
 MANUAL_WORKER=0
 if agent_installed; then
   if [ -z "$(agent_pid)" ]; then
@@ -287,6 +437,12 @@ fi
 echo
 
 # ---- 7. Fallback: a session-only worker, used only if autostart could not be set up. ----
+# Never a second one: step 5b no longer exits early for an old-style dashboard, so Start
+# can reach here while a session-only worker from an earlier Start is still alive.
+if [ "$MANUAL_WORKER" = "1" ] && [ -n "$(live_pid "$RUN_DIR/worker.pid")" ]; then
+  echo "        A session-only worker is already running (pid $(live_pid "$RUN_DIR/worker.pid"))."
+  MANUAL_WORKER=0
+fi
 if [ "$MANUAL_WORKER" = "1" ]; then
 
   echo "Starting the worker in the background..."
@@ -354,12 +510,52 @@ if [ "$MANUAL_WORKER" = "1" ]; then
   echo
 fi
 
-# ---- 8. Start the dashboard in the background. ----
+# ---- 8. The dashboard — its own LaunchAgent, so it comes back whenever it stops. ----
+#
+# Before 2026-11 the dashboard was a one-off nohup process: when it stopped, nothing brought
+# it back, while the worker's "Running in background" login item made everything look fine.
 echo "Starting the dashboard..."
-nohup env PORT="$PORT" npm --prefix dashboard run dev > "$LOG_DIR/dashboard.log" 2>&1 &
-DASH_PID=$!
-disown
-echo "$DASH_PID" > "$RUN_DIR/dashboard.pid"
+
+# Retire a dashboard started the old way by this install. Left running it would hold the
+# port, and the agent's copy would fail and retry every 30 seconds forever.
+OLD_DASH="$(live_pid "$RUN_DIR/dashboard.pid") $(install_dashboard_listeners)"
+OLD_DASH="$(echo $OLD_DASH)"
+if [ -n "$OLD_DASH" ] && ! dashboard_served_by_agent; then
+  echo "        Replacing the old-style dashboard with one that restarts itself..."
+  # shellcheck disable=SC2086
+  kill $OLD_DASH 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -z "$(install_dashboard_listeners)" ] && break
+    sleep 1
+  done
+  # shellcheck disable=SC2086
+  [ -n "$(install_dashboard_listeners)" ] && kill -9 $(install_dashboard_listeners) 2>/dev/null
+fi
+rm -f "$RUN_DIR/dashboard.pid"
+
+# Something that is NOT this install's dashboard is on the port: say so plainly rather than
+# killing a stranger's program or letting the agent retry silently.
+if [ -n "$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)" ] && ! dashboard_served_by_agent \
+   && [ -z "$(install_dashboard_listeners)" ]; then
+  echo "⚠️  Another program is using port $PORT, so the dashboard can't start."
+  echo "    Quit that program (or restart the Mac), then double-click Start again."
+  pause_and_exit ""
+fi
+
+if dash_agent_loaded && [ -n "$(dash_agent_pid)" ]; then
+  echo "        Running (pid $(dash_agent_pid)) — restarts itself if it ever stops."
+elif enable_dashboard_autostart; then
+  echo "        Running (pid $(dash_agent_pid)) — starts at login and restarts itself if it stops."
+else
+  # launchd took the job but never spawned it. Same fallback as the worker: don't leave a
+  # broken agent behind; run it for this session the old way.
+  echo "        (Could not register dashboard autostart — running it just for this session.)"
+  launchctl bootout "gui/$UID/$DASH_AGENT" 2>/dev/null
+  rm -f "$DASH_PLIST"
+  nohup env PORT="$PORT" npm --prefix dashboard run dev > "$LOG_DIR/dashboard.log" 2>&1 &
+  echo $! > "$RUN_DIR/dashboard.pid"
+  disown
+fi
 
 # Wait until the dashboard actually answers before opening the browser. A fixed sleep
 # guessed wrong on a cold start — Next.js compiles on first run, so the tab opened on a
@@ -379,7 +575,7 @@ if [ "$READY" = "1" ]; then
   echo "✅ Running at http://localhost:$PORT"
 else
   echo "⚠️  The dashboard didn't start within 90 seconds."
-  echo "    Check data/logs/dashboard.log for the reason."
+  echo "    Check data/logs/dashboard-launchd.out for the reason."
   echo "    If it starts later, open http://localhost:$PORT yourself."
 fi
 

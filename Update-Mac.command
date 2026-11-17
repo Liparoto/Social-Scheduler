@@ -129,6 +129,24 @@ elif [ -n "$(install_worker_pids)" ]; then
   echo
 fi
 
+# 8. Restart the dashboard agent, if there is one, so freshly installed packages load. Its
+#    dev server picks up most code changes by itself, but not new dependencies. Unlike the
+#    worker this is safe to do immediately: the dashboard holds no in-flight publishes.
+DASH_AGENT="com.socialscheduler.dashboard"
+if [ -n "$(launchctl print "gui/$UID/$DASH_AGENT" 2>/dev/null | awk -F'= ' '/^\tpid = /{print $2; exit}')" ]; then
+  echo "Restarting the dashboard so it runs the new version..."
+  launchctl kickstart -k "gui/$UID/$DASH_AGENT" 2>/dev/null
+  for _ in $(seq 1 60); do
+    curl -sf -o /dev/null "http://localhost:3939" && break
+    sleep 1
+  done
+  echo
+fi
+
+# 9. A pull that touched the background programs drops their Login Items icon (git does
+#    not keep it); put it back. See macos/apply-icons.sh.
+[ -x macos/apply-icons.sh ] && macos/apply-icons.sh
+
 if [ -n "$(lsof -ti tcp:3939 -sTCP:LISTEN 2>/dev/null)" ]; then
   echo "✅ Up to date. SocialScheduler is running the new version."
 else
